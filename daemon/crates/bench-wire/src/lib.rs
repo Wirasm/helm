@@ -29,6 +29,12 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod commands;
+pub use commands::{
+    COMMAND_OUTPUT_MAX_BYTES, Command, CommandRun, CommandRunArgs, GitRepositories,
+    GitRepositoriesArgs, GitRepository, PathExists, PathExistsArgs,
+};
+
 mod files;
 pub use files::{
     Expect, FILE_CHANGED, FILE_READ_MAX_BYTES, FILE_REQUEST_MAX_BYTES, FileAppendArgs, FileChanged,
@@ -49,6 +55,12 @@ pub use sessions::{
     HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow, SessionState,
     SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
+
+/// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
+/// its own `bench` against a benchd over TCP and refuses to attach when the two differ, so bump
+/// the workspace version (`daemon/Cargo.toml`) with any change to the wire, as 0.0.2 did when
+/// `sessions` gained `report` and `status` its `version`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// A request line larger than this is refused, not read. The cap is about the reader:
 /// every accepted byte can end up in an event log an agent later pulls into context.
@@ -188,6 +200,10 @@ pub const KNOWN_VERBS: &[&str] = &[
     "file/read",
     "file/write",
     "file/append",
+    // M5c: the drawers' git and archon, run on benchd's machine for a helm that may not be on it.
+    "command/run",
+    "path/exists",
+    "git/repositories",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -260,6 +276,12 @@ pub enum Verb {
     FileWrite,
     /// A note appended to a canvas's sidecar (`FileAppendArgs`).
     FileAppend,
+    /// `git` or `archon` run on benchd's machine (`CommandRunArgs`).
+    CommandRun,
+    /// Which of some paths exist on benchd's machine (`PathExistsArgs`).
+    PathExists,
+    /// Every repository under benchd's home (`GitRepositoriesArgs`).
+    GitRepositories,
 }
 
 impl Verb {
@@ -296,6 +318,9 @@ impl Verb {
             "file/read" => Some(Verb::FileRead),
             "file/write" => Some(Verb::FileWrite),
             "file/append" => Some(Verb::FileAppend),
+            "command/run" => Some(Verb::CommandRun),
+            "path/exists" => Some(Verb::PathExists),
+            "git/repositories" => Some(Verb::GitRepositories),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -514,9 +539,9 @@ pub struct HelmAnswer {
 
 pub const HELM_ASKED: &str = "helm/asked";
 
-/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`
-/// and `foreground_pid` to find the agent in a pane (it joins the pid against Claude's
-/// registry), so the shape is pinned by `fixtures/session-list.json` on both sides.
+/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`,
+/// `foreground_pid`, `waiting` and `report` for each pane's agent (presence, the snapshot's
+/// `agent`), so the shape is pinned by `fixtures/session-list.json` on both sides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub session: String,
@@ -538,6 +563,22 @@ pub struct SessionEntry {
     /// The agent in it is waiting on the operator (M1, #357); absent when it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
+    /// What the agent in it says it is doing; absent when nothing there reports (a shell at
+    /// its prompt, a harness whose hooks are not wired).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<AgentReport>,
+}
+
+/// An agent's own report of what it is doing, read on benchd's machine (M5c, #459): Claude
+/// Code's registry row for the process in the session's foreground, else the agent's last hook.
+/// Never `Activity::Unknown`: nothing said is no report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReport {
+    pub activity: Activity,
+    /// When `activity` last changed, in epoch ms: a transition time, not a heartbeat. Absent
+    /// when the registry row carries no time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_ms: Option<u64>,
 }
 
 /// An agent waiting on the operator: at a permission prompt, a trust prompt, a question.
@@ -1166,6 +1207,10 @@ mod tests {
                 .iter()
                 .any(|s| s.agent == "shell" && s.pane.is_some())
         );
+        assert!(
+            reply.sessions.iter().any(|s| s.report.is_some()),
+            "the sample carries a report, so helm's decoder is pinned too"
+        );
     }
 
     /// `fixtures/helm-ask.json` holds what a caller asks, what benchd asks helm, what helm answers
@@ -1244,7 +1289,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            45,
+            48,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

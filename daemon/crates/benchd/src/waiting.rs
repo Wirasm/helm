@@ -22,7 +22,7 @@
 use crate::{Core, prompts, sessions::now_ms};
 use bench_doc::PaneId;
 use bench_session::{AgentKind, Session};
-use bench_wire::{Activity, Waiting, WaitingSource};
+use bench_wire::{Activity, AgentReport, Waiting, WaitingSource};
 use serde_json::json;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -154,6 +154,34 @@ fn next_after(mut waiting: Vec<(u64, PaneId)>, focused: Option<PaneId>) -> Optio
         .and_then(|f| waiting.iter().position(|(_, p)| *p == f))
         .map_or(0, |at| at + 1);
     waiting.get(after % waiting.len().max(1)).map(|(_, p)| *p)
+}
+
+/// What the agent in a live session says it is doing (`SessionEntry.report`): Claude Code's
+/// registry row for the process in its foreground, read from benchd's own HOME, else `hooked`,
+/// its last hook report ([`hook_report`]). This is what helm's presence and the snapshot's `agent`
+/// show, so neither reads a file on benchd's machine (M5c, #459). Called outside the core lock:
+/// the foreground pid asks the session's pty.
+pub fn report(session: &Session, home: &Path, hooked: Option<AgentReport>) -> Option<AgentReport> {
+    let registry = session
+        .foreground_pid()
+        .and_then(|pid| bench_sessions::claude::row_of(home, u32::try_from(pid).ok()?))
+        .map(|row| AgentReport {
+            activity: row.activity,
+            since_ms: row.status_updated_ms,
+        });
+    let said = |r: &AgentReport| r.activity != Activity::Unknown;
+    registry.filter(said).or(hooked.filter(said))
+}
+
+/// The live session's hook report, as [`report`] takes it.
+pub fn hook_report(c: &Core, id: &str) -> Option<AgentReport> {
+    if !c.sessions.get(id).is_some_and(|s| s.is_live()) {
+        return None;
+    }
+    reporting_agent(c, id).map(|(activity, since_ms)| AgentReport {
+        activity: activity.clone(),
+        since_ms: Some(since_ms),
+    })
 }
 
 /// What the live agent running in a session last reported, and since when: the agent in the

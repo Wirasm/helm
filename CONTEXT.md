@@ -127,7 +127,8 @@ _Avoid_: agent list, sidebar, session browser
 The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active workspace's project
 (#382): runs **waiting on you** (paused at a gate), **running** runs, and **finished** runs not
 cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
-(`workflow runs --json`, and `workflow status --json --verbose` while a run is live); helm keeps no
+on benchd's machine (`workflow runs --json`, and `workflow status --json --verbose` while a run is
+live; M5c: benchd runs it); helm keeps no
 record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
 cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work, and `w` picks the
 workflow it launches from a searchable list (#528). It polls only while
@@ -143,9 +144,10 @@ _Avoid_: notification, unread count, dot (that is how helm will draw it, not wha
 
 **board**:
 The workspace bar's answer to *which workspace has an agent that needs you* — one mark per
-workspace tab, from the agent registry alone. Three renderings and not two: nothing where there is
-no agent, a quiet dot where every agent is working, an attention dot where one has stopped.
-helm holds **no state of its own** here — the registry file's lifecycle is the mark's lifecycle,
+workspace tab, from what each pane's agent reports alone (benchd's `report`, read from Claude
+Code's registry or the agent's hooks on benchd's machine). Three renderings and not two: nothing
+where there is no agent, a quiet dot where every agent is working, an attention dot where one has
+stopped. helm holds **no state of its own** here — the report's lifecycle is the mark's lifecycle,
 so nothing acknowledges, decays or expires, and there is nothing to clear. It never hides,
 including on the workspace being looked at.
 _Avoid_: **drawable board** (a different thing — see below), status bar, badge, notification
@@ -159,8 +161,8 @@ where the colliding word comes from — no Swift in `Sources/Helm/Board/` is abo
 _Avoid_: board unqualified (that word is the workspace marks), whiteboard, sketch pane, diagram
 
 **Worktrees drawer**:
-The drawer on the right (⌘⇧G) listing **every git worktree on the machine**, grouped by
-repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
+The drawer on the right (⌘⇧G) listing **every git worktree on benchd's machine** (M5c: benchd
+finds the repositories and runs the git, on one machine too), grouped by repository (#382): the bench's workspaces' repositories, those under `~/Projects`, and those
 Archon's worktrees were made from. Each worktree shows its branch, dirty or clean, ahead and
 behind its upstream, **merged** (Git reachability from the resolved remote default branch, never
 pull-request state; unknown when there is none), the age of its last commit, and the bench panes
@@ -224,10 +226,11 @@ set it.
 _Avoid_: caffeinate (the command-line tool), insomnia, no-sleep
 
 **keymap file**:
-`<bench root>/rules/keymap.toml`, the operator's keys. Its rows overlay helm's built-in table
-(`KeyBindings.all`): a row replaces the built-in keys with its chord, `unbind` removes one, and a
-file that does not parse changes nothing. helm reads it; nothing writes it. It sits beside benchd's
-`placement.toml`, which benchd reads and helm does not.
+`~/.helm/bench/keymap.toml` (helm's own directory, `~/.helm/bench-<suite>` for an isolated
+helm), the operator's keys. Its rows overlay helm's built-in table (`KeyBindings.all`): a row
+replaces the built-in keys with its chord, `unbind` removes one, and a file that does not parse
+changes nothing. helm reads it; nothing writes it. It is helm's, so it stays on helm's machine
+when benchd runs on another; benchd's `placement.toml` stays under the bench root.
 _Avoid_: keybindings.json, config, shortcuts file
 
 **manage key**:

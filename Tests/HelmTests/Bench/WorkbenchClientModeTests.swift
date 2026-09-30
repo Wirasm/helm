@@ -44,7 +44,7 @@ final class WorkbenchClientModeTests: XCTestCase {
                 BenchFixture.bench([BenchFixture.terminal(first), BenchFixture.terminal(second)]),
                 seq: 1))
         // The workspace list follows the document, as `RootView` wires it.
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         workspaces.follow(try XCTUnwrap(rig.model.document))
         let actions = LocalActions(
             workbench: rig.model, workspaces: workspaces,
@@ -225,7 +225,7 @@ final class WorkbenchClientModeTests: XCTestCase {
         let pane = Pane(content: .unsupported("whiteboard"))
         let record = BenchSnapshot.PaneRecord(
             pane: pane, selected: true, visible: true, focused: false, live: nil,
-            foregroundPid: { _ in nil }, agents: [:])
+            foregroundPid: { _ in nil })
         XCTAssertEqual(record.kind, .unsupported)
         XCTAssertEqual(record.unsupportedKind, "whiteboard")
     }

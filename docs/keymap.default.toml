@@ -1,7 +1,7 @@
 # helm's built-in keymap, generated from KeyBindings.all — do not edit this copy.
 #
-# To change a key, write <bench root>/rules/keymap.toml (~/.bench/rules/keymap.toml, or
-# ~/.bench-<suite>/ for an isolated helm). It overlays these rows and reloads live:
+# To change a key, write ~/.helm/bench/keymap.toml (~/.helm/bench-<suite>/ for an
+# isolated helm, $HELM_BENCH_DIR when set). It overlays these rows and reloads live:
 #   - a [[bind]] row replaces the built-in rows with the same key in an overlapping `when`,
 #     or adds a key;
 #   - unbind = ["cmd+shift+r"] removes a built-in key;

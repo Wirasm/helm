@@ -2,8 +2,9 @@ import XCTest
 
 @testable import Helm
 
-/// Worktrees discovery and reading against real git repositories built in a temp home (#382):
-/// what `WorktreeDiscovery` finds on disk, and what `WorktreeCLI` reads out of it. Real git
+/// Worktrees reading against real git repositories built in a temp home (#382): what
+/// `WorktreeCLI` reads out of them. Which repositories there are is benchd's `git/repositories`
+/// now (M5c), tested beside it in `benchd/src/commands.rs`. Real git
 /// because the answers are git's own words — `upstream:track`, `--merged`, `commondir` — and a
 /// fake would only repeat what the code already believes about them.
 final class WorktreeGitTests: XCTestCase {
@@ -95,10 +96,9 @@ final class WorktreeGitTests: XCTestCase {
     func testReadsBranchStateUpstreamMergedAndDirtyFromGitItself() async throws {
         let app = try makeApp()
 
-        let rows = try await WorktreeCLI(environment: environment, homeDirectory: home.path)
-            .worktrees(
-                in: GitCommonDir(app.appendingPathComponent(".git").path),
-                statusOfALoneCheckout: true)
+        let rows = try await WorktreeCLI(host: host).worktrees(
+            in: GitCommonDir(app.appendingPathComponent(".git").path),
+            statusOfALoneCheckout: true)
         let byBranch = Dictionary(uniqueKeysWithValues: rows.map { ($0.record.branchName!, $0) })
 
         XCTAssertEqual(rows.first?.record.branchName, "main")
@@ -116,7 +116,11 @@ final class WorktreeGitTests: XCTestCase {
         XCTAssertLessThan(abs(age.timeIntervalSinceNow), 600)
     }
 
-    private var cli: WorktreeCLI { WorktreeCLI(environment: environment, homeDirectory: home.path) }
+    private var host: LocalBenchHost {
+        LocalBenchHost(environment: environment, homeDirectory: home.path)
+    }
+
+    private var cli: WorktreeCLI { WorktreeCLI(host: host) }
 
     private func listed(_ app: URL) async throws -> [String: Worktree] {
         let rows = try await cli.worktrees(
@@ -230,60 +234,5 @@ final class WorktreeGitTests: XCTestCase {
         } catch let error as WorktreeCLIError {
             XCTAssertTrue(error.command.contains("check-ref-format"), error.command)
         }
-    }
-
-    // MARK: - Discovery
-
-    /// Projects are found by folder, down to a bounded depth, without descending into
-    /// dependencies; Archon's worktrees lead back to their repository wherever it lives; a
-    /// workspace inside a linked worktree names its repository. One repository reached three
-    /// ways is one entry.
-    func testDiscoveryFindsProjectsArchonWorktreesAndWorkspacesOnce() throws {
-        let app = try makeApp()
-        let solo = try folder("home/Projects/solo")
-        try git("init", "-q", "-b", "main", in: solo)
-        let vendored = try folder("home/Projects/web/node_modules/pkg")
-        try git("init", "-q", in: vendored)
-        let deep = try folder("home/Projects/a/b/c/d/e/deep")
-        try git("init", "-q", in: deep)
-
-        let lib = try folder("elsewhere/lib")
-        try git("init", "-q", "-b", "main", in: lib)
-        try commit("first", in: lib)
-        let archonWorktree = home.appendingPathComponent(
-            ".archon-test/workspaces/owner/lib/worktrees/archon/task-x")
-        try FileManager.default.createDirectory(
-            at: archonWorktree.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try git("worktree", "add", "-q", "-b", "archon/task-x", archonWorktree.path, in: lib)
-        let appArchon = home.appendingPathComponent(".archon/workspaces/o/app/worktrees/fix")
-        try FileManager.default.createDirectory(
-            at: appArchon.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try git("worktree", "add", "-q", "-b", "fix", appArchon.path, in: app)
-
-        let found = WorktreeDiscovery(home: home).repositories(
-            workspaces: [app.appendingPathComponent(".worktrees/feature").path])
-
-        XCTAssertEqual(
-            found,
-            [
-                .init(
-                    commonDir: GitCommonDir(app.appendingPathComponent(".git").path),
-                    isWorkspace: true),
-                .init(
-                    commonDir: GitCommonDir(lib.appendingPathComponent(".git").path),
-                    isWorkspace: false),
-                .init(
-                    commonDir: GitCommonDir(solo.appendingPathComponent(".git").path),
-                    isWorkspace: false),
-            ],
-            "node_modules and anything below the depth bound are not searched")
-    }
-
-    func testTheHomeCanBeMovedForAnIsolatedInstance() {
-        XCTAssertEqual(
-            WorktreeDiscovery(environment: ["HELM_WORKTREES_HOME": "/scratch/home"]).home.path,
-            "/scratch/home")
-        XCTAssertEqual(
-            WorktreeDiscovery(environment: [:]).home.path, NSHomeDirectory())
     }
 }

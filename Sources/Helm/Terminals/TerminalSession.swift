@@ -97,13 +97,16 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// through it any more, which is what let `selectedID` be deleted outright.
     weak var manager: TerminalManager?
 
-    /// What has this pane's terminal in benchd: its shell, or the job the shell runs. The pid an
-    /// agent registry row is joined on. Not `hostView.foregroundPid`: that is the pty helm's own
-    /// surface holds, and it runs `bench attach` (M5b).
+    /// What has this pane's terminal in benchd: its shell, or the job the shell runs. Not
+    /// `hostView.foregroundPid`: that is the pty helm's own surface holds, and it runs `bench
+    /// attach` (M5b).
     var foregroundPid: pid_t? { manager?.foregrounds.pid(ofPane: id) }
 
     /// The agent in this pane is waiting on the operator, as benchd sees it (M1, #357).
     var waiting: BenchLiveSessions.Waiting? { manager?.foregrounds.waiting[id] }
+
+    /// What the agent in this pane says it is doing, read by benchd (M5c).
+    var report: BenchLiveSessions.Report? { manager?.foregrounds.report(ofPane: id) }
 
     /// What the pane holding this session is called (#313), pushed in by `WorkbenchModel` on
     /// every bench change exactly as `isVisible` is — the bench owns it and persists it, and a
@@ -164,8 +167,10 @@ final class TerminalSession: ObservableObject, Identifiable {
         // The env carries this pane's own id (#94). It is set here, before the surface is
         // created on first attach, so the uuid is baked into the child at spawn and survives
         // everything that does not respawn it — a move between containers included.
+        // A pane that runs a command (`bench attach`) gets no working directory: its session's
+        // shell is benchd's, in a directory that may exist only on benchd's machine (M5c).
         view.configuration = TerminalSurfaceOptions(
-            workingDirectory: workspacePath.value,
+            workingDirectory: command == nil ? workspacePath.value : nil,
             envVars: PaneEnvironment.forPane(id),
             command: command
         )
@@ -291,11 +296,24 @@ final class TerminalSession: ObservableObject, Identifiable {
     ///   `ghostty_surface_set_focus`. Upstream: ghostty-org/ghostty discussion #14150.
     ///   helm already paces draws itself (`TerminalSurfaceCoordinator`'s display link),
     ///   so the renderer's own link bought nothing but the hang.
+    /// - `clipboard-read = deny`: **a program in a pane cannot read the operator's
+    ///   clipboard (#337).** Under ghostty's default `ask`, an `OSC 52 ;c;?` read waits on
+    ///   the host's answer, and helm has no prompt to ask with (`TerminalSession+Clipboard`
+    ///   allows what it is asked). `deny` drops the read inside ghostty before the host's
+    ///   read callback runs, so the pasteboard is never touched; a Kitty clipboard read
+    ///   (OSC 5522) is answered `EPERM`. Refusing is the right default with nobody at the
+    ///   pane: a read that never happens costs a program a paste, and one that happens
+    ///   silently costs the operator whatever he last copied. An override rather than a
+    ///   default so an operator config written for a standalone Ghostty cannot reopen it.
+    ///   Writes (`clipboard-write`) and ⌘V are untouched. What it costs: a remote editor's
+    ///   OSC 52 paste gets nothing, and so does a program using Kitty paste events (mode
+    ///   5522), as it would under `deny` in Ghostty.app.
     static var sessionOverrides: TerminalConfiguration {
         let chosenFontSize = persistedFontSize
         return TerminalConfiguration { builder in
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("window-vsync", "false")
+            builder.withCustom("clipboard-read", "deny")
             builder.withCustom("scrollback-limit", "16777216")  // 16 MiB — see above
             builder.withWindowPaddingX(paneInset.horizontal)
             builder.withWindowPaddingY(paneInset.vertical)

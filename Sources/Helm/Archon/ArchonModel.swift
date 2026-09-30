@@ -110,9 +110,9 @@ final class ArchonModel: ObservableObject {
     private var dismissals: ArchonInboxDismissals
 
     init(
-        client: any ArchonClient = ArchonCLI(),
+        client: any ArchonClient,
         defaults: UserDefaults = DefaultsDomain.store,
-        opener: ArchonRunOpener = .live
+        opener: ArchonRunOpener
     ) {
         self.client = client
         self.defaults = defaults

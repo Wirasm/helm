@@ -5,7 +5,7 @@ import SwiftUI
 /// Every key helm binds by default, as one table (`KeyBinding`).
 ///
 /// **The built-in defaults, and a Swift literal on purpose.** The operator's
-/// `<bench root>/rules/keymap.toml` overlays this table (`Keymap`), and `docs/keymap.default.toml`
+/// `~/.helm/bench/keymap.toml` overlays this table (`Keymap`), and `docs/keymap.default.toml`
 /// is its rendering, pinned by `KeymapFileTests`. A bundled default file would add the one
 /// failure this must not have: a packaging mistake leaving helm with no keys at all.
 ///

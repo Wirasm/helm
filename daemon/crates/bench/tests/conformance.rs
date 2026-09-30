@@ -40,8 +40,8 @@ fn benchd_bin() -> PathBuf {
 /// test's own HOME, or make a child speak as somebody. An agent in a benchd-spawned session
 /// inherits `BENCH_DIR` (the operator's live `~/.bench`), `BENCH_SESSION` and `BENCH_HANDLE`;
 /// one in a helm pane inherits `HELM_PANE`; a just recipe the operator started carries
-/// `BENCH_ASKED=1`. `HELM_BENCH_DIR` and `PLAYWRIGHT_BROWSERS_PATH` override roots benchd
-/// otherwise finds under HOME (helm's snapshot, the browser's Playwright cache).
+/// `BENCH_ASKED=1`. `PLAYWRIGHT_BROWSERS_PATH` overrides a root benchd otherwise finds under
+/// HOME (the browser's Playwright cache).
 const INHERITED: &[&str] = &[
     "BENCH_DIR",
     "BENCH_SUITE",
@@ -53,7 +53,6 @@ const INHERITED: &[&str] = &[
     "BENCH_URL",
     "BENCH_LISTEN",
     "HELM_PANE",
-    "HELM_BENCH_DIR",
     "PLAYWRIGHT_BROWSERS_PATH",
     // Where Claude keeps its transcripts, which `restore` reads: the test's HOME decides it.
     "CLAUDE_CONFIG_DIR",
@@ -2251,9 +2250,23 @@ fn log_of(root: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The canvases the M4 tests open under `/tmp/m4-proof`: benchd opens only a file it finds.
+/// Written if absent, never removed, so tests running at once share them safely.
+fn m4_proof() {
+    let dir = Path::new("/tmp/m4-proof");
+    fs::create_dir_all(dir).unwrap();
+    for name in ["plan", "review", "tasks", "drawers", "a", "b", "c", "d"] {
+        let file = dir.join(format!("{name}.md"));
+        if !file.exists() {
+            fs::write(file, format!("# {name}\n")).unwrap();
+        }
+    }
+}
+
 /// The operator's working bench: a workspace, a second terminal to the right, and a canvas.
 /// Answers the pane ids: (first terminal, right terminal, canvas).
 fn working_bench(socket: &Path) -> (String, String, String) {
+    m4_proof();
     let first = ok_data(layout(
         socket,
         "workspace/open",
@@ -2452,6 +2465,7 @@ fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
 
 #[test]
 fn an_agent_rearranges_the_bench_and_never_moves_the_operators_focus() {
+    m4_proof();
     let home = TestHome::claim("m4-focus");
     let daemon = DaemonGuard::start(&home.dir, None);
     let (first, right, canvas) = working_bench(&daemon.socket);
@@ -2593,6 +2607,7 @@ fn a_layout_refusal_names_what_was_wrong_and_changes_nothing() {
 
 #[test]
 fn a_verb_that_changes_nothing_logs_nothing() {
+    m4_proof();
     let home = TestHome::claim("m4-noop");
     let root = home.dir.join(".bench");
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -2761,6 +2776,7 @@ fn a_follower_that_stops_reading_never_parks_the_daemon() {
 /// back from `bench.json` after a restart.
 #[test]
 fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
+    m4_proof();
     let home = TestHome::claim("drawer");
     let daemon = DaemonGuard::start(&home.dir, None);
     let (_, _, held) = working_bench(&daemon.socket);
@@ -2847,6 +2863,7 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
 /// changes nothing — the last good table keeps placing.
 #[test]
 fn a_rules_file_applies_on_the_next_verb_and_a_bad_one_changes_nothing() {
+    m4_proof();
     let home = TestHome::claim("rules");
     let root = home.dir.join(".bench");
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -3120,22 +3137,43 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     use bench_wire::{Harness, Host, OpenAction, SessionList, SessionState};
     let home = TestHome::claim("sessions");
     let h = &home.dir;
-    let ws = h.join("ws");
-    fs::create_dir_all(ws.join(".git")).unwrap();
+    let ws = workspace(h);
     let write = |p: PathBuf, text: String| {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, text).unwrap();
     };
-    let daemon = DaemonGuard::start(h, None);
     let root = h.join(".bench");
+    // A pane whose agent exited: its session is in the record, and its transcript remains. And
+    // an Archon run's transcript: in scope, never hosted.
+    write(
+        bench_wire::hosted_path(&root),
+        serde_json::json!({"format": bench_wire::HOSTED_RECORD_FORMAT,
+            "version": bench_wire::HOSTED_RECORD_VERSION, "sessions": [{"harness": "claude",
+            "id": "gone", "cwd": ws, "via": {"kind": "pane",
+            "pane": "3c47fa92-a0be-4012-a697-f7be06aede28"}, "recorded_at": "2026-09-25T12:00:00Z"}]})
+        .to_string(),
+    );
+    let daemon = DaemonGuard::start(h, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
 
-    // Two live Claude processes in the workspace: this test (in a helm pane) and the daemon
-    // (in no pane — foreign). Their registry rows carry their real start times.
+    // Two live Claude processes in the workspace: the one in a pane's foreground (the pane's own
+    // shell, at its prompt) and the daemon (in no pane — foreign). Their registry rows carry
+    // their real start times. benchd places the first from its own document and the session's
+    // terminal: there is no helm, and nothing under `.helm` (M5c).
     let started = |pid: u32| bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
-    let me = std::process::id();
+    let opened = bench(h, &["open", "terminal"]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
+    let sid = pane_session(h, &pane).expect("the new pane names a session");
+    let in_pane = u32::try_from(session_row(h, &sid)["pid"].as_i64().unwrap()).unwrap();
     let foreign = daemon.child.id();
-    let pane = "0E8E8CC6-159B-45D8-BC02-485120975998";
-    for (pid, sid) in [(me, "in-pane"), (foreign, "in-zed")] {
+    for (pid, sid) in [(in_pane, "in-pane"), (foreign, "in-zed")] {
         write(
             h.join(format!(".claude/sessions/{pid}.json")),
             serde_json::json!({"pid": pid, "sessionId": sid, "cwd": ws, "startedAt": started(pid),
@@ -3143,8 +3181,6 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
             .to_string(),
         );
     }
-    // A pane whose agent exited: helm recorded it as resumable, and its transcript remains.
-    // And an Archon run's transcript: in scope, never hosted.
     for sid in ["gone", "archon-run", "in-zed"] {
         write(
             h.join(".claude/projects")
@@ -3153,26 +3189,19 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
             "{\"type\":\"user\"}\n".into(),
         );
     }
-    let terminal =
-        |t: serde_json::Value| serde_json::json!({"id": pane, "kind": "terminal", "terminal": t});
-    write(
-        h.join(".helm/bench/snapshot.json"),
-        serde_json::json!({"format": "helm.bench-snapshot", "version": 1, "writtenAt": "2026-09-25T12:00:00Z",
-            "workspaces": [{"columns": [{"slots": [{"panes": [
-                terminal(serde_json::json!({"foregroundPid": me,
-                    "owner": {"runtime": "claude", "pid": me, "sessionId": "in-pane", "cwd": ws}})),
-                {"id": "3C47FA92-A0BE-4012-A697-F7BE06AEDE28", "kind": "terminal", "terminal":
-                    {"resumable": {"command": "claude", "session": "gone", "cwd": ws}}},
-            ]}]}]}]})
-        .to_string(),
-    );
     // A job in a state no reader knows.
     write(
         h.join(".claude/jobs/j1/state.json"),
         serde_json::json!({"state": "hibernating", "sessionId": "j", "cwd": ws}).to_string(),
     );
-    let harness_files = [h.join(".claude"), h.join(".helm")];
+    let harness_files = [h.join(".claude")];
     let before: Vec<_> = harness_files.iter().map(|d| tree_state(d)).collect();
+    // The shell is at its prompt, so it holds its terminal.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session_row(h, &sid)["foreground_pid"] != in_pane {
+        assert!(Instant::now() < deadline, "{}", session_row(h, &sid));
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     let list = |extra: &[&str]| -> SessionList {
         let mut args = vec!["sessions", "--all"];
@@ -3218,7 +3247,7 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
         .iter()
         .map(|s| s["id"].as_str().unwrap())
         .collect();
-    assert_eq!(recorded, ["in-pane", "gone"]);
+    assert_eq!(recorded, ["in-pane"], "the pane's agent joins the record");
     let record: bench_wire::HostedRecord =
         serde_json::from_str(&fs::read_to_string(root.join("sessions/hosted.json")).unwrap())
             .unwrap();
@@ -3284,13 +3313,12 @@ fn the_session_list_names_what_helm_and_benchd_hosted_and_nothing_else() {
     );
     drop(daemon);
     let _daemon = DaemonGuard::start(h, None);
-    // The foreign row's pid died with the first daemon; the pane agent is still this test.
+    // Both live rows' processes ended with the first daemon, and only `gone` left a transcript.
     let after = list(&["--workspace", &ws.join("src").display().to_string()]);
-    let ids: Vec<&str> = after.rows.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        ["in-pane"],
-        "dismissed, and the record survived the restart"
+    assert!(
+        after.rows.is_empty(),
+        "dismissed, and the record survived the restart: {:?}",
+        after.rows
     );
     assert_eq!(
         after.workspace, ws_arg,
@@ -5046,6 +5074,171 @@ fn artifact(home: &Path, name: &str) -> String {
     path.canonicalize().unwrap().display().to_string()
 }
 
+/// Whether a file exists is benchd's to say, on its own disk (M5c, #459): the operator's `bench`
+/// may run on another machine, where a path on benchd's is absent. So the CLI only makes the path
+/// absolute and checks what kind of file it is, and benchd refuses a canvas it cannot find.
+#[test]
+fn a_canvas_that_is_not_on_benchds_disk_is_refused_by_benchd() {
+    let home = TestHome::claim("m5c-open");
+    let ws = workspace(&home.dir).display().to_string();
+    let daemon = DaemonGuard::start(&home.dir, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let missing = home.dir.join("nowhere/plan.md").display().to_string();
+    // Straight to benchd, as a `bench` whose own disk does not matter would send it.
+    let reply = layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": { "kind": "canvas", "source": { "kind": "file", "path": missing } } }),
+        None,
+        false,
+    );
+    assert_eq!(reply["status"], "refused", "{reply}");
+    assert_eq!(reply["reason"], format!("no file at {missing}"));
+    let cli = bench(&home.dir, &["open", &missing]);
+    assert_eq!(cli.code, 3, "{}", cli.stderr);
+    assert!(
+        cli.stderr.contains(&format!("no file at {missing}")),
+        "{}",
+        cli.stderr
+    );
+    // The kind of file is still the CLI's to check: it needs no disk.
+    let text = bench(&home.dir, &["open", "notes.txt"]);
+    assert!(
+        text.stderr.contains("is not a file helm renders"),
+        "{}",
+        text.stderr
+    );
+
+    let plan = artifact(&home.dir, "plan.md");
+    let opened = bench(&home.dir, &["open", &plan]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+}
+
+/// `sessions` carries what the agent in each session says it is doing (M5c, #459): helm's presence
+/// dots and the snapshot's `agent` read it there, so neither reads Claude's registry on helm's
+/// machine. benchd reads the row for the session's foreground process from its own HOME.
+#[test]
+fn sessions_report_what_the_agent_in_a_pane_says_it_is_doing() {
+    let home = TestHome::claim("m5c-report");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let daemon = DaemonGuard::start(h, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sid = pane_session(h, &pane).expect("the new pane names a session");
+    let pid = u32::try_from(session_row(h, &sid)["pid"].as_i64().unwrap()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session_row(h, &sid)["foreground_pid"] != pid {
+        assert!(Instant::now() < deadline, "{}", session_row(h, &sid));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        session_row(h, &sid).get("report").is_none(),
+        "a shell nobody reports for has no report"
+    );
+
+    // A Claude registry row for the process holding the pane's terminal.
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = h.join(format!(".claude/sessions/{pid}.json"));
+    fs::create_dir_all(row.parent().unwrap()).unwrap();
+    fs::write(
+        &row,
+        serde_json::json!({"pid": pid, "sessionId": "c-1", "cwd": ws, "startedAt": started,
+            "status": "waiting", "waitingFor": "permission prompt", "statusUpdatedAt": started + 7})
+        .to_string(),
+    )
+    .unwrap();
+    let got = session_row(h, &sid);
+    let report: bench_wire::AgentReport =
+        serde_json::from_value(got["report"].clone()).unwrap_or_else(|e| panic!("{e}: {got}"));
+    assert_eq!(
+        report,
+        bench_wire::AgentReport {
+            activity: bench_wire::Activity::Waiting {
+                waiting_for: Some("permission prompt".into())
+            },
+            since_ms: Some(started + 7),
+        }
+    );
+}
+
+/// A pane's agent is found through the shell the pane shows. A session benchd spawned is listed as
+/// its own session already, so the pane showing it adds nothing (it would list it twice).
+#[test]
+fn a_pane_showing_a_spawned_session_places_no_second_agent() {
+    let home = TestHome::claim("m5c-spawned");
+    let h = &home.dir;
+    let ws = workspace(h);
+    let _daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "spawned");
+    let pane = session_row(h, &sid)["pane"].clone();
+    assert!(pane.is_string(), "the spawn is shown in a pane: {pane}");
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = h.join(format!(".claude/sessions/{pid}.json"));
+    fs::create_dir_all(row.parent().unwrap()).unwrap();
+    fs::write(
+        &row,
+        serde_json::json!({"pid": pid, "sessionId": "via-pane", "cwd": ws, "startedAt": started,
+            "status": "idle"})
+        .to_string(),
+    )
+    .unwrap();
+    let list = bench(
+        h,
+        &[
+            "sessions",
+            "--all",
+            "--workspace",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_eq!(list.code, 0, "{}", list.stderr);
+    let list: bench_wire::SessionList = serde_json::from_str(&list.stdout).unwrap();
+    assert!(
+        list.rows.iter().all(|r| r.id != "via-pane"),
+        "{:?}",
+        list.rows
+    );
+}
+
+/// `bench --version` is what helm compares with `status.version` before it runs its own `bench`
+/// in a pane against a benchd over TCP, so the two say the same thing for the same build.
+#[test]
+fn bench_version_is_what_benchd_says_in_status() {
+    let home = TestHome::claim("m5c-version");
+    let _daemon = DaemonGuard::start(&home.dir, None);
+    let version = bench(&home.dir, &["--version"]);
+    assert_eq!(version.code, 0, "{}", version.stderr);
+    let status = json_of(&bench(&home.dir, &["status"]));
+    assert_eq!(status["version"], version.stdout.trim());
+    // Every field helm reads of `status` (`fixtures/helm-ask.json`), a string in a live answer.
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helm-ask.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for key in fixture["status_reply"].as_object().unwrap().keys() {
+        assert!(status[key].is_string(), "{key} in {status}");
+    }
+}
+
 fn document(socket: &Path) -> serde_json::Value {
     ok_data(layout(
         socket,
@@ -5157,6 +5350,7 @@ fn an_agent_replaces_a_chosen_name_only_when_it_says_the_operator_asked() {
 
 #[test]
 fn an_artifact_lands_in_the_workspace_of_the_agent_that_opened_it() {
+    m4_proof();
     let home = TestHome::claim("m3-where");
     let daemon = DaemonGuard::start(&home.dir, None);
     let (in_first_workspace, _, _) = working_bench(&daemon.socket);
@@ -8937,5 +9131,291 @@ fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
             .unwrap()
             .starts_with("no shared browser is running"),
         "{answer}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M5c: helm's git and archon, run on benchd's machine (`command/run`, `path/exists`,
+// `git/repositories`)
+// ---------------------------------------------------------------------------
+
+/// A TCP daemon whose PATH holds only the system's and Homebrew's folders: never the operator's
+/// `~/.bun/bin`, so the only `archon` it can find is a test's stub in its own `HOME`.
+fn tcp_daemon_with_system_path(home: &Path, port: u16) -> DaemonGuard {
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"))
+        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
+    DaemonGuard::start_with(home, None, cmd)
+}
+
+fn command_run(port: u16, command: serde_json::Value, timeout_ms: u64) -> serde_json::Value {
+    tcp_verb(
+        port,
+        "command/run",
+        serde_json::json!({ "command": command, "timeout_ms": timeout_ms }),
+    )
+}
+
+/// An `exited` answer's (status, stdout, stderr).
+fn exited(answer: &serde_json::Value) -> (i64, String, String) {
+    let data = ok(answer);
+    assert_eq!(data["kind"], "exited", "{answer}");
+    let text = |key: &str| {
+        String::from_utf8(bench_wire::unbase64(data[key].as_str().unwrap()).unwrap()).unwrap()
+    };
+    (
+        data["status"].as_i64().unwrap(),
+        text("stdout"),
+        text("stderr"),
+    )
+}
+
+fn test_git(args: &[&str], dir: &Path) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `<home>/Projects/app` on `main`, with a worktree `merged-one` at main's tip and a worktree
+/// `feature` one commit ahead of it.
+fn repo_with_worktrees(home: &Path) -> PathBuf {
+    let app = home.join("Projects/app");
+    fs::create_dir_all(&app).unwrap();
+    let app = app.canonicalize().unwrap();
+    test_git(&["init", "-q", "-b", "main"], &app);
+    fs::write(app.join("a.txt"), "a").unwrap();
+    test_git(&["add", "."], &app);
+    test_git(&["commit", "-q", "-m", "first"], &app);
+    test_git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "merged-one",
+            ".worktrees/merged-one",
+        ],
+        &app,
+    );
+    test_git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            ".worktrees/feature",
+        ],
+        &app,
+    );
+    let feature = app.join(".worktrees/feature");
+    fs::write(feature.join("b.txt"), "b").unwrap();
+    test_git(&["add", "."], &feature);
+    test_git(&["commit", "-q", "-m", "unmerged"], &feature);
+    app
+}
+
+/// What the Worktrees drawer's delete leans on, through benchd over TCP: git's own answers come
+/// back exactly, a "no" included. `merge-base --is-ancestor` says an unmerged branch is not in
+/// main with status 1 — an answer, not a refusal — and helm stops before `branch -D` on it; a
+/// merged one says 0. Uncommitted work shows in `status --porcelain`, and `worktree remove`
+/// without `--force` refuses a dirty worktree with git's words.
+#[test]
+fn command_run_over_tcp_answers_gits_own_status_and_output() {
+    let home = TestHome::claim("m5c-git");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let app = repo_with_worktrees(&home.dir);
+    let common = app.join(".git").display().to_string();
+    let git = |args: &[&str]| {
+        exited(&command_run(
+            port,
+            serde_json::json!({ "program": "git", "args": args }),
+            20_000,
+        ))
+    };
+
+    let (status, listing, _) = git(&["-C", &common, "worktree", "list", "--porcelain"]);
+    assert_eq!(status, 0);
+    assert!(listing.contains("branch refs/heads/feature"), "{listing}");
+    assert_eq!(
+        git(&[
+            "-C",
+            &common,
+            "merge-base",
+            "--is-ancestor",
+            "feature",
+            "main"
+        ])
+        .0,
+        1
+    );
+    assert_eq!(
+        git(&[
+            "-C",
+            &common,
+            "merge-base",
+            "--is-ancestor",
+            "merged-one",
+            "main"
+        ])
+        .0,
+        0
+    );
+
+    let feature = app.join(".worktrees/feature");
+    fs::write(feature.join("new.txt"), "work").unwrap();
+    let path = feature.display().to_string();
+    let (_, dirty, _) = git(&["--no-optional-locks", "-C", &path, "status", "--porcelain"]);
+    assert_eq!(dirty.lines().count(), 1, "{dirty}");
+    let (status, _, stderr) = git(&["-C", &common, "worktree", "remove", &path]);
+    assert_ne!(status, 0, "a dirty worktree is not removed without --force");
+    assert!(
+        stderr.contains("untracked"),
+        "git's own words come back: {stderr}"
+    );
+    assert!(feature.join("new.txt").exists());
+
+    // A working directory and a failure that is git's, not benchd's.
+    let (status, branch, _) = exited(&command_run(
+        port,
+        serde_json::json!({ "program": "git", "args": ["branch", "--show-current"], "cwd": app }),
+        10_000,
+    ));
+    assert_eq!((status, branch.as_str()), (0, "main\n"));
+    let (status, _, stderr) = git(&["-C", &home.dir.display().to_string(), "status"]);
+    assert_eq!(status, 128);
+    assert!(stderr.contains("not a git repository"), "{stderr}");
+}
+
+/// `archon` is found in benchd's own `~/.bun/bin`, runs in the named directory with that folder
+/// first on its PATH (it is a bun script), and gets `ARCHON_HOME` when asked. What benchd cannot
+/// start is a refusal naming why; a slow run is killed at its deadline; and a run that leaves a
+/// background child holding its stdout (`--detach`) is still answered at once.
+#[test]
+fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
+    let home = TestHome::claim("m5c-archon");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let work = home.dir.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let work = work.canonicalize().unwrap();
+    let archon = |args: &[&str], extra: serde_json::Value, timeout_ms| {
+        let mut command = serde_json::json!({ "program": "archon", "args": args, "cwd": work });
+        if let Some(home) = extra.get("home") {
+            command["home"] = home.clone();
+        }
+        command_run(port, command, timeout_ms)
+    };
+
+    // Not installed on benchd's machine: refused, naming where it looked.
+    let missing = archon(
+        &["workflow", "runs", "--json"],
+        serde_json::json!({}),
+        5_000,
+    );
+    assert_eq!(missing["status"], "refused", "{missing}");
+    let why = missing["reason"].as_str().unwrap();
+    assert!(
+        why.contains("archon is not installed") && why.contains(".bun/bin"),
+        "{why}"
+    );
+
+    let bun = home.dir.join(".bun/bin");
+    fs::create_dir_all(&bun).unwrap();
+    let stub = bun.join("archon");
+    fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in\n  slow) exec sleep 5 ;;\n  detach) sleep 2 & echo started; exit 0 ;;\nesac\n\
+         printf '%s|%s|%s|%s\\n' \"$PWD\" \"${ARCHON_HOME:-none}\" \"${PATH%%:*}\" \"$*\"\nexit 3\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let (status, out, _) = exited(&archon(
+        &["complete", "archon/task-x"],
+        serde_json::json!({ "home": "/archon/home" }),
+        5_000,
+    ));
+    assert_eq!(status, 3, "a nonzero exit is an answer");
+    assert_eq!(
+        out,
+        format!(
+            "{}|/archon/home|{}|complete archon/task-x\n",
+            work.display(),
+            bun.display()
+        )
+    );
+
+    let started = Instant::now();
+    let slow = archon(&["slow"], serde_json::json!({}), 300);
+    assert_eq!(ok(&slow)["kind"], "timed_out", "{slow}");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "killed at its deadline"
+    );
+
+    let started = Instant::now();
+    let (status, out, _) = exited(&archon(&["detach"], serde_json::json!({}), 5_000));
+    assert_eq!((status, out.as_str()), (0, "started\n"));
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "a background child holding stdout does not hold the answer"
+    );
+
+    // Refused before anything runs: a directory that is not one, a program that is not allowed.
+    let nowhere = command_run(
+        port,
+        serde_json::json!({ "program": "git", "args": ["status"], "cwd": work.join("gone") }),
+        5_000,
+    );
+    assert_eq!(nowhere["status"], "refused", "{nowhere}");
+    let shell = command_run(
+        port,
+        serde_json::json!({ "program": "sh", "args": ["-c", "true"] }),
+        5_000,
+    );
+    assert_eq!(shell["status"], "refused", "{shell}");
+}
+
+/// `path/exists` and `git/repositories` read benchd's disk and benchd's home, over TCP.
+#[test]
+fn path_exists_and_git_repositories_over_tcp_read_benchds_disk() {
+    let home = TestHome::claim("m5c-repos");
+    let port = free_port();
+    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let app = repo_with_worktrees(&home.dir);
+    let feature = app.join(".worktrees/feature").display().to_string();
+    let gone = app.join(".worktrees/gone").display().to_string();
+
+    let answer = tcp_verb(
+        port,
+        "path/exists",
+        serde_json::json!({ "paths": [feature, gone] }),
+    );
+    assert_eq!(ok(&answer)["existing"], serde_json::json!([feature]));
+
+    let found = tcp_verb(
+        port,
+        "git/repositories",
+        serde_json::json!({ "workspaces": [feature] }),
+    );
+    assert_eq!(
+        ok(&found)["repositories"],
+        serde_json::json!([{ "common_dir": app.join(".git"), "is_workspace": true }])
     );
 }

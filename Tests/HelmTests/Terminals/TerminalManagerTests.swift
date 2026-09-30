@@ -76,7 +76,8 @@ final class TerminalManagerTests: XCTestCase {
             ], active: firstWorkspace.value)
         let missing = BenchExecutable.NotFound(
             asked: "benchd could not be asked (no answer)", looked: ["/nowhere/bench"])
-        let attaching = document.workspaces[0].bench.attachCommands(bench: .failure(missing))
+        let attaching = document.workspaces[0].bench.attachCommands(
+            bench: .failure(.notFound(missing)))
         XCTAssertEqual(attaching, [agent: .unavailable(reason: missing.description)])
 
         manager.adopt(terminals: [agent], in: firstWorkspace, attaching: attaching)

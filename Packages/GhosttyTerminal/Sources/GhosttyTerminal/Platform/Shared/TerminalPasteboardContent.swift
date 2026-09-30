@@ -44,6 +44,11 @@ public enum TerminalPasteboardContent {
         return string
     }
 
+        /// The pasteboard ghostty's `read_clipboard` callback reads: the operator's. A test
+        /// that makes a program in a pane ask for the clipboard puts a private one here, so
+        /// the read it provokes can never reach his (#337).
+        nonisolated(unsafe) static var readSource: NSPasteboard = .general
+
         /// The pasteboard as text — see ``text(string:urls:)``.
         static func text(from pasteboard: NSPasteboard = .general) -> String? {
             text(

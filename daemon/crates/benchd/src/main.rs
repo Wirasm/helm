@@ -29,6 +29,7 @@
 mod ask;
 mod cdp;
 mod codex;
+mod commands;
 mod files;
 mod hook;
 mod just;
@@ -635,7 +636,7 @@ fn boot(
             "daemon/started",
             json!({
                 "pid": process::id(),
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": bench_wire::VERSION,
                 "suite": suite_name,
             }),
         )
@@ -1046,7 +1047,7 @@ fn dispatch(
             (
                 ok(json!({
                     "pid": process::id(),
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": bench_wire::VERSION,
                     "suite": c.suite.as_ref().map(|s| s.as_str().to_string()),
                     "root": c.root.display().to_string(),
                     "socket": socket_path(&c.root).display().to_string(),
@@ -1082,6 +1083,11 @@ fn dispatch(
         Some(Verb::FileRead) => answered(req, files::read(&req.args)),
         Some(Verb::FileWrite) => answered(req, files::write(&req.args)),
         Some(Verb::FileAppend) => answered(req, files::append(&req.args)),
+        // Off the core lock: a command can take as long as its deadline, and only this
+        // connection waits for it.
+        Some(Verb::CommandRun) => answered(req, commands::run(&req.args)),
+        Some(Verb::PathExists) => answered(req, commands::exists(&req.args)),
+        Some(Verb::GitRepositories) => answered(req, commands::repositories(&req.args)),
         Some(Verb::Layout) => {
             let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)
@@ -1115,19 +1121,23 @@ fn dispatch(
             // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
             // `waiting` is read here too: it takes no session lock, only benchd's own records
             // and each reporting agent's liveness from the kernel.
-            let shown: Vec<_> = {
+            let (home, shown): (_, Vec<_>) = {
                 let c = core.lock().unwrap();
-                c.sessions
+                let shown = c
+                    .sessions
                     .values()
                     .map(|s| {
                         let pane = c.bench.document.pane_showing_session(&s.id);
-                        (Arc::clone(s), pane, waiting::of_session(&c, &s.id))
+                        let hooked = waiting::hook_report(&c, &s.id);
+                        (Arc::clone(s), pane, waiting::of_session(&c, &s.id), hooked)
                     })
-                    .collect()
+                    .collect();
+                (c.home.clone(), shown)
             };
             let sessions = shown
                 .into_iter()
-                .map(|(s, pane, waiting)| bench_wire::SessionEntry {
+                .map(|(s, pane, waiting, hooked)| bench_wire::SessionEntry {
+                    report: waiting::report(&s, &home, hooked),
                     session: s.id.clone(),
                     handle: s.handle.clone(),
                     agent: s.agent.name().to_string(),

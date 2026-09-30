@@ -137,6 +137,12 @@ final class BenchWireConformanceTests: XCTestCase {
                     waitingFor: "permission prompt",
                     since: Date(timeIntervalSince1970: 1_790_540_771.295), source: "screen")
             ])
+        XCTAssertEqual(
+            reply.reportByPane,
+            [
+                pane: BenchLiveSessions.Report(
+                    activity: "busy", since: Date(timeIntervalSince1970: 1_790_540_700.120))
+            ])
     }
 
     /// The two mail verbs helm sends benchd (#358), and the answer to `who` — the canvas note's
@@ -294,6 +300,12 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertEqual(
             try normalized(JSONEncoder().encode(BenchStatusRequest(id: "helm-status-1"))),
             try sample("status"))
+        // What helm reads of the answer: the `bench` beside benchd, and its version (M5c).
+        let status = try JSONDecoder().decode(
+            BenchStatusReply.self,
+            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["status_reply"])))
+        XCTAssertEqual(
+            status, BenchStatusReply(bench: "/Users/rasmus/.cargo/bin/bench", version: "0.0.2"))
     }
 
     /// The browser pane's `browser/connect` (M5c): the request is the daemon's sample, and both

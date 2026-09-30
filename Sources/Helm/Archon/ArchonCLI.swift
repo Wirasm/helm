@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 /// Every Archon call helm makes, and every one of them names the workspace it is about.
 ///
@@ -70,7 +71,9 @@ struct ArchonCLIError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-/// The sole process and JSON boundary for Archon. The process itself is `Subprocess`'s.
+/// The sole process and JSON boundary for Archon. The process runs on benchd's machine
+/// (`BenchHost`, M5c), where the workspace and Archon's home are, whether that is this Mac or
+/// another; everything about what the output means stays here.
 struct ArchonCLI: ArchonClient, Sendable {
     /// **Generous on purpose: this is a deadline, not a latency budget.** A healthy call is
     /// ~0.6s (measured against Archon 0.7.0, `workflow runs`/`get`, warm). Anything past 20s is
@@ -81,20 +84,18 @@ struct ArchonCLI: ArchonClient, Sendable {
     /// "not a git repository" refusal, short enough that a stack trace cannot become the UI.
     static let errorSnippetLimit = 400
 
-    let inheritedEnvironment: [String: String]
-    let homeDirectory: String
+    let host: any BenchHost
+    /// Where a payload helm could not decode is kept, on helm's side: it is helm's evidence.
     let captureDirectory: URL
     /// Injectable so the deadline can be proven in under a second instead of after twenty.
     let timeout: Duration
 
     init(
-        inheritedEnvironment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: String = NSHomeDirectory(),
+        host: any BenchHost,
         captureDirectory: URL = FileManager.default.temporaryDirectory,
         timeout: Duration = ArchonCLI.defaultTimeout
     ) {
-        self.inheritedEnvironment = inheritedEnvironment
-        self.homeDirectory = homeDirectory
+        self.host = host
         self.captureDirectory = captureDirectory
         self.timeout = timeout
     }
@@ -188,15 +189,6 @@ struct ArchonCLI: ArchonClient, Sendable {
             ArchonLaunchAcknowledgement.self, arguments: arguments, in: workingPath)
     }
 
-    /// `~/.bun/bin` ahead of the inherited `PATH`: Archon is installed as a bun global, and a
-    /// GUI app inherits launchd's `PATH`, which has never heard of it.
-    static func developmentEnvironment(
-        inherited: [String: String], homeDirectory: String
-    ) -> [String: String] {
-        let bun = URL(fileURLWithPath: homeDirectory).appendingPathComponent(".bun/bin").path
-        return Subprocess.environment(inherited: inherited, prepending: [bun])
-    }
-
     private func decode<T: Decodable>(
         _ type: T.Type, arguments: [String], in workingDirectory: String
     ) async throws -> T {
@@ -228,11 +220,8 @@ struct ArchonCLI: ArchonClient, Sendable {
             // at import time — before it parses argv — so the flag reaches a decision the env
             // has already been made without. Being *in* the directory is what a shell does and
             // what Archon is written against.
-            result = try await Subprocess.run(
-                ["archon"] + arguments, cwd: workingDirectory,
-                environment: Self.developmentEnvironment(
-                    inherited: inheritedEnvironment, homeDirectory: homeDirectory),
-                timeout: timeout, scratch: captureDirectory)
+            result = try await host.run(
+                .archon(args: arguments, cwd: workingDirectory), timeout: timeout)
         } catch let failure as Subprocess.Failure {
             let reason: ArchonCLIError.Reason =
                 switch failure {

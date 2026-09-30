@@ -1,30 +1,35 @@
 import Foundation
 
-/// The private, per-instance file boundary for the agent-readable bench snapshot.
-struct BenchSnapshotDirectory: Equatable {
+/// helm's own private, per-instance directory: `~/.helm/bench`, `~/.helm/bench-<suite>` under
+/// `HELM_DEFAULTS_SUITE`, or `HELM_BENCH_DIR`. It holds the agent-readable bench snapshot and the
+/// operator's keymap: things of helm's that stay on helm's machine when benchd is on another
+/// (M5c), which is why neither lives under the bench root.
+struct HelmBenchDirectory: Equatable {
     static let directoryVariable = "HELM_BENCH_DIR"
 
     let root: URL
 
     var snapshot: URL { root.appendingPathComponent("snapshot.json") }
+    /// The operator's keymap (`Keymap`). helm reads it and nothing writes it.
+    var keymap: URL { root.appendingPathComponent("keymap.toml") }
 
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> BenchSnapshotDirectory {
+    ) -> HelmBenchDirectory {
         if let raw = environment[directoryVariable]?.trimmingCharacters(
             in: .whitespacesAndNewlines),
             !raw.isEmpty
         {
-            return BenchSnapshotDirectory(
+            return HelmBenchDirectory(
                 root: URL(fileURLWithPath: (raw as NSString).expandingTildeInPath))
         }
         let base = home.appendingPathComponent(".helm")
         switch DefaultsDomain.override(in: environment) {
         case .suite(let name):
-            return BenchSnapshotDirectory(root: base.appendingPathComponent("bench-\(name)"))
+            return HelmBenchDirectory(root: base.appendingPathComponent("bench-\(name)"))
         case .none, .refused:
-            return BenchSnapshotDirectory(root: base.appendingPathComponent("bench"))
+            return HelmBenchDirectory(root: base.appendingPathComponent("bench"))
         }
     }
 

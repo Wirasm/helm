@@ -63,5 +63,9 @@
   "status": {
     "id": "helm-status-1",
     "verb": "status"
+  },
+  "status_reply": {
+    "bench": "/Users/rasmus/.cargo/bin/bench",
+    "version": "0.0.2"
   }
 }

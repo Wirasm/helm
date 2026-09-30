@@ -127,8 +127,9 @@ repositories**. Now it does, on purpose.
 
 **Where it looks**: the repositories of the bench's workspaces, every repository under
 `~/Projects` (four folders deep, skipping dependencies and build output), and every repository an
-Archon worktree under `~/.archon*/workspaces` was made from. Found by reading `.git` on disk, no
-process started; `HELM_WORKTREES_HOME` moves the home it searches. A repository with only its main
+Archon worktree under `~/.archon*/workspaces` was made from, all on benchd's machine (M5c): benchd
+finds them by reading `.git` there (`git/repositories`), starting no process, and runs the drawer's
+git for helm (`command/run`). A repository with only its main
 checkout is left out unless a workspace is in it, and the drawer says how many it left out.
 
 **What each worktree shows**, from git and nothing else: its branch, dirty or clean (`git status`,
@@ -258,7 +259,7 @@ Not decisions — things that are true today and shape what is cheap.
 - **The source is sliced vertically by feature** — `App/`, `Workspaces/`, `Terminals/`,
   `Canvas/`, `Artifacts/`, `Shared/` — with each vertical owning its own commands, and `App/`
   reduced to composition. Keyboard shortcuts are a table of values (`KeyBindings`, overlaid by the
-  operator's `rules/keymap.toml`) read by the event monitor, the menu and the key pop-up.
+  operator's `~/.helm/bench/keymap.toml`) read by the event monitor, the menu and the key pop-up.
   See `AGENTS.md` for the patterns.
 - The kild layer was removed on `chore/drop-kild-layer`; what remains is workspaces,
   terminals, artifact rendering, and the app shell.

@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -13,7 +14,7 @@ final class WorktreesModelTests: XCTestCase {
     private let solo = GitCommonDir("/work/solo/.git")
 
     private func model(
-        _ client: FakeWorktreeClient, found: [WorktreeDiscovery.Found]? = nil
+        _ client: FakeWorktreeClient, found: [BenchGitRepository]? = nil
     ) -> WorktreesModel {
         let found =
             found ?? [
@@ -57,7 +58,7 @@ final class WorktreesModelTests: XCTestCase {
         let client = FakeWorktreeClient(response: [main("/work/x")])
         await client.setDelay(.milliseconds(30))
         let found = (0..<14).map {
-            WorktreeDiscovery.Found(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
+            BenchGitRepository(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
         }
         let model = model(client, found: found)
 
@@ -67,7 +68,8 @@ final class WorktreesModelTests: XCTestCase {
         XCTAssertEqual(metrics.listCalls, 14)
         XCTAssertEqual(metrics.maximumListCalls, WorktreesModel.concurrentRepositories)
         XCTAssertEqual(
-            model.repos.map(\.id), found.map(\.commonDir), "published in discovery order")
+            model.repos.map(\.id), found.map { GitCommonDir($0.commonDir) },
+            "published in discovery order")
     }
 
     /// `git status` of a lone main checkout is read only for a workspace's repository: every
@@ -91,7 +93,7 @@ final class WorktreesModelTests: XCTestCase {
         let client = FakeWorktreeClient(response: [main("/work/x")])
         await client.setDelay(.seconds(30))
         let found = (0..<14).map {
-            WorktreeDiscovery.Found(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
+            BenchGitRepository(commonDir: GitCommonDir("/r\($0)/.git"), isWorkspace: false)
         }
         let model = model(client, found: found)
 
@@ -140,7 +142,7 @@ final class WorktreesModelTests: XCTestCase {
 
     func testARepositoryNoLongerFoundLeavesTheList() async {
         let client = FakeWorktreeClient(response: [main("/work/x"), .fixture()])
-        var found: [WorktreeDiscovery.Found] = [
+        var found: [BenchGitRepository] = [
             .init(commonDir: app, isWorkspace: false), .init(commonDir: lib, isWorkspace: false),
         ]
         let box = FoundBox(found)
@@ -384,10 +386,16 @@ final class WorktreesModelTests: XCTestCase {
 /// A discovery answer a test changes between refreshes.
 private final class FoundBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var stored: [WorktreeDiscovery.Found]
-    init(_ value: [WorktreeDiscovery.Found]) { stored = value }
-    var value: [WorktreeDiscovery.Found] {
+    private var stored: [BenchGitRepository]
+    init(_ value: [BenchGitRepository]) { stored = value }
+    var value: [BenchGitRepository] {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
+    }
+}
+
+extension BenchGitRepository {
+    init(commonDir: GitCommonDir, isWorkspace: Bool) {
+        self.init(commonDir: commonDir.path, isWorkspace: isWorkspace)
     }
 }

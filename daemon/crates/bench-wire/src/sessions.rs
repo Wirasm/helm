@@ -169,8 +169,8 @@ pub enum OpenAction {
 /// a Claude Code release that changes one shows up.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unreadable {
-    /// Which reader: `claude-registry`, `claude-job`, `claude-subagent`, `pi-session`,
-    /// `helm-snapshot` — or `session-list` for a row the list itself had no action for
+    /// Which reader: `claude-registry`, `claude-job`, `claude-subagent`, `pi-session` — or
+    /// `session-list` for a row the list itself had no action for
     /// (a combination of host and state no reader should produce; `path` is its cwd).
     pub source: String,
     pub path: String,
@@ -216,8 +216,8 @@ pub struct SessionKey {
 pub enum HostedVia {
     Pane {
         pane: PaneId,
-        /// The mailbox its hook claimed (#358). Absent for a session seen only in helm's
-        /// snapshot, and in entries recorded before the hook existed.
+        /// The mailbox its hook claimed (#358). Absent for a session seen only in a pane's
+        /// foreground, and in entries recorded before the hook existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handle: Option<String>,
     },

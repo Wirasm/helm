@@ -36,8 +36,8 @@ final class ArchonCLITests: XCTestCase {
         var environment = extraEnvironment
         environment["PATH"] = bin.path
         return ArchonCLI(
-            inheritedEnvironment: environment,
-            homeDirectory: root.appendingPathComponent("home").path,
+            host: LocalBenchHost(
+                environment: environment, homeDirectory: root.appendingPathComponent("home").path),
             captureDirectory: captures,
             timeout: timeout)
     }

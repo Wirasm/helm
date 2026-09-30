@@ -9,8 +9,9 @@
 //! written, the same order as the layout verbs.
 
 use crate::{Core, now_rfc3339};
-use bench_doc::{PaneId, StandardPath};
-use bench_sessions::{BenchSession, Cache, Inputs, Waits};
+use bench_doc::{PaneId, StandardPath, Surface};
+use bench_session::{AgentKind, Session};
+use bench_sessions::{BenchSession, Cache, Inputs, PaneAgent, Resumable, Waits};
 use bench_wire::{
     DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
@@ -22,7 +23,7 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
 /// The per-file cache, kept for the daemon's life. Its own mutex, never the core's: two
@@ -49,7 +50,7 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
     let workspace = StandardPath::new(&args.workspace)
         .map_err(|why| Refusal::Refused(format!("workspace: {why}")))?;
 
-    let (home, suite, root, pushable, bench, hosted, dismissed, hooked) = {
+    let (home, root, pushable, bench, panes, hosted, dismissed, hooked) = {
         let c = core.lock().unwrap();
         let bench: Vec<BenchSession> = c
             .sessions
@@ -69,10 +70,10 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
             .collect();
         (
             c.home.clone(),
-            c.suite.as_ref().map(|s| s.as_str().to_string()),
             c.root.clone(),
             c.pushable_handles(),
             bench,
+            shown_panes(&c),
             c.session_records.hosted.clone(),
             c.session_records.dismissed.clone(),
             crate::hook::hooked(&c),
@@ -86,18 +87,24 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         wakeable: pushable.contains(handle),
         unread: bench_mail::unread(&root, handle),
     };
-    let helm_bench_dir = helm_bench_dir(
-        &home,
-        suite.as_deref(),
-        std::env::var("HELM_BENCH_DIR").ok(),
-    );
+    // A pane's foreground pid asks its session's pty, so it is read here, outside the core lock.
+    let panes: Vec<PaneAgent> = panes
+        .into_iter()
+        .map(|(pane, session, resumable)| PaneAgent {
+            pane,
+            foreground_pid: session
+                .and_then(|s| s.foreground_pid())
+                .and_then(|pid| u32::try_from(pid).ok()),
+            resumable,
+        })
+        .collect();
     let now = now_rfc3339();
     let built = {
         let mut cache = CACHE.lock().unwrap();
         bench_sessions::build(
             &Inputs {
                 home: &home,
-                helm_bench_dir: &helm_bench_dir,
+                panes: &panes,
                 workspace: &workspace,
                 bench: &bench,
                 hosted: &hosted,
@@ -119,6 +126,35 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         report(&mut c, u).map_err(Refusal::Failed)?;
     }
     Ok(json!(built.list))
+}
+
+/// Every terminal pane on the bench, the live shell it shows and the agent recorded in it. Only a
+/// shell: an agent benchd spawned is listed as its own session already, and its pane would list it
+/// twice.
+fn shown_panes(c: &Core) -> Vec<(PaneId, Option<Arc<Session>>, Option<Resumable>)> {
+    let doc = &c.bench.document;
+    doc.terminals()
+        .into_iter()
+        .map(|(pane, _, session)| {
+            let live = session
+                .and_then(|id| c.sessions.get(&id))
+                .filter(|s| s.is_live() && s.agent == AgentKind::Shell)
+                .map(Arc::clone);
+            // benchd writes the record from a hook, whose harness is always one it knows, so a
+            // command `Harness` cannot parse is not reachable.
+            let resumable = match doc.pane(pane).map(|p| &p.surface) {
+                Some(Surface::Terminal {
+                    agent: Some(agent), ..
+                }) => Harness::parse(&agent.command).map(|harness| Resumable {
+                    harness,
+                    session: agent.session.clone(),
+                    cwd: agent.cwd.clone(),
+                }),
+                _ => None,
+            };
+            (pane, live, resumable)
+        })
+        .collect()
 }
 
 /// Every live session benchd sees waiting on the operator, by id and by the pane showing it.
@@ -287,20 +323,6 @@ fn report(core: &mut Core, u: &Unreadable) -> Result<(), String> {
     Ok(())
 }
 
-/// helm's bench directory: `HELM_BENCH_DIR` when set (helm's own override), else
-/// `~/.helm/bench`, or `~/.helm/bench-<suite>` for a benchd on a suite, which is where the helm
-/// on the same suite writes its snapshot. Without the suite an isolated benchd read the
-/// operator's own helm's snapshot.
-fn helm_bench_dir(home: &Path, suite: Option<&str>, explicit: Option<String>) -> PathBuf {
-    if let Some(dir) = explicit {
-        return PathBuf::from(dir);
-    }
-    match suite {
-        Some(suite) => home.join(format!(".helm/bench-{suite}")),
-        None => home.join(".helm/bench"),
-    }
-}
-
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -432,27 +454,4 @@ fn quarantine(path: &Path, why: &str) -> (&'static str, Value) {
             "why": why,
         }),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_benchd_on_a_suite_reads_the_snapshot_of_the_helm_on_that_suite() {
-        let home = Path::new("/Users/op");
-        assert_eq!(
-            helm_bench_dir(home, Some("m5b"), None),
-            PathBuf::from("/Users/op/.helm/bench-m5b"),
-            "never the operator's own helm's"
-        );
-        assert_eq!(
-            helm_bench_dir(home, None, None),
-            PathBuf::from("/Users/op/.helm/bench")
-        );
-        assert_eq!(
-            helm_bench_dir(home, Some("m5b"), Some("/tmp/x".into())),
-            PathBuf::from("/tmp/x")
-        );
-    }
 }

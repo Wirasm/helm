@@ -22,6 +22,12 @@
           "waiting_for": "permission prompt",
           "since_ms": 1790540771295,
           "source": "screen"
+        },
+        "report": {
+          "activity": {
+            "kind": "busy"
+          },
+          "since_ms": 1790540700120
         }
       },
       {

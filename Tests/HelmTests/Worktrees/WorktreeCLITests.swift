@@ -37,8 +37,9 @@ final class WorktreeCLITests: XCTestCase {
         ]
         environment.merge(extraEnvironment) { _, new in new }
         return WorktreeCLI(
-            environment: environment, gitExecutable: git.path, timeout: timeout,
-            homeDirectory: root.path)
+            host: LocalBenchHost(
+                environment: environment, gitExecutable: git.path, homeDirectory: root.path),
+            timeout: timeout)
     }
 
     /// The repository-wide reads are one call each whatever the number of worktrees, and the
@@ -162,6 +163,33 @@ final class WorktreeCLITests: XCTestCase {
         XCTAssertTrue(fields[1].hasSuffix("/workspace"), "run from the main checkout: \(fields[1])")
         XCTAssertEqual(fields.last, "/h/.archon-demo")
         XCTAssertEqual(said, "Blocked: archon/task-1")
+    }
+
+    /// Where a new worktree goes turns on `git check-ignore`: status 1 is "not ignored", so the
+    /// sibling folder; a failure that is not an answer (here 128) stops the create rather than
+    /// quietly choosing the sibling.
+    func testCheckIgnoreDecidesThePlaceOnlyWhenItAnswers() async throws {
+        let body: (Int) -> String = { status in
+            """
+            case "$*" in
+              *check-ignore*) exit \(status) ;;
+              *show-ref*|*symbolic-ref*) exit 1 ;;
+            esac
+            printf '%s\\n' "$*" >> "$CALLS"
+            """
+        }
+        let repository = GitCommonDir(workspace.path + "/.git")
+        try install(body(1), at: git)
+        let path = try await client().create(branch: "feat/a", in: repository, main: workspace.path)
+        XCTAssertFalse(path.contains("/.worktrees/"), path)
+
+        try install(body(128), at: git)
+        do {
+            _ = try await client().create(branch: "feat/b", in: repository, main: workspace.path)
+            XCTFail("a check-ignore that did not answer must not place the worktree")
+        } catch let error as WorktreeCLIError {
+            XCTAssertTrue(error.command.contains("check-ignore"), error.command)
+        }
     }
 
     func testGitFailureCarriesExitStatusBoundedStderrAndCommand() async throws {

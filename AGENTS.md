@@ -479,11 +479,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   preserve arrangement and terminal identity but cannot claim visibility or focus. Read on
   demand—do not watch the file inode across replacements.
   - **A terminal pane carries `agent`, which is how you find an agent that has stopped and is
-    never going to start again (#283).** `{status, waitingFor, statusUpdatedAt}`, straight out of
-    Claude Code's own registry row: `status` is `busy`/`shell`/`idle`/`waiting`, `waitingFor` is
-    its own words for what it is blocked on — `"permission prompt"`, `"input needed"`,
-    `"dialog open"` — and `statusUpdatedAt` is when **either of those two** last changed. A `-p`
-    print-mode session publishes none of them and so carries no `agent` at all.
+    never going to start again (#283).** `{status, waitingFor, statusUpdatedAt}`, the agent's own
+    report as benchd reads it on its machine (`report` in its `sessions` answer, M5c): Claude
+    Code's registry row for the process in the pane's session, else the agent's last hook. helm
+    reads no registry itself, so this holds when benchd runs on another machine. `status` is
+    `busy`/`shell`/`idle`/`waiting`, `waitingFor` is its own words for what it is blocked on —
+    `"permission prompt"`, `"input needed"`, `"dialog open"` — and `statusUpdatedAt` is when
+    **either of those two** last changed. A `-p` print-mode session publishes none of them and so
+    carries no `agent` at all.
   - **`waiting` alone is not a stall; `waitingFor` plus age is.** An agent that finished its turn
     is also `waiting`, and that is healthy. `waitingFor: "permission prompt"` on a pane **nobody
     is sitting at** is the failure — subtract `statusUpdatedAt` from now and judge. Six and a half
@@ -496,13 +499,13 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `updatedAt` and left `statusUpdatedAt` alone, and twelve minutes of a continuously working
     session moved it not at all. A prompt replaced by a *different* prompt does restart the age —
     which is what you want, since the question is *waiting for **this** since when*.
-  - **Claude Code's registry, plus benchd's `waiting` (M1, #357), and absence is absence.** pi
-    and codex publish no registry, so their panes carry an `agent` only while benchd sees them
-    waiting on the operator — their own hooks, or a prompt benchd read off their screen — and
-    none otherwise, never a false `idle`. benchd's wait also fills in a Claude pane whose registry
-    says anything but `waiting` (a trust prompt before the session registers, a row left `busy`
-    under a prompt). A `status` this build does not model is absent too, and `waitingFor` still
-    comes through. ⌘⇧J (`focus/waiting`) takes the operator to the pane waiting longest, and the
+  - **The agent's report, plus benchd's `waiting` (M1, #357), and absence is absence.** pi and
+    codex publish no registry, so their panes carry a report only when their hooks are wired
+    (`bench wiring`), and otherwise an `agent` only while benchd sees them waiting on the
+    operator (a prompt it read off their screen) — never a false `idle`. benchd's wait also fills
+    in a pane whose report says anything but `waiting` (a trust prompt before the session
+    registers, a row left `busy` under a prompt). A registry `status` benchd does not know is no
+    report at all. ⌘⇧J (`focus/waiting`) takes the operator to the pane waiting longest, and the
     status bar counts them.
   - **helm cannot answer this from the pty, which is why it asks the agent.** The ghostty
     wrapper surfaces parsed *actions* — title, bell, OSC 9;4 progress, OSC 133 command-finished,
@@ -751,16 +754,19 @@ above and are the easiest to be surprised by:
   launches from the keyboard. It is the successor of a rail tenant the operator cut back as *"too
   much bloat"*: read `ArchonModel`'s header before adding anything, since several obvious additions
   are things that were removed. Agents never use it; Archon's CLI is their view. The Worktrees
-  drawer lists every worktree on the machine, grouped by repository, read from git alone
-  (`WorktreeDiscovery` finds the repositories on disk; `HELM_WORKTREES_HOME` moves where it looks,
-  which is how an isolated instance lists scratch repositories): helm reads no Archon database,
-  and "merged" means Git reachability from a resolved remote default branch, never pull-request
-  state. There is no rail any more; both were its tenants. `CONTEXT.md` has both.
+  drawer lists every worktree on the machine, grouped by repository, read from git alone: helm
+  reads no Archon database, and "merged" means Git reachability from a resolved remote default
+  branch, never pull-request state. **"The machine" is benchd's (M5c)**: both drawers and each
+  tab's branch label run `git` and `archon` through benchd (`BenchHost`: `command/run`,
+  `path/exists`, and `git/repositories`, which searches benchd's `HOME`), on one machine too, so an
+  isolated instance lists whatever its own benchd's `HOME` holds. The git and Archon logic stays in
+  helm; only the process moved. There is no rail any more; both were its tenants. `CONTEXT.md` has
+  both.
 - **`Board/` is agent presence and the bench snapshot — it is not the drawable board.** The
   collision is real and worth knowing before a grep sends you to the wrong one. `Sources/Helm/Board/`
   is `BoardModel`, `AgentDot` and `BenchSnapshot`: which workspace tab has an agent that has
   stopped, plus the JSON report an agent reads the bench from. On the presence half helm holds
-  **no state of its own** — the registry file's lifecycle *is* the mark's lifecycle, so nothing
+  **no state of its own** — each pane's `report` from benchd (M5c) *is* the mark, so nothing
   acknowledges, decays or expires, which is what makes it safe to poll and republish rather than
   accumulate. The **drawable** board is
   `.claude/skills/helm-board/`, a kind of canvas an agent authors and the operator draws on; no
@@ -772,7 +778,7 @@ and an agent's verbs come straight to benchd through `bench`; either way it says
 a row's action is data, a `VerbTemplate` resolved against the bench when the key fires or a
 `LocalAction` that never reaches the document. The table in force is `Keymap.table`
 (`Sources/Helm/Keymap/`): the built-in `KeyBindings.all` overlaid by the operator's
-`<bench root>/rules/keymap.toml`, reread every second. helm reads that file and nothing writes
+`~/.helm/bench/keymap.toml` (helm's own directory, beside the snapshot), reread every second. helm reads that file and nothing writes
 it; a file that does not parse keeps the last good table and puts the line and reason on the
 status bar. `docs/keymap.default.toml` is the built-in table in that format, and
 `KeymapFileTests` fails until it is regenerated after a built-in key changes.

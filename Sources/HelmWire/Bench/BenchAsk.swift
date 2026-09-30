@@ -17,6 +17,13 @@ package struct BenchStatusRequest: Encodable, Equatable, Sendable {
 package struct BenchStatusReply: Decodable, Equatable, Sendable {
     /// The `bench` beside this benchd: what a pane runs to show one of its sessions.
     package var bench: String?
+    /// This benchd's build (`bench_wire::VERSION`), which `bench --version` prints too.
+    package var version: String?
+
+    package init(bench: String?, version: String?) {
+        self.bench = bench
+        self.version = version
+    }
 }
 
 /// The data of a `helm/asked` event: an ask benchd holds a caller waiting on.

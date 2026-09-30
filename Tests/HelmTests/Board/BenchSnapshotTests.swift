@@ -15,9 +15,17 @@ final class BenchSnapshotTests: XCTestCase {
             document: BenchDocument(
                 workspaces: [.init(path: workspace.path.value, bench: bench)],
                 active: workspace.path.value))
-        let workspaces = WorkspaceModel()
+        let workspaces = WorkspaceModel(readBranch: { _ in nil })
         rig.model.followDocuments { workspaces.follow($0) }
         return (workspaces, rig.model, rig.terminals)
+    }
+
+    /// Say what benchd answers in `sessions` for the one terminal pane `mounted` draws.
+    private func benchdReports(
+        _ report: BenchLiveSessions.Report?, in terminals: TerminalManager, at workspace: Workspace
+    ) throws {
+        let pane = try XCTUnwrap(terminals.sessions(for: workspace.path).first).id
+        terminals.foregrounds.set([pane: 4242], reports: report.map { [pane: $0] } ?? [:])
     }
 
     func testProjectionPreservesVisualOrderSelectionVisibilityAndFocus() throws {
@@ -159,7 +167,8 @@ final class BenchSnapshotTests: XCTestCase {
     /// **The whole of #283, as a projection rule.** A spool-spawned `claude` stalled six and a
     /// half hours on a permission prompt its unattended posture could not remove — Claude Code
     /// marks that guardrail bypass-immune — and nothing outside the process could see it, because
-    /// helm read the registry every publish and kept only `sessionId` out of it.
+    /// helm read the registry every publish and kept only `sessionId` out of it. The row now
+    /// reaches helm as benchd's `report` for the pane's session (M5c).
     ///
     /// `waitingFor` is the field that makes it actionable: `waiting` alone is also what a healthy
     /// agent looks like when it has finished its turn.
@@ -168,15 +177,11 @@ final class BenchSnapshotTests: XCTestCase {
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
         let since = Date(timeIntervalSince1970: 1_786_362_950.614)
 
+        try benchdReports(
+            .init(activity: "waiting", waitingFor: "permission prompt", since: since),
+            in: terminals, at: workspace)
         let value = BenchSnapshot.project(
-            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            foregroundPid: { _ in 4242 },
-            agents: [
-                4242: AgentSession(
-                    pid: 4242, cwd: workspace.path.value, status: .waiting,
-                    waitingFor: "permission prompt",
-                    statusUpdatedAt: since)
-            ])
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals)
         let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
 
         XCTAssertEqual(terminal.agent?.status, "waiting")
@@ -196,30 +201,28 @@ final class BenchSnapshotTests: XCTestCase {
         let workspace = Workspace(path: "/tmp/bench-snapshot-busy")
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
 
+        try benchdReports(.init(activity: "busy"), in: terminals, at: workspace)
         let value = BenchSnapshot.project(
-            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            foregroundPid: { _ in 4242 },
-            agents: [4242: AgentSession(pid: 4242, cwd: workspace.path.value, status: .busy)])
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals)
         let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
 
         XCTAssertEqual(terminal.agent?.status, "busy")
         XCTAssertNil(terminal.agent?.waitingFor)
     }
 
-    /// pi and codex publish no registry at all, and a pane can be a bare login shell. Absence,
-    /// never an invented `idle` — `AgentRegistry`'s standing rule, kept at this seam too.
-    func testAPaneWhoseProcessTheRegistryDoesNotKnowReportsNoAgent() throws {
+    /// A pane can be a bare login shell, or hold an agent that reports nothing. Absence, never an
+    /// invented `idle`.
+    func testAPaneBenchdHasNoReportForReportsNoAgent() throws {
         let workspace = Workspace(path: "/tmp/bench-snapshot-no-agent")
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
 
+        try benchdReports(nil, in: terminals, at: workspace)
         let value = BenchSnapshot.project(
-            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals,
-            foregroundPid: { _ in 4242 },
-            agents: [999: AgentSession(pid: 999, cwd: "/elsewhere", status: .busy)])
+            writtenAt: .now, workspaces: workspaces, workbench: workbench, terminals: terminals)
         let terminal = try XCTUnwrap(value.workspaces[0].columns[0].slots[0].panes[0].terminal)
 
-        XCTAssertNil(
-            terminal.agent, "another pid's row says nothing about this pane")
+        XCTAssertEqual(terminal.foregroundPid, 4242)
+        XCTAssertNil(terminal.agent, "nothing reported for this pane")
     }
 
     /// A pane helm cannot show its session in (no `bench` to attach with) reads as failed, with
@@ -232,23 +235,23 @@ final class BenchSnapshotTests: XCTestCase {
             controller: manager.controller, unattachable: reason)
 
         let record = BenchSnapshot.TerminalRecord(
-            id: session.id, session: session, foregroundPid: { _ in nil }, agents: [:])
+            id: session.id, session: session, foregroundPid: { _ in nil })
 
         XCTAssertEqual(record.status, "failed")
         XCTAssertEqual(record.failure, reason)
     }
 
-    /// A row this build cannot read the status of still carries the two fields that name a
-    /// stall, rather than costing the pane its whole record.
-    func testARowWithNothingToSayProducesNoRecordAndOneWithOnlyAReasonStillDoes() throws {
+    /// A report whose activity is not one of the four names still carries the two fields that
+    /// name a stall, rather than costing the pane its whole record.
+    func testAReportWithNothingToSayProducesNoRecordAndOneWithOnlyAReasonStillDoes() throws {
         XCTAssertNil(
-            BenchSnapshot.AgentRecord(AgentSession(pid: 1, cwd: nil, status: nil)),
+            BenchSnapshot.AgentRecord(.init(activity: "blocked")),
             "an empty record is worse than no record — it reads as an answer")
 
         let unknown = BenchSnapshot.AgentRecord(
-            AgentSession(
-                pid: 1, cwd: nil, status: nil, waitingFor: "permission prompt",
-                statusUpdatedAt: Date(timeIntervalSince1970: 10)))
+            .init(
+                activity: "pondering", waitingFor: "permission prompt",
+                since: Date(timeIntervalSince1970: 10)))
 
         XCTAssertNil(unknown?.status, "helm does not model it, so helm does not name it")
         XCTAssertEqual(
@@ -257,10 +260,10 @@ final class BenchSnapshotTests: XCTestCase {
                 + "this build has never heard of")
     }
 
-    /// benchd's `waiting` (M1, #357) fills in a record the registry cannot give — a codex or
-    /// pi at a prompt has no registry row at all, and #283's row said `busy` under a prompt —
-    /// and never replaces a registry that already says `waiting` in Claude Code's own words.
-    func testBenchdsWaitFillsTheRecordTheRegistryCannotGive() {
+    /// benchd's `waiting` (M1, #357) fills in a record the report cannot give — an agent with no
+    /// hooks wired at a prompt reports nothing at all, and #283's row said `busy` under a prompt —
+    /// and never replaces a report that already says `waiting` in the agent's own words.
+    func testBenchdsWaitFillsTheRecordTheReportCannotGive() {
         let since = Date(timeIntervalSince1970: 1_790_000_000)
         let screen = BenchLiveSessions.Waiting(
             waitingFor: "trust prompt", since: since, source: "screen")
@@ -272,18 +275,18 @@ final class BenchSnapshotTests: XCTestCase {
         let fromBenchd = BenchSnapshot.AgentRecord(
             status: "waiting", waitingFor: "trust prompt", statusUpdatedAt: since)
 
-        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: nil, waiting: screen), fromBenchd)
-        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: busy, waiting: screen), fromBenchd)
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(report: nil, waiting: screen), fromBenchd)
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(report: busy, waiting: screen), fromBenchd)
         XCTAssertEqual(
-            BenchSnapshot.AgentRecord.of(registry: claudeWaiting, waiting: screen), claudeWaiting)
-        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: busy, waiting: nil), busy)
+            BenchSnapshot.AgentRecord.of(report: claudeWaiting, waiting: screen), claudeWaiting)
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(report: busy, waiting: nil), busy)
         let bare = BenchSnapshot.AgentRecord(
             status: "waiting", waitingFor: nil, statusUpdatedAt: Date(timeIntervalSince1970: 9))
         XCTAssertEqual(
-            BenchSnapshot.AgentRecord.of(registry: bare, waiting: screen), fromBenchd,
+            BenchSnapshot.AgentRecord.of(report: bare, waiting: screen), fromBenchd,
             "a bare waiting names no wait; benchd's does")
-        XCTAssertEqual(BenchSnapshot.AgentRecord.of(registry: bare, waiting: nil), bare)
-        XCTAssertNil(BenchSnapshot.AgentRecord.of(registry: nil, waiting: nil))
+        XCTAssertEqual(BenchSnapshot.AgentRecord.of(report: bare, waiting: nil), bare)
+        XCTAssertNil(BenchSnapshot.AgentRecord.of(report: nil, waiting: nil))
     }
 
     /// The wire obligation `testWorkspaceRecordPathEncodesAsABareStringUnchangedByWorkspacePath`
@@ -295,16 +298,14 @@ final class BenchSnapshotTests: XCTestCase {
         let workspace = Workspace(path: "/tmp/bench-snapshot-json-agent")
         let (workspaces, workbench, terminals) = try mounted(workspace: workspace)
 
+        try benchdReports(
+            .init(
+                activity: "waiting", waitingFor: "permission prompt",
+                since: Date(timeIntervalSince1970: 1_700_000_000)),
+            in: terminals, at: workspace)
         let snapshot = BenchSnapshot.project(
             writtenAt: Date(timeIntervalSince1970: 1_700_000_000),
-            workspaces: workspaces, workbench: workbench, terminals: terminals,
-            foregroundPid: { _ in 4242 },
-            agents: [
-                4242: AgentSession(
-                    pid: 4242, cwd: workspace.path.value, status: .waiting,
-                    waitingFor: "permission prompt",
-                    statusUpdatedAt: Date(timeIntervalSince1970: 1_700_000_000))
-            ])
+            workspaces: workspaces, workbench: workbench, terminals: terminals)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
