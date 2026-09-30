@@ -24,11 +24,22 @@ final class HelmAsks {
     }
 
     /// The live wiring: answers through `client`, off the main actor so a slow benchd never
-    /// stalls a frame.
+    /// stalls a frame. An answer that does not arrive leaves the agent told only that no helm
+    /// answered, so helm logs why: a capture is several MB, and over a slow link to a remote
+    /// benchd its upload can fail or outlast the ask (M5c).
     static func answering(through client: BenchClient, capturer: any WindowCapturing) -> HelmAsks {
         HelmAsks(capturer: capturer) { answer in
             DispatchQueue.global(qos: .userInitiated).async {
-                _ = try? client.request(answer, answering: EmptyReply.self)
+                do {
+                    let reply = try client.request(answer, answering: EmptyReply.self)
+                    if reply.status != .ok {
+                        NSLog(
+                            "helm: benchd did not take the answer to ask %@: %@", answer.ask,
+                            reply.reason ?? "\(reply.status)")
+                    }
+                } catch {
+                    NSLog("helm: could not answer ask %@: %@", answer.ask, "\(error)")
+                }
             }
         }
     }

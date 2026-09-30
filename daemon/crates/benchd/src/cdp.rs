@@ -184,7 +184,7 @@ fn read_message(
 
 /// Carry messages between the pane (`viewer`, past its response line) and the browser until
 /// either side ends, and say which did.
-pub fn relay(viewer: &UnixStream, browser: TcpStream) -> String {
+pub fn relay(viewer: &UnixStream, mut input: BufReader<UnixStream>, browser: TcpStream) -> String {
     let _ = viewer.set_read_timeout(None);
     let (Ok(to_viewer), Ok(from_browser), Ok(browser_writer)) =
         (viewer.try_clone(), browser.try_clone(), browser.try_clone())
@@ -225,7 +225,6 @@ pub fn relay(viewer: &UnixStream, browser: TcpStream) -> String {
         let _ = pongs.lock().unwrap().shutdown(Shutdown::Both);
     });
 
-    let mut input = BufReader::new(viewer);
     let mut line = Vec::new();
     let up = loop {
         line.clear();

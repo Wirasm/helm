@@ -1,7 +1,6 @@
 //! `daemon/fixtures/bench-document.json` is the one sample of the document both gates read:
 //! this suite pins that the Rust types read it and write it back **byte for byte**, and
-//! helm's Swift decoder (M4 PR 3) decodes the same file — the #352/#353 pattern
-//! (`browser-endpoint.json`), so neither gate needs the other's toolchain and a renamed field
+//! helm's Swift decoder (M4 PR 3) decodes the same file — the #352/#353 pattern, so neither gate needs the other's toolchain and a renamed field
 //! fails the gate that renamed it.
 //!
 //! The fixture is meant to be hand-read, so it holds one of everything: three workspaces,

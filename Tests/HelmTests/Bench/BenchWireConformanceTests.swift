@@ -6,8 +6,8 @@ import XCTest
 
 /// helm's copy of benchd's wire types against the daemon's own samples in `daemon/fixtures/`.
 /// The daemon gate pins those same files byte for byte against the Rust types, so a field renamed
-/// on either side turns one gate or the other red. This is the #352/#353 pattern
-/// (`browser-endpoint.json`): neither gate needs the other's toolchain.
+/// on either side turns one gate or the other red. This is the #352/#353 pattern: neither gate
+/// needs the other's toolchain.
 ///
 /// **Compared as values, never as bytes.** Swift writes UUIDs in uppercase and Rust in lowercase,
 /// and key order differs by encoder; neither is a difference the daemon sees.

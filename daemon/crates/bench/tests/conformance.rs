@@ -1619,9 +1619,8 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     on_disk["mode"] = serde_json::json!("headless");
     assert_eq!(on_disk, answer);
 
-    // helm reads this file from Swift and cannot import the Rust type, so both sides test
-    // against one checked-in sample: the keys written here are exactly the fixture's, and
-    // helm's BrowserEndpointTests decodes the same file.
+    // Agents and `playwright-cli` read this file outside the workspace, so its keys are pinned to
+    // one checked-in sample. helm no longer reads it (M5c: its pane asks `browser/connect`).
     let fixture: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-endpoint.json"),
@@ -8807,15 +8806,21 @@ fn browser_over_tcp(name: &str, debugger: u16) -> (TestHome, u16, DaemonGuard) {
     (home, port, daemon)
 }
 
-/// `browser/connect` over TCP, as helm's pane sends it: the answer line, and the connection.
-fn browser_connect(port: u16) -> (serde_json::Value, BufReader<std::net::TcpStream>) {
+/// `browser/connect` over TCP, as helm's pane sends it, with `pipelined` written in the same
+/// write right behind it: the answer line, and the connection.
+fn browser_connect(
+    port: u16,
+    pipelined: &[u8],
+) -> (serde_json::Value, BufReader<std::net::TcpStream>) {
     let stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect over TCP");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
-    (&stream)
-        .write_all(b"{\"id\":\"helm-browser-1\",\"verb\":\"browser/connect\",\"by\":{\"kind\":\"helm\"}}\n")
-        .unwrap();
+    let mut request =
+        b"{\"id\":\"helm-browser-1\",\"verb\":\"browser/connect\",\"by\":{\"kind\":\"helm\"}}\n"
+            .to_vec();
+    request.extend_from_slice(pipelined);
+    (&stream).write_all(&request).unwrap();
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
@@ -8852,13 +8857,12 @@ fn browser_connect_relays_one_cdp_message_per_line_each_way_over_tcp() {
     });
     let (home, port, _daemon) = browser_over_tcp("m5c-cdp", debugger);
 
-    let (answer, mut relay) = browser_connect(port);
+    // The first message rides in the same write as the request: it is relayed, not lost in the
+    // buffer that read the request line.
+    let (answer, mut relay) =
+        browser_connect(port, b"{\"id\":1,\"method\":\"Target.getTargets\"}\n");
     assert_eq!(answer["status"], "ok", "{answer}");
     assert!(answer["data"]["pid"].as_u64().is_some(), "{answer}");
-    relay
-        .get_mut()
-        .write_all(b"{\"id\":1,\"method\":\"Target.getTargets\"}\n")
-        .unwrap();
     let mut line = String::new();
     relay.read_line(&mut line).unwrap();
     assert_eq!(line, "{\"id\":1, \"result\":{}}\n", "one message, one line");
@@ -8908,7 +8912,7 @@ fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
         frames
     });
     let (home, port, _daemon) = browser_over_tcp("m5c-cdp-left", debugger);
-    let (answer, relay) = browser_connect(port);
+    let (answer, relay) = browser_connect(port, b"");
     assert_eq!(answer["status"], "ok", "{answer}");
     drop(relay);
     let (_, frames) = server.join().unwrap();
@@ -8925,7 +8929,7 @@ fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
 
     // With the browser stopped there is nothing to connect to, and the refusal says what to do.
     assert_eq!(bench(&home.dir, &["browser", "stop"]).code, 0);
-    let (answer, _) = browser_connect(port);
+    let (answer, _) = browser_connect(port, b"");
     assert_eq!(answer["status"], "refused", "{answer}");
     assert!(
         answer["reason"]

@@ -98,7 +98,7 @@ pub fn ask(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
             reply(
                 Status::Error,
                 Some(format!(
-                    "no helm answered within {}s — is a helm running against this bench (the same BENCH_SUITE or HELM_DEFAULTS_SUITE)?",
+                    "no helm answered within {}s — is a helm running against this bench (the same BENCH_SUITE or HELM_DEFAULTS_SUITE)? A helm on another machine sending a large capture over a slow link can also miss this window; its log says so",
                     HELM_ASK_WAIT.as_secs()
                 )),
                 None,

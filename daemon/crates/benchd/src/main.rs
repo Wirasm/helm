@@ -931,7 +931,11 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         }
         AfterResponse::Browser { socket, pid } => {
             respond_keep_open(&stream, &response);
-            let why = cdp::relay(&stream, socket);
+            // The reader that read the request line goes on, so a line the client sent right
+            // behind it is relayed rather than lost. Writes to the viewer stay bounded by
+            // DAEMON_IO_TIMEOUT, as a follower's are: a pane that stops reading for that long ends
+            // the relay and connects again, instead of holding the browser's messages.
+            let why = cdp::relay(&stream, reader, socket);
             let _ = core
                 .lock()
                 .unwrap()
