@@ -160,14 +160,16 @@ final class BenchClient: ObservableObject {
 
     private var benchBinaryCache: String?
 
-    /// One verb, one answer. Blocking, and bounded by `requestTimeout`.
+    /// One verb, one answer. Blocking, and bounded by `timeout`: `requestTimeout` unless the verb
+    /// is known to take longer (`prp/note` runs git on benchd's side).
     nonisolated func request<Payload: Decodable & Sendable>(
-        _ request: some Encodable, answering _: Payload.Type = Payload.self
+        _ request: some Encodable, answering _: Payload.Type = Payload.self,
+        timeout: TimeInterval = requestTimeout
     ) throws -> BenchResponse<Payload> {
         guard let endpoint else {
             throw BenchSocket.Failure(description: refused ?? "no benchd to ask")
         }
-        return try Self.request(request, at: endpoint)
+        return try Self.request(request, at: endpoint, timeout: timeout)
     }
 
     /// One verb, one answer, at an endpoint: for a caller that holds no client (the mail
@@ -175,9 +177,9 @@ final class BenchClient: ObservableObject {
     /// calls it on the main actor as `WorkbenchModel.send` does.
     nonisolated static func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, at endpoint: BenchEndpoint,
-        answering _: Payload.Type = Payload.self
+        answering _: Payload.Type = Payload.self, timeout: TimeInterval = requestTimeout
     ) throws -> BenchResponse<Payload> {
-        let socket = try BenchSocket(endpoint: endpoint, timeout: requestTimeout)
+        let socket = try BenchSocket(endpoint: endpoint, timeout: timeout)
         defer { socket.close() }
         try socket.writeLine(JSONEncoder().encode(request))
         guard let line = try socket.readLine() else {

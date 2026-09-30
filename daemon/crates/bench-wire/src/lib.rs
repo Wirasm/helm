@@ -36,6 +36,13 @@ pub use files::{
     is_notes_sidecar, live_file, notes_sidecar, unbase64,
 };
 
+mod prp;
+pub use prp::{
+    NOTES_DIRECTORY, PathKind, PathResolveArgs, PathResolved, PrpArtifact, PrpArtifacts,
+    PrpArtifactsArgs, PrpNote, PrpNoteArgs, PrpStore, PrpStores, PrpStoresArgs, RENDERABLE,
+    is_renderable,
+};
+
 mod just;
 pub use just::{
     JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted, is_recipe_name,
@@ -185,6 +192,11 @@ pub const KNOWN_VERBS: &[&str] = &[
     "file/read",
     "file/write",
     "file/append",
+    // M5c: prp's stores and the paths the operator types, answered on benchd's machine.
+    "prp/note",
+    "prp/stores",
+    "prp/artifacts",
+    "path/resolve",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -254,6 +266,14 @@ pub enum Verb {
     FileWrite,
     /// A note appended to a canvas's sidecar (`FileAppendArgs`).
     FileAppend,
+    /// An operator note started in a workspace's prp store (`PrpNoteArgs`).
+    PrpNote,
+    /// The prp stores, and a workspace's (`PrpStoresArgs`).
+    PrpStores,
+    /// One store's renderable files (`PrpArtifactsArgs`).
+    PrpArtifacts,
+    /// A typed path, resolved on benchd's machine (`PathResolveArgs`).
+    PathResolve,
 }
 
 impl Verb {
@@ -289,6 +309,10 @@ impl Verb {
             "file/read" => Some(Verb::FileRead),
             "file/write" => Some(Verb::FileWrite),
             "file/append" => Some(Verb::FileAppend),
+            "prp/note" => Some(Verb::PrpNote),
+            "prp/stores" => Some(Verb::PrpStores),
+            "prp/artifacts" => Some(Verb::PrpArtifacts),
+            "path/resolve" => Some(Verb::PathResolve),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -1157,7 +1181,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            44,
+            48,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

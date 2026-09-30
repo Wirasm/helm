@@ -249,11 +249,6 @@ fn open(p: &Parsed, workspace: Option<bench_doc::StandardPath>) -> Result<Layout
     Ok(LayoutVerb::PaneOpen(PaneOpen { into, surface }))
 }
 
-/// The extensions helm renders as a canvas: helm's `RenderableFile.isRenderable`, spelled again
-/// because the CLI refuses before anything reaches helm. A test reads the Swift literal and
-/// compares.
-const RENDERABLE: &[&str] = &["md", "markdown", "mdown", "html", "htm"];
-
 fn renderable_file(raw: &str) -> Result<Surface, String> {
     let path = std::env::current_dir()
         .unwrap_or_default()
@@ -263,15 +258,11 @@ fn renderable_file(raw: &str) -> Result<Surface, String> {
     if !path.is_file() {
         return Err(format!("no file at {}", path.display()));
     }
-    let renderable = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| RENDERABLE.contains(&e.to_ascii_lowercase().as_str()));
-    if !renderable {
+    if !bench_wire::is_renderable(&path.to_string_lossy()) {
         return Err(format!(
             "{} is not a file helm renders — a canvas is one of: {}",
             path.display(),
-            RENDERABLE.join(", ")
+            bench_wire::RENDERABLE.join(", ")
         ));
     }
     Surface::file(&path.display().to_string())
@@ -549,7 +540,10 @@ mod tests {
             })
             .collect();
         helms.sort();
-        let mut ours: Vec<String> = RENDERABLE.iter().map(|e| e.to_string()).collect();
+        let mut ours: Vec<String> = bench_wire::RENDERABLE
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
         ours.sort();
         assert_eq!(ours, helms);
     }

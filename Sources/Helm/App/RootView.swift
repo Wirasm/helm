@@ -72,6 +72,14 @@ struct RootView: View {
                 .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }
             StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
+        // ⇧⌘O: a folder on benchd's machine, checked there (M5c).
+        .sheet(isPresented: $workbench.isWorkspacePickerOpen, onDismiss: returnKeyboard) {
+            WorkspacePicker(prp: PrpStores(client: workbench.client)) { path in
+                workbench.send(.workspaceOpen(path: path), by: .operatorGesture)
+            } dismiss: {
+                workbench.isWorkspacePickerOpen = false
+            }
+        }
         // The base plane, and it has to be painted: `translucentWindow` makes the window
         // non-opaque so the chrome's vibrancy has a desktop to sample, and anything that
         // paints nothing after that is a hole rather than a neutral grey. The terminal and

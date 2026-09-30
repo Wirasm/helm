@@ -121,7 +121,8 @@ spec:
                 pane/open pane/split pane/close pane/show \
                 pane/move pane/name focus/slot focus/step focus/waiting \
                 layout/resize drawer/toggle just/run just/list restore screen/get screen/send \
-                file/read file/write file/append; do
+                file/read file/write file/append \
+                prp/note prp/stores prp/artifacts path/resolve; do
         v=${verb%:probe}
         if [ "$verb" = "stop:probe" ]; then
             # probed last for real; listed here so the row exists

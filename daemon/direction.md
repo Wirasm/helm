@@ -181,6 +181,18 @@ writer names (`unchanged`) and answers `changed` with what is there instead of w
 `file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
 browser and the drawers still reach around the socket; they are the next slices.
 
+**And prp's stores and the paths the operator types (M5c).** `~/.prp` lives on the agents'
+machine, so helm asks benchd about it (`bench_wire::prp`, pinned by `fixtures/prp-verbs.json`).
+`prp/note` starts ⌘⇧N's note: benchd runs prp's canonical store resolver in the workspace
+(`benchd/src/prp.rs`, a port of the block every prp skill carries, pinned against the block by a
+conformance test), registers a store nothing has touched with prp's exact `project.json` bytes,
+and creates `notes/<day>-note[-n].md` without overwriting. A git that does not answer within 8 s
+is a refusal, never a fallback to the folder. `prp/stores` and `prp/artifacts` are the artifact
+browser's listing, and the workspace's store is the resolver's answer, so a worktree finds its
+main checkout's. `path/resolve` turns what the operator typed into benchd's absolute path, `~`
+expanded against benchd's `HOME`, and says whether a file or a folder is there: ⇧⌘O and the
+browser's path field use it where helm used Finder's panel.
+
 **And a canvas's live file (helm #532).** An HTML canvas has one JSON file beside it,
 `<stem>.data.json` (`bench_wire::live_file`), that the page and an agent both edit, and every
 write to it names the bytes its writer saw: `file/write` has no blind kind any more, so `unchanged`
