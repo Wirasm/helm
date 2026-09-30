@@ -97,13 +97,16 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// through it any more, which is what let `selectedID` be deleted outright.
     weak var manager: TerminalManager?
 
-    /// What has this pane's terminal in benchd: its shell, or the job the shell runs. The pid an
-    /// agent registry row is joined on. Not `hostView.foregroundPid`: that is the pty helm's own
-    /// surface holds, and it runs `bench attach` (M5b).
+    /// What has this pane's terminal in benchd: its shell, or the job the shell runs. Not
+    /// `hostView.foregroundPid`: that is the pty helm's own surface holds, and it runs `bench
+    /// attach` (M5b).
     var foregroundPid: pid_t? { manager?.foregrounds.pid(ofPane: id) }
 
     /// The agent in this pane is waiting on the operator, as benchd sees it (M1, #357).
     var waiting: BenchLiveSessions.Waiting? { manager?.foregrounds.waiting[id] }
+
+    /// What the agent in this pane says it is doing, read by benchd (M5c).
+    var report: BenchLiveSessions.Report? { manager?.foregrounds.report(ofPane: id) }
 
     /// What the pane holding this session is called (#313), pushed in by `WorkbenchModel` on
     /// every bench change exactly as `isVisible` is — the bench owns it and persists it, and a
@@ -164,8 +167,10 @@ final class TerminalSession: ObservableObject, Identifiable {
         // The env carries this pane's own id (#94). It is set here, before the surface is
         // created on first attach, so the uuid is baked into the child at spawn and survives
         // everything that does not respawn it — a move between containers included.
+        // A pane that runs a command (`bench attach`) gets no working directory: its session's
+        // shell is benchd's, in a directory that may exist only on benchd's machine (M5c).
         view.configuration = TerminalSurfaceOptions(
-            workingDirectory: workspacePath.value,
+            workingDirectory: command == nil ? workspacePath.value : nil,
             envVars: PaneEnvironment.forPane(id),
             command: command
         )

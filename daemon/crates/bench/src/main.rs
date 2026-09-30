@@ -35,6 +35,11 @@ fn main() {
     // so it never reaches the verb parser, whose refusals exit 3.
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let code = match raw.first().map(String::as_str) {
+        // What helm compares with benchd's `status.version` before a pane runs this `bench`.
+        Some("--version") => {
+            println!("{}", bench_wire::VERSION);
+            0
+        }
         Some("hook") => hook(raw.get(1).map(String::as_str)),
         Some("wiring") => wiring(raw.get(1).map(String::as_str)),
         _ if files::owns(&raw) => files::run(&raw),
@@ -45,7 +50,7 @@ fn main() {
 }
 
 fn usage() -> &'static str {
-    "usage: bench [--suite <name>] <verb> [args]\n\
+    "usage: bench [--suite <name>] <verb> [args]  (bench --version: this build)\n\
      verbs: status                              daemon identity, root, uptime, counts\n\
      \x20     events [--since N]                  read the record back from seq N\n\
      \x20     events --follow                     the bench document, then one line per event as it\n\

@@ -8,11 +8,7 @@ import SwiftUI
 final class BenchSnapshotModel: ObservableObject {
     typealias Writer = (BenchSnapshot) -> Bool
 
-    private let directory: BenchSnapshotDirectory
-    /// Claude Code's session registry: what the agent in a pane says it is doing (#283).
-    /// Injectable because a test that reads the operator's live `~/.claude/sessions` measures
-    /// the machine, not the rule.
-    private let registryRoot: URL
+    private let directory: HelmBenchDirectory
     private let now: () -> Date
     private let writer: Writer
     private let foregroundPid: (TerminalSession) -> pid_t?
@@ -29,15 +25,13 @@ final class BenchSnapshotModel: ObservableObject {
     private weak var terminals: TerminalManager?
 
     init(
-        directory: BenchSnapshotDirectory = .resolve(),
-        registryRoot: URL = AgentRegistry.defaultRoot,
+        directory: HelmBenchDirectory = .resolve(),
         refreshInterval: Duration = .seconds(2),
         now: @escaping () -> Date = Date.init,
         foregroundPid: @escaping (TerminalSession) -> pid_t? = { $0.foregroundPid },
         writer: Writer? = nil
     ) {
         self.directory = directory
-        self.registryRoot = registryRoot
         self.refreshInterval = refreshInterval
         self.now = now
         self.foregroundPid = foregroundPid
@@ -120,14 +114,12 @@ final class BenchSnapshotModel: ObservableObject {
 
     private func publish() {
         guard isStarted, let workspaces, let workbench, let terminals else { return }
-        let registry = AgentRegistry.rows(in: registryRoot)
         let snapshot = BenchSnapshot.project(
             writtenAt: now(),
             workspaces: workspaces,
             workbench: workbench,
             terminals: terminals,
-            foregroundPid: foregroundPid,
-            agents: registry)
+            foregroundPid: foregroundPid)
 
         // **An identical snapshot is not written, so `writtenAt` means what every reader assumes
         // it means.** The file is rebuilt on a timer as well as on change — deliberately, see the

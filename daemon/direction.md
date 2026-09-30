@@ -68,7 +68,7 @@ the next open with no restart and no watcher. A strategy can send a pane to a dr
 last good table stays in force, `rules/rejected` names the file and why (with the line, for a
 parse error) once per version, and `bench status` reports `rejected` until a good version
 replaces it. Only a file that is gone means the built-in table. benchd never writes a rules
-file. `rules/keymap.toml` beside it is helm's alone: benchd never reads a key.
+file. benchd never reads a key: helm's keymap is helm's own file (`~/.helm/bench/keymap.toml`).
 
 **The just layer is two verbs: `just/run` (#356) runs a recipe, `just/list` (#500) names them.** A recipe from `<root>/rules/justfile` is a
 composition of `bench` verbs, and benchd runs it rather than helm, so it is logged and dies with
@@ -86,8 +86,9 @@ since the palette asks every time it opens, and nothing is logged. A `just` that
 an error, as for `just/run`; a justfile it cannot parse is refused.
 
 **And the session list (#384), daemon side.** `bench sessions --all` answers, per workspace,
-every agent session helm or benchd hosts: agents in helm panes (matched by pid through helm's
-snapshot, or by the pane their own hooks report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
+every agent session helm or benchd hosts: agents in helm panes (matched by pid: the foreground
+process of the session each terminal pane in the document shows, or by the pane their own hooks
+report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
 sessions — the last only from `sessions/hosted.json`, benchd's record of what it and helm
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
 finished row. helm's drawer is the next step.
@@ -180,6 +181,17 @@ writer names (`unchanged`) and answers `changed` with what is there instead of w
 `.notes.md` sidecar is never written whole. Their text is never logged, so `file/write` and
 `file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
 browser and the drawers still reach around the socket; they are the next slices.
+
+**Nothing crosses the link by file (M5c, third slice).** benchd no longer reads helm's
+`snapshot.json`: the session list places a pane's agent by the foreground process of the session
+the pane shows and the agent recorded on the pane, both benchd's own. The other way, `sessions`
+carries `report` for each session, what its agent says it is doing (`bench_wire::AgentReport`):
+Claude Code's registry row for the foreground process, read from benchd's HOME, else the agent's
+last hook. helm's presence dots and its snapshot's `agent` read that, and helm reads no registry.
+`bench open <file>` makes the path absolute and checks the extension on the caller's side;
+whether the file exists benchd checks on its own disk, since the caller may be on another
+machine. `bench --version` prints the version `status.version` answers, and helm compares the two
+before a pane runs helm's own `bench` against a benchd over TCP.
 
 **And a canvas's live file (helm #532).** An HTML canvas has one JSON file beside it,
 `<stem>.data.json` (`bench_wire::live_file`), that the page and an agent both edit, and every

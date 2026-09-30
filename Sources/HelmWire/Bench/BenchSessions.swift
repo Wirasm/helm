@@ -179,9 +179,9 @@ extension BenchSessionRow.Open: Decodable {
     }
 }
 
-/// `sessions`: every session benchd runs (M5b). helm asks for the pane each one is shown in and
-/// what has its terminal, which is how it finds the agent in a pane: the operator's shells run in
-/// benchd now, so a pane's own pty holds `bench attach`, not the agent. The answer is pinned by
+/// `sessions`: every session benchd runs (M5b). helm asks for the pane each one is shown in, what
+/// has its terminal, and what the agent there reports: the operator's shells run in benchd now,
+/// so a pane's own pty holds `bench attach`, not the agent. The answer is pinned by
 /// `daemon/fixtures/session-list.json`, which the daemon gate holds to `bench_wire::LiveSessions`.
 package struct BenchLiveSessionsRequest: Encodable, Equatable, Sendable {
     package var id: String
@@ -203,19 +203,62 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
         package var foregroundPid: Int32?
         /// The agent in it is waiting on the operator (M1, #357); nil when it is not.
         package var waiting: Waiting?
+        /// What the agent in it says it is doing (M5c); nil when nothing there reports.
+        package var report: Report?
 
         private enum CodingKeys: String, CodingKey {
-            case session, pane, waiting
+            case session, pane, waiting, report
             case foregroundPid = "foreground_pid"
         }
 
         package init(
-            session: String, pane: UUID?, foregroundPid: Int32?, waiting: Waiting? = nil
+            session: String, pane: UUID?, foregroundPid: Int32?, waiting: Waiting? = nil,
+            report: Report? = nil
         ) {
             self.session = session
             self.pane = pane
             self.foregroundPid = foregroundPid
             self.waiting = waiting
+            self.report = report
+        }
+    }
+
+    /// `bench_wire::AgentReport`: what an agent says it is doing, read on benchd's machine —
+    /// Claude Code's registry row for the session's foreground process, else the agent's last
+    /// hook. So helm reads no registry of its own, and a benchd on another machine still lights
+    /// presence (M5c, #459).
+    package struct Report: Decodable, Equatable, Sendable {
+        /// The harness's own word (`bench_wire::Activity`'s `kind`): `busy`, `shell`, `idle` or
+        /// `waiting`, the only four a registry row or a hook says.
+        package var activity: String
+        /// What it waits for, in its own words, when `activity` is `waiting` and it says.
+        package var waitingFor: String?
+        /// When `activity` last changed: a transition time, not a heartbeat.
+        package var since: Date?
+
+        private enum CodingKeys: String, CodingKey {
+            case activity
+            case sinceMs = "since_ms"
+        }
+        private enum ActivityKeys: String, CodingKey {
+            case kind
+            case waitingFor = "waiting_for"
+        }
+
+        package init(activity: String, waitingFor: String? = nil, since: Date? = nil) {
+            self.activity = activity
+            self.waitingFor = waitingFor
+            self.since = since
+        }
+
+        package init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let a = try c.nestedContainer(keyedBy: ActivityKeys.self, forKey: .activity)
+            activity = try a.decode(String.self, forKey: .kind)
+            waitingFor = try a.decodeIfPresent(String.self, forKey: .waitingFor)
+            since = try c.decodeIfPresent(UInt64.self, forKey: .sinceMs).map {
+                Date(timeIntervalSince1970: Double($0) / 1000)
+            }
         }
     }
 
@@ -252,6 +295,9 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
 
     /// The agent waiting on the operator in each pane that shows one.
     package var waitingByPane: [UUID: Waiting] { byPane.compactMapValues(\.waiting) }
+
+    /// What the agent in each pane says it is doing, for each pane where one reports.
+    package var reportByPane: [UUID: Report] { byPane.compactMapValues(\.report) }
 
     /// Each pane's live session: one with a foreground process. A pane can also be listed
     /// against a session that ended before it got a new one, and that one says nothing.

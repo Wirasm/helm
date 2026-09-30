@@ -25,8 +25,9 @@ final class Keymap: ObservableObject {
     /// pop-up shows while it is held, and the status bar names it.
     @Published private(set) var manage: ManageKey = .builtIn
 
-    /// `<bench root>/rules/keymap.toml`, so an isolated helm has its own. nil when the root
-    /// cannot be resolved, which leaves the built-in table.
+    /// `keymap.toml` in helm's own directory (`HelmBenchDirectory`), so an isolated helm has its
+    /// own, and it stays on helm's machine when benchd is on another. nil only in a test that
+    /// wants the built-in table.
     let file: URL?
     private let defaults: [KeyBinding]
     private var lastRead: FileRead?
@@ -105,12 +106,32 @@ final class Keymap: ObservableObject {
     }
 
     private static func operatorFile() -> URL? {
-        switch BenchRoot.resolve() {
-        case let .success(root):
-            return root.appendingPathComponent("rules/keymap.toml", isDirectory: false)
-        case let .failure(error):
-            NSLog("helm: no keymap file, keeping the built-in keys: %@", error.sentence)
-            return nil
+        let file = HelmBenchDirectory.resolve().keymap
+        if case let .success(root) = BenchRoot.resolve() {
+            moveOnce(from: root.appendingPathComponent("rules/keymap.toml"), to: file)
+        }
+        return file
+    }
+
+    /// Until M5c the keymap was `<bench root>/rules/keymap.toml`, which was only helm's own by
+    /// accident: the bench root is on helm's machine. A file there, with none at `to` yet, is
+    /// moved once, so the operator's keys come along. Delete this once no machine has the old
+    /// file.
+    nonisolated static func moveOnce(from old: URL, to new: URL) {
+        let files = FileManager.default
+        guard files.fileExists(atPath: old.path), !files.fileExists(atPath: new.path) else {
+            return
+        }
+        do {
+            try files.createDirectory(
+                at: new.deletingLastPathComponent(), withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            try files.moveItem(at: old, to: new)
+            NSLog("helm: moved the keymap from %@ to %@", old.path, new.path)
+        } catch {
+            NSLog(
+                "helm: could not move the keymap from %@ to %@: %@", old.path, new.path,
+                error.localizedDescription)
         }
     }
 }

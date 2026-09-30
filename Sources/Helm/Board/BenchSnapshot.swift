@@ -38,16 +38,7 @@ struct BenchSnapshot: Codable, Equatable {
         workspaces: WorkspaceModel,
         workbench: WorkbenchModel,
         terminals: TerminalManager,
-        foregroundPid: (TerminalSession) -> pid_t? = { $0.foregroundPid },
-        // **Defaulted here and nowhere below, and the asymmetry is the guard.** Omitting it means
-        // *the registry said nothing*, which is a real and safe answer, and it is what a test
-        // that is not about agents wants to say. The five nested initializers this is handed down through
-        // take it with **no default**, exactly as `foregroundPid` does, so a level that forgets to
-        // forward it fails to compile rather than quietly reporting every pane under it as having
-        // no agent — which is #283's own failure, an agent that has stopped reading as one that
-        // was never there. *"Has this been checked?"* is answered by the compiler at every call
-        // site instead of by reading upwards.
-        agents: [pid_t: AgentSession] = [:]
+        foregroundPid: (TerminalSession) -> pid_t? = { $0.foregroundPid }
     ) -> BenchSnapshot {
         let mountedPath = workbench.workspacePath
         return BenchSnapshot(
@@ -64,8 +55,7 @@ struct BenchSnapshot: Codable, Equatable {
                     state: mounted ? .mounted : .parked,
                     bench: bench,
                     sessions: terminals.sessions(for: workspace.path),
-                    foregroundPid: foregroundPid,
-                    agents: agents)
+                    foregroundPid: foregroundPid)
             })
     }
 
@@ -87,8 +77,7 @@ struct BenchSnapshot: Codable, Equatable {
             state: State,
             bench: Workbench?,
             sessions: [TerminalSession],
-            foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession]
+            foregroundPid: (TerminalSession) -> pid_t?
         ) {
             path = workspace.path
             name = workspace.name
@@ -105,8 +94,7 @@ struct BenchSnapshot: Codable, Equatable {
                     column: column,
                     focusedSlot: focusedSlot,
                     live: live,
-                    foregroundPid: foregroundPid,
-                    agents: agents)
+                    foregroundPid: foregroundPid)
             }
         }
     }
@@ -121,8 +109,7 @@ struct BenchSnapshot: Codable, Equatable {
             column: Column,
             focusedSlot: Slot.ID?,
             live: [UUID: TerminalSession],
-            foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession]
+            foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = column.id
             width = column.width
@@ -132,8 +119,7 @@ struct BenchSnapshot: Codable, Equatable {
                     mounted: focusedSlot != nil,
                     focused: slot.id == focusedSlot,
                     live: live,
-                    foregroundPid: foregroundPid,
-                    agents: agents)
+                    foregroundPid: foregroundPid)
             }
         }
     }
@@ -150,8 +136,7 @@ struct BenchSnapshot: Codable, Equatable {
             mounted: Bool,
             focused: Bool,
             live: [UUID: TerminalSession],
-            foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession]
+            foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = slot.id
             height = slot.height
@@ -163,8 +148,7 @@ struct BenchSnapshot: Codable, Equatable {
                     visible: mounted && pane.id == slot.selected,
                     focused: focused && pane.id == slot.selected,
                     live: live[pane.id],
-                    foregroundPid: foregroundPid,
-                    agents: agents)
+                    foregroundPid: foregroundPid)
             }
         }
     }
@@ -196,8 +180,7 @@ struct BenchSnapshot: Codable, Equatable {
             visible: Bool,
             focused: Bool,
             live: TerminalSession?,
-            foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession]
+            foregroundPid: (TerminalSession) -> pid_t?
         ) {
             id = pane.id
             isSelected = selected
@@ -210,8 +193,7 @@ struct BenchSnapshot: Codable, Equatable {
                     id: pane.id,
                     session: live,
                     resumable: resumable,
-                    foregroundPid: foregroundPid,
-                    agents: agents)
+                    foregroundPid: foregroundPid)
                 canvas = nil
                 unsupportedKind = nil
             case let .canvas(source):
@@ -281,8 +263,7 @@ struct BenchSnapshot: Codable, Equatable {
             id: UUID,
             session: TerminalSession?,
             resumable: ResumableAgent? = nil,
-            foregroundPid: (TerminalSession) -> pid_t?,
-            agents: [pid_t: AgentSession]
+            foregroundPid: (TerminalSession) -> pid_t?
         ) {
             sessionId = id
             isLive = session != nil
@@ -310,15 +291,12 @@ struct BenchSnapshot: Codable, Equatable {
                 failure = issue
             }
             title = session.displayTitle
-            let pid = foregroundPid(session)
-            self.foregroundPid = pid
-            // The registry about the pid helm is watching right now: the caller supplies a live
-            // foreground pid, so a row that matches carries that same live number. Which agent
-            // is in the pane and its mailbox are benchd's to answer (`bench mail who`, #358).
-            // benchd's `waiting` fills in what the registry does not say (M1, #357).
+            self.foregroundPid = foregroundPid(session)
+            // What the pane's agent reports and whether benchd sees it waiting, both from
+            // benchd's `sessions` (M5c). Which agent is in the pane and its mailbox are benchd's
+            // to answer too (`bench mail who`, #358).
             agent = AgentRecord.of(
-                registry: pid.flatMap { agents[$0] }.flatMap(AgentRecord.init),
-                waiting: session.waiting)
+                report: session.report.flatMap(AgentRecord.init), waiting: session.waiting)
         }
     }
 
@@ -347,35 +325,38 @@ struct BenchSnapshot: Codable, Equatable {
     /// command-finished, OSC 9/777 — and an agent frozen on a modal emits none of them, so
     /// "nothing has been written for N minutes" is not a question helm can ask at all.
     ///
-    /// It does not have to. Claude Code publishes the answer itself, in the registry helm
-    /// **already reads every publish** to find a pane's agent: a session blocked on a
+    /// It does not have to. Claude Code publishes the answer itself: a session blocked on a
     /// dialog writes `status: "waiting"` with `waitingFor: "permission prompt"` into
     /// `~/.claude/sessions/<pid>.json`. Measured on a real stall, same run as the reproduction
-    /// above. helm modelled that value in `AgentStatus` and then dropped it on the floor here,
-    /// taking only `sessionId` out of the registry — so the only tell left outside the process
-    /// was the whole snapshot's `writtenAt` going stale, which is second-order, and which #267
-    /// deliberately made quiet.
+    /// above. benchd reads that row for the process in the pane's session, on its own machine,
+    /// and hands it to helm as the session's `report` (M5c); helm reads no registry itself.
     ///
     /// # The honest limits, because a reader has to know them
     ///
-    /// - **Claude Code's registry, plus benchd's `waiting` (M1, #357).** pi and codex publish no
-    ///   registry, so their panes carry a record only while benchd sees them waiting on the
-    ///   operator (their hooks, or a prompt on their screen) — otherwise absence, never a false
-    ///   `idle`, which is `AgentRegistry`'s standing rule.
-    /// - **`status` is one of the four names helm models**, and absent when the registry said
-    ///   something this build does not. `waitingFor` still comes through in that case, and it is
-    ///   the field that names the stall.
+    /// - **The agent's own report, plus benchd's `waiting` (M1, #357).** The report is Claude
+    ///   Code's registry row, else the agent's last hook, so a pi or codex whose hooks are wired
+    ///   (`bench wiring`) has one too. A pane whose agent reports nothing carries a record only
+    ///   while benchd sees it waiting on the operator (a prompt on its screen) — otherwise
+    ///   absence, never a false `idle`.
+    /// - **`status` is one of the four names helm models**, and absent when the agent said
+    ///   something else. `waitingFor` still comes through in that case, and it is the field that
+    ///   names the stall. A registry row whose status benchd does not know is no report at all.
     /// - **`waiting` is not by itself a stall.** An agent that finished its turn and is waiting
     ///   for the operator is the healthy case. What distinguishes them is `waitingFor` — a
     ///   permission prompt is a question nobody at a spool-spawned pane will ever answer — and
     ///   how long it has been true.
     struct AgentRecord: Codable, Equatable {
-        /// `busy`, `shell`, `idle` or `waiting`. See `AgentStatus`.
+        /// `busy`, `shell`, `idle` or `waiting`.
         let status: String?
-        /// What it is waiting for, in Claude Code's own words. See `AgentSession.waitingFor`.
+        /// What it is waiting for, in the agent's own words: `"permission prompt"`, `"input
+        /// needed"`, `"dialog open"`, … A bare string, since a reason this build has never heard
+        /// of is still something a reader can print.
         let waitingFor: String?
         /// When `status` **or `waitingFor`** last changed — **a transition time, not a
-        /// heartbeat**. `AgentSession.statusUpdatedAt` has the measurements behind both halves.
+        /// heartbeat**. Measured against Claude Code 2.1.226: a forced non-status write
+        /// (`/rename`) left it alone, twelve minutes of a working session never moved it, and an
+        /// `idle → busy → idle` moved it at each transition. A hook's report is dated when its
+        /// activity last changed, which is the same kind of time.
         ///
         /// **That it also moves on a `waitingFor` change is better for this use, not worse**, and
         /// worth stating rather than glossing: #283 is *waiting for **this** since T*, so a prompt
@@ -400,19 +381,14 @@ struct BenchSnapshot: Codable, Equatable {
         /// writes nothing, and a status transition alone still writes.
         let statusUpdatedAt: Date?
 
-        /// `nil` when the row says nothing at all, so an empty record is never written.
-        ///
-        /// **That branch is reached in practice, which is worth saying because it looks like an
-        /// omission until someone checks.** A `-p` print-mode session registers a pid file with no
-        /// `status`, no `updatedAt` and no `statusUpdatedAt` at all — verified against a live one —
-        /// because the status writer is the interactive TUI's effect and print mode never mounts
-        /// it. Those rows are correctly skipped here rather than published as an agent whose state
-        /// is unknown and whose age is `null`.
-        init?(_ session: AgentSession) {
-            guard session.status != nil || session.waitingFor != nil else { return nil }
-            status = session.status?.rawValue
-            waitingFor = session.waitingFor
-            statusUpdatedAt = session.statusUpdatedAt
+        /// The record for what the agent reports. `status` is kept only when it is one of the
+        /// four names; `nil` when that leaves nothing to say, so an empty record is never written.
+        init?(_ report: BenchLiveSessions.Report) {
+            let named = ["busy", "shell", "idle", "waiting"].contains(report.activity)
+            guard named || report.waitingFor != nil else { return nil }
+            status = named ? report.activity : nil
+            waitingFor = report.waitingFor
+            statusUpdatedAt = report.since
         }
 
         init(status: String?, waitingFor: String?, statusUpdatedAt: Date?) {
@@ -421,22 +397,20 @@ struct BenchSnapshot: Codable, Equatable {
             self.statusUpdatedAt = statusUpdatedAt
         }
 
-        /// The pane's record from Claude's registry and benchd's `waiting` (M1, #357). The
-        /// registry keeps its own words when it already says what it waits for; otherwise
-        /// benchd's wait stands, which is how a codex or pi at a prompt, a Claude trust prompt
-        /// before the session registers, or a Claude registry row left saying `busy` (or a bare
-        /// `waiting`) under a prompt (#283) gets a record that names the wait. With no wait from
-        /// benchd the registry's record is reported as it is: a bare `waiting` is a finished
-        /// turn, which is not a stall, and benchd does not count it either.
+        /// The pane's record from the agent's report and benchd's `waiting` (M1, #357). The
+        /// report keeps its own words when it already says what it waits for; otherwise
+        /// benchd's wait stands, which is how an agent with no report at a prompt, a Claude trust
+        /// prompt before the session registers, or a Claude registry row left saying `busy` (or a
+        /// bare `waiting`) under a prompt (#283) gets a record that names the wait. With no wait
+        /// from benchd the report is published as it is: a bare `waiting` is a finished turn,
+        /// which is not a stall, and benchd does not count it either.
         static func of(
-            registry: AgentRecord?, waiting: BenchLiveSessions.Waiting?
+            report: AgentRecord?, waiting: BenchLiveSessions.Waiting?
         ) -> AgentRecord? {
-            guard let waiting,
-                registry?.status != AgentStatus.waiting.rawValue || registry?.waitingFor == nil
-            else { return registry }
+            guard let waiting, report?.status != "waiting" || report?.waitingFor == nil
+            else { return report }
             return AgentRecord(
-                status: AgentStatus.waiting.rawValue, waitingFor: waiting.waitingFor,
-                statusUpdatedAt: waiting.since)
+                status: "waiting", waitingFor: waiting.waitingFor, statusUpdatedAt: waiting.since)
         }
     }
 

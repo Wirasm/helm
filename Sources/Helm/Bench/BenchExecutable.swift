@@ -58,6 +58,68 @@ enum BenchExecutable {
                 asked: "benchd is reached over TCP, so its own bench is not here", looked: looked))
     }
 
+    /// Why a pane cannot run a `bench`: there is none, or helm's own is another build than the
+    /// benchd over TCP it would talk to. Its `description` is what the pane says.
+    enum Unusable: Error, Equatable {
+        case notFound(NotFound)
+        case otherBuild(OtherBuild)
+
+        var description: String {
+            switch self {
+            case let .notFound(missing): missing.description
+            case let .otherBuild(other): other.description
+            }
+        }
+    }
+
+    /// helm's own `bench` says another version than benchd's `status.version` (M5c): a pane
+    /// running it could not be trusted to attach, so it says so rather than try.
+    struct OtherBuild: Error, Equatable {
+        let bench: String
+        /// What `bench --version` printed; nil when it printed nothing, which is a `bench` from
+        /// before the flag existed.
+        let ours: String?
+        let benchd: String
+
+        /// nil when `ours` is `benchd`: the same build, nothing to say.
+        init?(bench: String, ours: String?, benchd: String) {
+            guard ours != benchd else { return nil }
+            self.bench = bench
+            self.ours = ours
+            self.benchd = benchd
+        }
+
+        var description: String {
+            "helm's bench (\(bench)) is version \(ours ?? "unknown"), and the benchd it reaches over "
+                + "TCP is version \(benchd). Install the same build on both machines (`just "
+                + "benchd-install`, or `cargo install --path daemon/crates/bench` here), then close "
+                + "this pane and reopen it."
+        }
+    }
+
+    /// The version a `bench` says it is (`bench --version`), or nil when it says none: it is
+    /// older than the flag, cannot run, or took longer than two seconds.
+    static func version(of bench: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: bench)
+        process.arguments = ["--version"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < deadline { usleep(10_000) }
+        if process.isRunning {
+            process.terminate()
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let printed = String(
+            decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        return printed.isEmpty ? nil : printed
+    }
+
     /// No `bench` to run: what was tried, and the fix.
     struct NotFound: Error, Equatable {
         let asked: String
