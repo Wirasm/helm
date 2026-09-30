@@ -19,6 +19,10 @@ import { planAgentUpdate, boardReport } from "./board-core.js";
 const artifact = decodeURIComponent(location.pathname.split("/").pop() || "board.html");
 const base = artifact.replace(/\.[^.]+$/, "");
 const documentURL = `./${base}.document.json`;
+// The board's live file (helm #532): what it reports about itself, for the agent to read. The
+// page writes it through helm, which writes only over the bytes the page last saw.
+const dataURL = `./${base}.data.json`;
+const dataName = `${base}.data.json`;
 // **A page-local cache of the OPERATOR's records, and nothing else.** helm reloads a canvas
 // whenever the appearance flips or the operator presses Reload, and a reload is a fresh
 // document with a fresh store — so without this, switching to dark mode throws their drawing
@@ -26,8 +30,11 @@ const documentURL = `./${base}.document.json`;
 // authority for the ids the agent owns.
 const cacheKey = `helm.board/${artifact}`;
 
-const latch =
-  window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.helmCanvasState;
+const channel =
+  window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.helmCanvasData;
+// What this page last saw of its live file: read at mount, then every answer's `text`. Up here,
+// before anything can report, because the missing-container report below runs first.
+let dataBase = null;
 
 const warnings = [];
 
@@ -41,7 +48,7 @@ const container = document.getElementById("board");
 // **A missing container is the one failure that is otherwise completely silent.** The artifact
 // is the author's to edit, and renaming the element quickdraw mounts into throws inside
 // `createQuickdraw` before anything below runs — an ES module that throws leaves a blank page,
-// no message on screen, and nothing in the latch. So it is said in both directions: on the page
+// no message on screen, and nothing in the report. So it is said in both directions: on the page
 // for whoever is looking at it, and in the report for the agent who is not.
 if (!container) {
   const said = `no element with id "board" — the artifact must carry <main id="board" data-helm-surface>`;
@@ -49,12 +56,7 @@ if (!container) {
   const note = document.createElement("p");
   note.textContent = `This board cannot mount: ${said}`;
   document.body.appendChild(note);
-  if (latch) {
-    latch.postMessage({
-      kind: "canvas.state",
-      state: { format: "helm.board", version: 1, mounted: false, warnings: [said] },
-    });
-  }
+  write({ format: "helm.board", version: 1, mounted: false, warnings: [said] });
   throw new Error(said);
 }
 
@@ -235,20 +237,37 @@ container.addEventListener("webkitmouseforcewillbegin", (event) => event.prevent
 // ---------------------------------------------------------------------------------------------
 
 function report() {
-  if (!latch) return;
-  const state = boardReport({
-    records: store.all(),
-    boundsOf,
-    ownedIds,
-    generation,
-    warnings,
-    forceById,
-  });
-  latch.postMessage({ kind: "canvas.state", state });
+  write(boardReport({ records: store.all(), boundsOf, ownedIds, generation, warnings, forceById }));
+}
+
+// **The page writes its report into its live file, and nobody is woken** (`notify: false`): the
+// agent reads `<base>.data.json` on its next turn, as it always has. helm writes only over `base`,
+// the bytes this page last saw; answered `changed`, the report is simply written again over what
+// is there, since it is recomputed from the store rather than edited. Only this page writes the
+// file, so a second `changed` in a row is a bug worth a warning, not a loop.
+function write(state) {
+  if (!channel) return Promise.resolve();
+  const send = () =>
+    channel.postMessage({ kind: "canvas.data.write", data: state, base: dataBase, notify: false });
+  return send()
+    .then((answer) => {
+      dataBase = answer.text;
+      if (answer.kind === "changed") return send().then((again) => (dataBase = again.text));
+    })
+    .catch((error) => console.warn(`board: the report was not written: ${error}`));
+}
+
+async function readDataBase() {
+  try {
+    const response = await fetch(dataURL, { cache: "no-store" });
+    dataBase = response.ok ? await response.text() : null;
+  } catch {
+    dataBase = null;
+  }
 }
 
 // **Coalesced on settle, never on a timer and never on a frame.** A freehand drag emits a
-// transaction per pointer move, and helm writes the latch on every changed report — so posting
+// transaction per pointer move, and helm writes the live file on every changed report — so posting
 // per transaction would rewrite a file sixty times a second in the pane the operator is drawing
 // in. This fires once, after the hand stops. It is not a poll: nothing schedules it but a real
 // change, and a board nobody touches posts nothing at all.
@@ -275,6 +294,9 @@ store.listen(reportSoon, { source: "user" });
 // canvas changes, and a reload would take the camera, the selection, the undo history and the
 // operator's ink with it every time.
 window.helmCanvasUpdate = function (update) {
+  // The board's own live file changed under it: nothing to render, and the next report's
+  // `changed` answer brings its bytes.
+  if (update && update.file === dataName) return true;
   generation = update && typeof update.generation === "number" ? update.generation : generation;
   readAgentDocument().then((snapshot) => {
     if (!snapshot) return;
@@ -292,6 +314,7 @@ window.helmCanvasUpdate = function (update) {
 // Go
 // ---------------------------------------------------------------------------------------------
 
+await readDataBase();
 const initial = await readAgentDocument();
 if (initial) applyAgentDocument(initial);
 restoreOperatorRecords();

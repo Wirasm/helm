@@ -1,4 +1,5 @@
 import AppKit
+import HelmWire
 import Inject
 import SwiftUI
 
@@ -47,6 +48,9 @@ final class CanvasModel: ObservableObject {
         var content: Content
         /// Bumped on every external-change reload so the web views reload.
         var generation = 0
+        /// The name of the file whose change made this generation: the artifact's own, or an
+        /// HTML canvas's live file. What `helmCanvasUpdate` is told changed (#532).
+        var changed: String?
     }
 
     /// What the canvas is rendering right now: the open file, with the loaded content and the
@@ -455,77 +459,23 @@ final class CanvasModel: ObservableObject {
         reloadDemand += 1
     }
 
-    // MARK: - What the page said about itself (#110)
+    // MARK: - The live file (#532)
 
-    /// The state this pane last wrote to the latch, so an unchanged report costs no write.
-    ///
-    /// **Not `@Published`, and that is the feature.** A report must move nothing on screen: the
-    /// operator is *playing* the page that sent it, and a redraw of the pane around them is the
-    /// smallest version of the interruption this whole design exists to avoid. Nothing here is
-    /// observable, so nothing redraws.
-    ///
-    /// Per-pane rather than read back from disk: comparing against the file would mean a read
-    /// per report, and the question — *"is this different from what I last wrote?"* — is one
-    /// this object is the only writer of.
-    ///
-    /// **It deliberately survives a reload of the same artifact, and that is not an oversight —
-    /// it is what the latch means.** A review read this as a defect (*"the page instance is brand
-    /// new, so `writtenAt` must move"*), which is the signal to write the rule down rather than
-    /// leave the next reader to re-derive it: **the latch tracks the artifact's state, not the
-    /// page's incarnations.** A theme flip, an `unhandled` update and the operator's own Reload
-    /// button all destroy the JS context, and a page that comes back reporting exactly what is
-    /// already on disk has, by construction, changed nothing. Clearing this there would rewrite
-    /// the file to say the same thing and move `writtenAt` — turning the one field an agent
-    /// checks for staleness from *"the state last changed"* into *"the page last restarted"*,
-    /// which is the reload counter nobody asked for. Pinned by
-    /// `CanvasStateTests.testAReloadOfTheSameArtifactIsNotAStateChangeAndWritesNothing`.
-    ///
-    /// What it is **not** is a claim that the file exists: delete the latch behind helm's back
-    /// and an unchanged report will not restore it. That is
-    /// `testRepeatingTheSameStateDoesNotRewriteTheLatch`'s instrument rather than a case anybody
-    /// is in — helm is the only writer, and re-creating a file somebody deleted on purpose is not
-    /// obviously the kinder answer.
-    private var latchedState: CanvasStateBody?
-
-    /// **A page reported what it is doing. Write it beside the artifact and stop** (#110).
-    ///
-    /// Everything this does *not* do is the acceptance: no session woken, no turn started, no
-    /// credit spent, no mail sent, no notice raised, nothing published. The agent reads the
-    /// latch when it next runs — `CanvasStateLatch`'s header has the standard this is copied
-    /// from and why a latch beats an interrupt.
-    ///
-    /// **An unchanged report is not written**, which is what makes `writtenAt` mean *"the page
-    /// last did something different"* rather than *"the page last spoke"*. MCP Apps permits the
-    /// dedupe in as many words; `BenchSnapshotModel` already takes the same one for the same
-    /// reason, and without it a page reporting on a `requestAnimationFrame` loop would rewrite
-    /// the file sixty times a second to say nothing.
-    ///
-    /// **The honest cost, recorded:** a page whose state genuinely changes every frame gets a
-    /// write every frame. That is the page's own choice and helm does not throttle it — a
-    /// coalescing delay would make the latch lag exactly when it is moving fastest, which is
-    /// the staleness a latch exists to remove.
-    func pageDidReportState(_ report: CanvasPageState) {
-        guard let canvas = fileURL else { return }
-        guard latchedState != report.body else { return }
-        do {
-            try CanvasStateLatch.write(report.body, for: canvas, at: Date(), through: files)
-            latchedState = report.body
-        } catch {
-            // **Logged, not swallowed, and deliberately not shown.** The operator did not do
-            // this and cannot fix it — an artifact in a directory helm cannot write to is the
-            // author's problem, and it is the author who reads `log show`. The bridge's dropped
-            // messages are reported the same way, one file over, for the same reason.
-            NSLog(
-                "helm: could not latch canvas state to "
-                    + "\(CanvasStateLatch.sidecarURL(for: canvas).lastPathComponent) — "
-                    + error.localizedDescription)
-        }
+    /// This canvas's live file, when it is an HTML canvas: `<stem>.data.json` beside it, the one
+    /// JSON file the page and the agent both edit (`BenchLiveFile`).
+    var liveFile: URL? {
+        fileURL.flatMap { BenchLiveFile.path(for: $0.path) }.map(URL.init(fileURLWithPath:))
     }
+
+    /// What the page has been shown of its live file: read when the canvas opens, and replaced
+    /// by every answer to a page write and every change offered to the page. A `file/changed`
+    /// for bytes the page already has is the page's own write coming back, and is not offered.
+    fileprivate var liveSeen: CanvasFileRead?
 
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 
-    /// Where this canvas's file, sidecar and latch are read and written: benchd.
+    /// Where this canvas's file, sidecar and live file are read and written: benchd.
     let files: any CanvasFiles
 
     /// Files beyond this are almost certainly not artifacts; refuse instead of
@@ -616,17 +566,13 @@ final class CanvasModel: ObservableObject {
         notesNotice = nil
         // Same rule: "this page is holding state, reload?" is about the page that was here.
         updateNotice = nil
-        // The latch belongs to the artifact, not to the pane, so the *file* stays where it is —
-        // an agent reads it long after this canvas showed something else. What is dropped is
-        // this pane's memory of having written it, because carrying it over would let the first
-        // report from the *new* page be deduped against the old one's state and silently not
-        // written at all.
-        latchedState = nil
+        liveSeen = liveFile.map { files.read($0.path, within: nil) }
         refreshNotes()
     }
 
     /// benchd says a file settled into a new state (`file/changed`). It watches every canvas
-    /// file in its document and each one's sidecar, so this pane hears about both.
+    /// file in its document, each one's sidecar and an HTML canvas's live file, so this pane
+    /// hears about all three.
     ///
     /// **The artifact reloads; the sidecar only re-reads the notes** (#251): a note is not an
     /// edit to the page. **A sibling the page fetches** — `app.js`, `data.json` — is neither,
@@ -642,6 +588,8 @@ final class CanvasModel: ObservableObject {
             refreshIfChanged()
         } else if changed == StandardizedPath(CanvasNotes.sidecarURL(for: url)) {
             refreshNotes()
+        } else if let live = liveFile, changed == StandardizedPath(live) {
+            liveFileChanged()
         }
     }
 
@@ -832,6 +780,7 @@ final class CanvasModel: ObservableObject {
     func reread() {
         refreshIfChanged()
         refreshNotes()
+        liveFileChanged()
     }
 
     /// `refresh()`, but only when the file's bytes differ from the ones last loaded.
@@ -893,7 +842,8 @@ final class CanvasModel: ObservableObject {
         let content = load(previous.url, from: read)
         reconcile(content)
         showing = Document(
-            url: previous.url, content: content, generation: previous.generation + 1)
+            url: previous.url, content: content, generation: previous.generation + 1,
+            changed: previous.url.lastPathComponent)
     }
 
     /// The artifact's bytes as last loaded, nil when they could not be read: what
@@ -924,6 +874,61 @@ final class CanvasModel: ObservableObject {
             return .notice("Not a UTF-8 text file")
         }
         return RenderableFile.isMarkdown(url) ? .markdown(text) : .plainText(text)
+    }
+}
+
+// MARK: - The live file's traffic (#532)
+
+extension CanvasModel {
+    /// **The page wrote its live file.** benchd writes it only over `base`, the bytes the page
+    /// saw, and mails the canvas's opener when `notify` says to; helm carries the write and hands
+    /// the page what is in the file now.
+    ///
+    /// A write of what is already there sends nothing: an unchanged report is not a change, and
+    /// would otherwise mail nobody and rewrite the file for nothing.
+    func pageWroteData(_ write: CanvasDataWrite) -> Result<CanvasDataAnswer, CanvasFileFailure> {
+        guard let live = liveFile else {
+            return .failure(CanvasFileFailure(reason: "only an HTML canvas has a live file"))
+        }
+        if write.base == write.text {
+            liveSeen = .bytes(Data(write.text.utf8))
+            return .success(.written(write.text))
+        }
+        switch files.write(
+            write.text, to: live.path, expect: .unchanged(write.base ?? ""), notify: write.notify)
+        {
+        case .written:
+            liveSeen = .bytes(Data(write.text.utf8))
+            return .success(.written(write.text))
+        case let .changed(now):
+            guard let text = CanvasText.decode(now) else {
+                return .failure(
+                    CanvasFileFailure(
+                        reason: "\(live.lastPathComponent) changed, and is not UTF-8 text"))
+            }
+            liveSeen = .bytes(now)
+            return .success(.changed(text))
+        case let .failed(why):
+            return .failure(CanvasFileFailure(reason: why))
+        }
+    }
+
+    /// benchd says the live file changed, or helm is reading everything again. Bytes the page has
+    /// not been shown are offered to it, naming the file (`CanvasUpdate.file`), exactly as a
+    /// change to the artifact is: a page that defines `helmCanvasUpdate` re-reads, one that does
+    /// not is reloaded, which is how a plain page shows the agent's data.
+    fileprivate func liveFileChanged() {
+        guard let live = liveFile, let previous = showing else { return }
+        let read = files.read(live.path, within: nil)
+        if case let .failed(why) = read {
+            NSLog("helm: could not read \(live.lastPathComponent) for its canvas — \(why)")
+            return
+        }
+        guard read != liveSeen else { return }
+        liveSeen = read
+        showing = Document(
+            url: previous.url, content: previous.content, generation: previous.generation + 1,
+            changed: live.lastPathComponent)
     }
 }
 
@@ -1171,8 +1176,9 @@ struct CanvasView: View {
                 url: document.url, files: model.files, generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
                 onSelection: model.pageDidReport,
+                changed: document.changed,
                 reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate,
-                onState: model.pageDidReportState)
+                onDataWrite: model.pageWroteData)
         case let .plainText(text):
             ScrollView {
                 Text(text)

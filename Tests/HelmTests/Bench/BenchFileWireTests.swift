@@ -47,10 +47,11 @@ final class BenchFileWireTests: XCTestCase {
                     text: "# Plan\n\nMine.\n", expect: .unchanged("# Plan\n"))
             ),
             (
-                "write_latch",
+                "write_page",
                 BenchFileWriteRequest(
-                    id: "helm-files-4", path: "/Users/op/.prp/helm/canvas/board.state.json",
-                    text: "{\n  \"format\" : \"helm.canvas-state\"\n}", expect: .any)
+                    id: "helm-files-4", path: "/Users/op/.prp/helm/canvas/tasks.data.json",
+                    text: "{\n  \"done\" : true\n}\n",
+                    expect: .unchanged("{\n  \"done\" : false\n}\n"), notify: true)
             ),
             (
                 "append",
@@ -83,6 +84,18 @@ final class BenchFileWireTests: XCTestCase {
             let canvas = URL(fileURLWithPath: try XCTUnwrap(row["canvas"] as? String))
             XCTAssertEqual(CanvasNotes.sidecarURL(for: canvas).path, row["sidecar"] as? String)
             XCTAssertEqual(CanvasNotes.isSidecar(canvas), row["canvas_is_sidecar"] as? Bool)
+        }
+    }
+
+    /// The live file beside an HTML canvas (#532) is the one benchd watches and mails about.
+    func testTheLiveFileRuleIsTheDaemons() throws {
+        let samples =
+            try JSONSerialization.jsonObject(with: fixture("file-verbs.json")) as! [String: Any]
+        let live = try XCTUnwrap(samples["live_files"] as? [[String: Any]])
+        XCTAssertFalse(live.isEmpty)
+        for row in live {
+            let canvas = try XCTUnwrap(row["canvas"] as? String)
+            XCTAssertEqual(BenchLiveFile.path(for: canvas), row["live_file"] as? String, canvas)
         }
     }
 }

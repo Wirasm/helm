@@ -85,6 +85,20 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
         Ok(o) => o,
         Err(refusal) => return reply(Status::Refused, Some(refusal.to_string()), None),
     };
+    // An agent's `pane/open` of a canvas names it the opener: where a mark or a live-file edit
+    // on that canvas is mailed (helm #532). Newest wins, as re-offering a rewritten file is the
+    // ordinary case.
+    if let (
+        LayoutVerb::PaneOpen(_),
+        Some(pane),
+        Actor::Agent {
+            pane: Some(from), ..
+        },
+    ) = (&verb, outcome.pane, &by)
+        && let Ok(opener) = PaneId::parse(from.trim())
+    {
+        next.record_opener(pane, opener);
+    }
     let change = Change {
         verb: req.verb.clone(),
         args: req.args.clone(),

@@ -72,20 +72,6 @@ final class WorkbenchModel: ObservableObject {
     /// the bench and the manager can never disagree about what is alive.
     private var surfaces: SurfaceRegistry { terminals.surfaces }
 
-    /// Which terminal put each canvas pane on the bench (#205) — the key is the **canvas** pane,
-    /// the value names the **terminal** pane, which is what `CanvasOrigin` exists to keep straight.
-    ///
-    /// Kept beside the canvas's model rather than on `Pane.Content.canvas`, and that is load-bearing:
-    /// `CanvasSource` is compared by value to answer "is this file already open?"
-    /// (`Workbench.pane(showing:)`), so an origin inside it would make the same artifact pushed by
-    /// two agents two different sources — a second pane for a file already on screen, which is the
-    /// interruption `offer` exists to avoid. It also must not persist; `CanvasOrigin`'s header has
-    /// the reason.
-    ///
-    /// A push can land on a background workspace's bench (#349); the entry goes when the pane
-    /// leaves the document (`apply`).
-    private var origins: [Pane.ID: CanvasOrigin] = [:]
-
     /// How a mark leaves helm: as mail through benchd. Injected so the routing is reachable from
     /// `swift test` with a benchd the test answers for, and nothing sent to the operator's own.
     private let notes: CanvasNoteCourier
@@ -244,22 +230,21 @@ final class WorkbenchModel: ObservableObject {
         }
     }
 
-    /// An operator's mark on a canvas pane, on its way to the agent that pushed that canvas
+    /// An operator's mark on a canvas pane, on its way to the agent that opened that canvas
     /// (#205).
     ///
-    /// **The bench is the only thing that can answer this**, which is why the decision is reached
-    /// from here rather than from the canvas: it holds the origin recorded at push time *and* the
-    /// sessions that origin names. What it does not do is *make* the decision —
-    /// `CanvasNoteRoute.route` is pure and tested on its own, and this only supplies it with a
-    /// live lookup.
+    /// **The opener is benchd's record** (`Pane.opener`, #532): benchd writes it at an agent's
+    /// `pane/open`, and it is in the document, so it outlives a helm relaunch. What this does not
+    /// do is *make* the decision — `CanvasNoteRoute.route` is pure and tested on its own, and
+    /// this only supplies it with a live lookup.
     private func deliver(
         _ annotation: CanvasAnnotation, on canvas: URL, markedIn pane: Pane.ID
     ) -> CanvasNoteDelivery {
-        let route = CanvasNoteRoute.route(origin: origins[pane]) { origin in
-            // A closed pane resolves to no session, which is `.originGone` — the agent that
-            // pushed this canvas is not there any more, and the operator is told so.
-            terminals.sessions.contains { $0.id == origin.terminal }
-                ? notes.handle(in: origin.terminal) : nil
+        let opener = document?.pane(pane)?.opener.map(CanvasOrigin.init(terminal:))
+        let route = CanvasNoteRoute.route(origin: opener) { origin in
+            // A closed pane resolves to no agent, which is `.originGone` — the agent that
+            // opened this canvas is not there any more, and the operator is told so.
+            document?.pane(origin.terminal) == nil ? nil : notes.handle(in: origin.terminal)
         }
         return notes.send(annotation, on: canvas, along: route)
     }
@@ -495,25 +480,16 @@ extension WorkbenchModel {
 
     private static let log = Logger(subsystem: "com.wirasm.helm", category: "bench")
 
-    /// An agent's `bench open` of a canvas (M3): remember which pane it came from, so a mark the
-    /// operator later makes on the canvas is mailed back to that agent (#205). benchd names the
-    /// pane an agent runs in (`HELM_PANE`, or the pane showing its session) in the event's `by`,
-    /// and `mail/who` resolves it late, when the mark is made.
-    ///
-    /// **Recorded whether the pane is new or already open, and the second case is the common
-    /// one** — an agent re-offering the file it just rewrote gets the pane that was there, and
-    /// the newest opener is the one who wants to hear about a mark on it. `origins` is keyed by
-    /// pane id, so a background workspace's canvas keeps its origin across a switch.
+    /// An agent's `bench open` of a canvas (M3). Who opened it is benchd's record now
+    /// (`Pane.opener`, #532); what is left here is the render.
     ///
     /// **A re-open re-reads the file (#261).** benchd answers the pane already showing it and
-    /// leaves it where it is; its render is helm's, and a canvas watches one file, so an agent
-    /// that rewrote only a sibling (`app.js`) fired no watcher at all.
+    /// leaves it where it is; its render is helm's, and benchd watches the canvas, its sidecar and
+    /// its live file, so an agent that rewrote only a sibling (`app.js`) reported nothing at all.
     func remember(_ change: BenchChange) {
-        guard change.verb == "pane/open", case let .agent(from?, _) = change.by,
-            let terminal = UUID(uuidString: from), let pane = change.pane,
+        guard change.verb == "pane/open", case .agent = change.by, let pane = change.pane,
             case .canvas = document?.surface(of: pane)
         else { return }
-        origins[pane] = CanvasOrigin(terminal: terminal)
         surfaces.existing(pane, as: CanvasModel.self)?.refresh()
     }
 
@@ -556,7 +532,6 @@ extension WorkbenchModel {
         for entry in surfaces.entries where !alive.contains(entry.id) {
             surfaces.close(entry.id)
         }
-        origins = origins.filter { alive.contains($0.key) }
 
         let drawing = BenchDrawing.of(document)
         // ⌘J's zoom was a look at the workspace being left; the next one is drawn whole.

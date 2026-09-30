@@ -17,6 +17,32 @@
       "seq": 57
     }
   },
+  "live_files": [
+    {
+      "canvas": "/a/tasks.html",
+      "live_file": "/a/tasks.data.json"
+    },
+    {
+      "canvas": "/a/Board.HTM",
+      "live_file": "/a/Board.data.json"
+    },
+    {
+      "canvas": "/a/a.b.html",
+      "live_file": "/a/a.b.data.json"
+    },
+    {
+      "canvas": "/a/plan.md",
+      "live_file": null
+    },
+    {
+      "canvas": "/a/.html",
+      "live_file": null
+    },
+    {
+      "canvas": "/a/html",
+      "live_file": null
+    }
+  ],
   "read": {
     "args": {
       "path": "/Users/op/.prp/helm/plans/plan.md"
@@ -117,13 +143,15 @@
       "kind": "changed"
     }
   ],
-  "write_latch": {
+  "write_page": {
     "args": {
       "expect": {
-        "kind": "any"
+        "kind": "unchanged",
+        "text": "{\n  \"done\" : false\n}\n"
       },
-      "path": "/Users/op/.prp/helm/canvas/board.state.json",
-      "text": "{\n  \"format\" : \"helm.canvas-state\"\n}"
+      "notify": true,
+      "path": "/Users/op/.prp/helm/canvas/tasks.data.json",
+      "text": "{\n  \"done\" : true\n}\n"
     },
     "id": "helm-files-4",
     "verb": "file/write"

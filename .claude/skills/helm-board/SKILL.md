@@ -109,26 +109,23 @@ non-destructive, and this is the other side of the same coin.
 
 ## What comes back
 
-helm latches what the board says about itself to **`plan-board.state.json`**, beside the
-artifact. `cat` it on your next turn. Nothing wakes you, nothing starts a turn, nothing
-interrupts — the file is simply current when you next look.
+The board writes what is on it to its **live file**, **`plan-board.data.json`**, beside the
+artifact (helm-canvas's *live file*). `cat` it on your next turn. It writes with `notify: false`,
+so nothing wakes you and nothing starts a turn: the file is simply current when you next look.
+The file is the board's report; do not write it yourself.
 
 ```json
 {
-  "format": "helm.canvas-state", "version": 1,
-  "writtenAt": "2026-08-07T14:02:11Z", "artifact": "plan-board.html",
-  "state": {
-    "format": "helm.board", "version": 1, "generation": 3,
-    "counts": { "records": 9, "agent": 8, "operator": 1 },
-    "shapes": [ { "id": "auth-service", "type": "geo", "label": "Auth", "owner": "agent" } ],
-    "marks": [
-      { "id": "shape:m9x0q2a1", "type": "draw", "points": 29,
-        "pressure": { "min": 0.5, "max": 0.5, "varies": false },
-        "force": { "min": 1, "max": 2, "varies": true, "samples": 254 },
-        "over": { "id": "auth-service", "label": "Auth", "overlap": 17840 },
-        "runnerUp": { "id": "session-store", "label": "Sessions", "overlap": 210 } }
-    ]
-  }
+  "format": "helm.board", "version": 1, "mounted": true, "generation": 3,
+  "counts": { "records": 9, "agent": 8, "operator": 1 },
+  "shapes": [ { "id": "auth-service", "type": "geo", "label": "Auth", "owner": "agent" } ],
+  "marks": [
+    { "id": "shape:m9x0q2a1", "type": "draw", "points": 29,
+      "pressure": { "min": 0.5, "max": 0.5, "varies": false },
+      "force": { "min": 1, "max": 2, "varies": true, "samples": 254 },
+      "over": { "id": "auth-service", "label": "Auth", "overlap": 17840 },
+      "runnerUp": { "id": "session-store", "label": "Sessions", "overlap": 210 } }
+  ]
 }
 ```
 
@@ -155,8 +152,8 @@ interrupts — the file is simply current when you next look.
   numbers the page observed, and only the operator can say whose hand it was.
 - **`warnings` appears only when something went wrong** in the page — a document file that would
   not load, a drawing that could not be cached. Its presence is the signal.
-- `writtenAt` is a **change signal**: an identical report is not written, so it answers *when did
-  the board last do something different*.
+- The file's modification time is a **change signal**: an identical report is not written, so it
+  answers *when did the board last do something different*.
 
 ## What helm's own marking does on a board — nothing, deliberately
 
@@ -166,7 +163,7 @@ does nothing at all: no mark, no dismissal, no anchor.
 That is a decision rather than a limitation. helm's text mark resolves against **DOM elements**, and
 a mounted board is one `<canvas>` with no per-shape nodes — so a helm mark over a board could only
 ever name the board. The board's own ink becomes a record with an id, resolves by overlap to a
-shape you named, and reaches you through the latch.
+shape you named, and reaches you through the live file.
 
 Practically: **the operator draws with the board's tools.** helm has no drawing tools of its own on a
 document (#385 removed them); its text mark still works everywhere else on the page — a heading, a

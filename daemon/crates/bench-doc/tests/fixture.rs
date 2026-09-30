@@ -68,6 +68,10 @@ fn the_fixture_holds_one_of_everything() {
         "a file canvas"
     );
     assert!(
+        panes.iter().any(|p| p.opener.is_some()),
+        "a canvas an agent opened (helm #532)"
+    );
+    assert!(
         panes.iter().any(|p| matches!(p.name, PaneName::Derived(_))),
         "a derived name"
     );

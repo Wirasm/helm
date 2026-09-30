@@ -16,8 +16,13 @@ protocol CanvasFiles: Sendable {
     /// The file's bytes. `within` is the folder a page's sibling must be inside, symlinks
     /// followed on benchd's side.
     func read(_ path: String, within folder: String?) -> CanvasFileRead
-    /// The whole file, against what the writer expects to replace (`BenchFileExpect`).
-    func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite
+    /// The whole file, against what the writer expects to replace (`BenchFileExpect`). `notify`
+    /// is the operator's edit of a live file through its page, which benchd mails to the
+    /// canvas's opener once it is written (#532).
+    func write(
+        _ text: String, to path: String, expect: BenchFileExpect, notify: Bool
+    )
+        -> CanvasFileWrite
     /// A note at the end of a sidecar, which is created if it is not there.
     func append(_ text: String, to path: String) throws
 }
@@ -70,6 +75,11 @@ struct CanvasFileFailure: Error, LocalizedError, Equatable {
 }
 
 extension CanvasFiles {
+    /// A write nobody is told about: the editor's save, the sidecar's refusal tests.
+    func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite {
+        write(text, to: path, expect: expect, notify: false)
+    }
+
     /// An `.html` artifact's own bytes for the page, or nil — which fails the navigation and
     /// leaves the last render up (`CanvasSchemeHandler`). Why is logged: the page cannot say it.
     func document(_ artifact: URL) -> Data? {
@@ -98,8 +108,13 @@ struct BenchCanvasFiles: CanvasFiles {
         }
     }
 
-    func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite {
-        let request = BenchFileWriteRequest(id: Self.id(), path: path, text: text, expect: expect)
+    func write(
+        _ text: String, to path: String, expect: BenchFileExpect, notify: Bool
+    )
+        -> CanvasFileWrite
+    {
+        let request = BenchFileWriteRequest(
+            id: Self.id(), path: path, text: text, expect: expect, notify: notify)
         switch ask(request, answering: BenchFileWrite.self) {
         case .success(.written): return .written
         case let .success(.changed(data)): return .changed(data)

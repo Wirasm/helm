@@ -71,13 +71,16 @@ extension BenchDocument {
         drawers.first { $0.panes.contains { $0.id == pane } }
     }
 
-    /// What a pane shows, wherever it lives: a workspace's live bench or a drawer.
-    func surface(of pane: UUID) -> Surface? {
+    /// A pane, wherever it lives: a workspace's live bench or a drawer.
+    func pane(_ id: UUID) -> Pane? {
         let panes =
             workspaces.flatMap { $0.bench.columns.flatMap(\.slots).flatMap(\.panes) }
             + drawers.flatMap(\.panes)
-        return panes.first { $0.id == pane }?.surface
+        return panes.first { $0.id == id }
     }
+
+    /// What a pane shows, wherever it lives.
+    func surface(of pane: UUID) -> Surface? { self.pane(pane)?.surface }
 
     func workspace(at path: WorkspacePath) -> Workspace? {
         workspaces.first { WorkspacePath($0.path) == path }

@@ -181,6 +181,18 @@ writer names (`unchanged`) and answers `changed` with what is there instead of w
 `file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
 browser and the drawers still reach around the socket; they are the next slices.
 
+**And a canvas's live file (helm #532).** An HTML canvas has one JSON file beside it,
+`<stem>.data.json` (`bench_wire::live_file`), that the page and an agent both edit, and every
+write to it names the bytes its writer saw: `file/write` has no blind kind any more, so `unchanged`
+is the only one. The page writes through helm; an agent through `bench file write <path> --expect
+<file>` (and reads with `bench file read`), where exit 3 means somebody wrote since. The watcher
+covers the live file of each canvas, so helm offers an agent's write to the page. A page's write
+says `notify`, and benchd mails the canvas's opener itself (`benchd/src/live.rs`): the opener is
+on the pane in the document (`Pane::opener`, written from an agent's `pane/open`, newest wins), so
+the route needs no helm and survives its relaunch. Mail is batched per file for a second, names the
+changed JSON pointers and nothing else, comes from `operator`, and a mail that cannot go is logged
+as `live/unmailed` with why.
+
 **And benchd sees an agent waiting on the operator (M1, #357).** #283's failure was an agent
 parked at a prompt its hooks never reported, and nobody knew for hours. Each session's engine
 says when its output settles (500 ms of quiet, or 2 s into output that never stops: at a real

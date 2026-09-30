@@ -33,7 +33,14 @@ struct ToyBench {
         case .workspaceOpen, .workspaceActivate, .workspaceClose:
             return try applyWorkspace(request.verb, focus: focus)
         case let .paneOpen(workspace, surface):
-            return try open(surface, in: workspace ?? document.active, focus: focus)
+            let answer = try open(surface, in: workspace ?? document.active, focus: focus)
+            // benchd's rule, which helm reads: an agent's open of a canvas names its pane (#532).
+            if case let .agent(from?, _) = request.by, case .canvas = surface,
+                let opener = UUID(uuidString: from), let pane = answer.pane ?? answer.created
+            {
+                try changePane(pane) { $0.opener = opener }
+            }
+            return answer
         case let .paneSplit(workspace, direction, surface):
             return try split(
                 direction, surface ?? .terminal(agent: nil), in: workspace ?? document.active,

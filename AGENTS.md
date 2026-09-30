@@ -549,33 +549,40 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **Nothing tells an agent the operator edited, and that is the answer rather than an
     oversight.** He hands you a path; read it, and **read it again before you rewrite it** — the
     file's own mtime is the only fact, and it is the filesystem's rather than helm's. Nothing
-    wakes you when a file changes, same as the state latch. `notes/` in particular is his
+    wakes you when a markdown file changes; an HTML canvas's live file is the one that mails
+    you (below). `notes/` in particular is his
     directory: writing there is still wrong, for a reason about ownership rather than about what
     helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
     through `bench open`.
 - **helm touches no canvas file itself (M5c, #459).** Every read, write and append — the
-  artifact, a page's siblings, the `.notes.md` sidecar, the state latch — is a `file/*` verb to
-  benchd (`CanvasFiles`, `bench_wire::files`), on one machine as much as across two, and a change
-  arrives as benchd's `file/changed` on the follower: benchd polls each canvas file in its document
-  and its sidecar and reports one once it has held still, and helm reads every open canvas again
+  artifact, a page's siblings, the `.notes.md` sidecar, an HTML canvas's live file — is a `file/*`
+  verb to benchd (`CanvasFiles`, `bench_wire::files`), on one machine as much as across two, and a
+  change arrives as benchd's `file/changed` on the follower: benchd polls each canvas file in its
+  document, its sidecar and its live file and reports one once it has held still, and helm reads every open canvas again
   whenever its follower (re)connects, since a change nobody was listening for sent nothing. benchd holds the rules only it can: a
   sibling read is confined to the artifact's folder with symlinks followed on its own disk, a
   `file/write` never replaces a `.notes.md`, and `unchanged` writes only over the bytes named. A
   canvas benchd cannot reach says so rather than rendering nothing, and a read helm could not make
   is never taken for an absent file.
-- **A canvas talks back on three channels, and none of them is a notification.** `bench open` is
-  the way out; these are the ways in, and an agent that pushed a page and then waited for something to
-  happen has misread all three. **Nothing wakes you.** The skill (`.claude/skills/helm-canvas/`)
-  is the capability surface; this is which mechanisms exist and where each is argued.
-  - **The state latch — a page reporting on itself** (`Sources/Helm/Canvas/CanvasState.swift`,
-    #110, and `CONTEXT.md`'s *canvas state latch*). The page posts `{kind: "canvas.state", state:
-    {…}}` and helm writes it to `<name>.state.json` **beside the artifact** —
-    `motions.html` → `motions.state.json`, the same placement rule as `CanvasNotes.sidecarURL`.
-    **helm never reads what is in it**: the state is whatever the agent that wrote the page decided
-    those words mean, carried verbatim. A top-level **object**, at most **64 KB**, latest-wins —
-    the cap is about the reader, not the disk, because every byte lands in the next turn's context.
-    An array, a scalar or an oversize body is refused, and the refusal is in `log show` rather
-    than in the page.
+- **A canvas talks back on three channels.** `bench open` is the way out; these are the ways in.
+  The skill (`.claude/skills/helm-canvas/`) is the capability surface; this is which mechanisms
+  exist and where each is argued.
+  - **The live file — data the page and the agent both edit** (`LiveFile.swift`, #532, and
+    `CONTEXT.md`'s *live file*). An HTML canvas has one JSON file beside it, `tasks.html` →
+    `tasks.data.json` (`bench_wire::live_file`, `BenchLiveFile`, pinned by `file-verbs.json`). The
+    page reads it with `fetch` and writes it by posting `{kind: "canvas.data.write", data, base}` to
+    `helmCanvasData`, a page-world reply handler behind the bridge's main-frame and origin check;
+    helm sends `file/write` with `unchanged: base`, so a page that did not see the newest version
+    is answered `changed` with it and replays its change. An agent writes with `bench file write
+    <path> --expect <what it read>`, the same compare, and exit 3 means the operator changed it
+    since: **no writer replaces a version it has not seen**, which is what the spike found a plain
+    agent write did. benchd watches the file, and helm offers a change the page has not seen
+    through `helmCanvasUpdate` with `file` naming it; the page's own write is not offered back.
+    A page write says `notify` (default true), and **benchd, not helm, mails the canvas's opener**
+    (`benchd/src/live.rs`): one mail per file per second, naming the changed JSON pointers and
+    nothing about what they mean, from `operator`. `notify: false` is a page reporting on itself,
+    and wakes nobody — what the state latch it replaced was for (`helm-board` writes its report
+    this way). A mail that cannot go is `live/unmailed` in benchd's log, with why.
   - **`window.helmCanvasUpdate` — helm telling a live page its file changed**
     (`CanvasUpdate.swift`). **The contract is one sentence: a page that defines it is never
     reloaded by helm.** Not "reloaded less often" — never. Defining the function is the page saying
@@ -587,13 +594,13 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
   - **A mark the operator makes is mailed to the agent that opened the canvas**
     (`CanvasNoteRoute.swift`, `CanvasNoteCourier.swift`, #205). This is the one channel where
     something arrives without you asking, and it arrives as **mail** — so it reaches you the way
-    all mail does: through benchd. The route resolves **late**: helm records which *pane* opened the
-    canvas (`CanvasOrigin`, read off the `bench/changed` event's `by`; benchd fills in the pane of
-    an agent it spawned), never a pid or a handle, and asks benchd (`mail/who`) who is in that
-    pane at the moment the mark is made — a handle read at push time is stale the moment that agent
-    restarts, and mail to it is never read. Not persisted, for the same reason: a restored
-    terminal pane is a fresh empty shell, so an origin surviving a relaunch could only name
-    somebody else. **With no route
+    all mail does: through benchd. **The opener is benchd's record**: an agent's `pane/open` of a
+    canvas writes its pane onto the canvas pane in the document (`Pane.opener`, #532; benchd fills
+    in the pane of an agent it spawned), never a pid or a handle, so it survives a helm relaunch,
+    and the newest agent to open the canvas is the one it names. The route resolves **late**:
+    helm asks benchd (`mail/who`) who is in that pane at the moment the mark is made — a handle
+    read at open time is stale the moment that agent restarts, and mail to it is never read. The
+    live file's mail takes the same route, sent by benchd itself. **With no route
     the note goes to the clipboard and the pane says which of the two failures it was** — nobody
     pushed this canvas, or the agent that did is gone. A silent no-op is the worst outcome here,
     because the operator believes the note was sent.

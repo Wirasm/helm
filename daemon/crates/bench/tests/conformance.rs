@@ -6026,7 +6026,11 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
             _ => {}
         }
     }
-    assert_eq!(snippets.len(), 2, "open, then show and take away");
+    assert_eq!(
+        snippets.len(),
+        3,
+        "open, then show and take away, then change a live file"
+    );
 
     let home = TestHome::claim("canvas-skill");
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -6042,6 +6046,7 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
     ));
     let held = focused(&daemon.socket);
     let plan = artifact(&home.dir, "canvas-skill.md");
+    let live = saved(&home.dir, "tasks.data.json", "{\"items\": []}\n");
     let mut pane = String::new();
     for (i, snippet) in snippets.iter().enumerate() {
         let out = isolated("bash")
@@ -6051,6 +6056,7 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
             .env("BENCH_DIR", home.dir.join(".bench"))
             .env("BENCH", bench_bin())
             .env("ARTIFACT", &plan)
+            .env("LIVE", &live)
             .env("PANE", &pane)
             .output()
             .expect("run snippet");
@@ -6077,6 +6083,9 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
         3,
         "the canvas was closed"
     );
+    let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&live).unwrap())
+        .expect("the live file is still JSON");
+    assert_eq!(written["reply"], "on it", "the agent's change landed");
 }
 
 // ---------------------------------------------------------------------------
@@ -7784,24 +7793,7 @@ fn ok(answer: &serde_json::Value) -> &serde_json::Value {
 
 fn decoded(answer: &serde_json::Value) -> Vec<u8> {
     let text = ok(answer)["base64"].as_str().expect("bytes");
-    // Only the test decodes base64, so a small decoder beats a dependency.
-    let value = |c: u8| match c {
-        b'A'..=b'Z' => c - b'A',
-        b'a'..=b'z' => c - b'a' + 26,
-        b'0'..=b'9' => c - b'0' + 52,
-        b'+' => 62,
-        _ => 63,
-    };
-    let clean: Vec<u8> = text.bytes().filter(|&c| c != b'=').collect();
-    let mut out = Vec::new();
-    for chunk in clean.chunks(4) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, &c)| n | (u32::from(value(c)) << (18 - 6 * i)));
-        out.extend(&n.to_be_bytes()[1..chunk.len()]);
-    }
-    out
+    bench_wire::unbase64(text).expect("base64")
 }
 
 /// A benchd on TCP and a canvas folder holding `plan.md` (`# Plan\n`), canonical.
@@ -7899,10 +7891,10 @@ fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
         "written"
     );
     assert_eq!(fs::read_to_string(&plan).unwrap(), "# Back\n");
-    assert_eq!(
-        ok(&write("{}", serde_json::json!({ "kind": "any" })))["kind"],
-        "written"
-    );
+    // A write that names no expectation is refused: every writer says what it saw (#532).
+    let blind = write("{}", serde_json::json!({ "kind": "any" }));
+    assert_eq!(blind["status"], "refused", "{blind}");
+    assert_eq!(fs::read_to_string(&plan).unwrap(), "# Back\n");
     assert!(
         fs::read_dir(&dir).unwrap().all(|e| !e
             .unwrap()
@@ -7926,7 +7918,7 @@ fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
     let clobber = tcp_verb(
         port,
         "file/write",
-        serde_json::json!({ "path": p(&notes), "text": "", "expect": { "kind": "any" } }),
+        serde_json::json!({ "path": p(&notes), "text": "", "expect": unchanged("## one\n## two\n") }),
     );
     assert_eq!(clobber["status"], "refused", "{clobber}");
     // Other spellings of the same file are the sidecar too.
@@ -7938,7 +7930,7 @@ fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
         let answer = tcp_verb(
             port,
             "file/write",
-            serde_json::json!({ "path": spelled, "text": "", "expect": { "kind": "any" } }),
+            serde_json::json!({ "path": spelled, "text": "", "expect": unchanged("") }),
         );
         assert_eq!(answer["status"], "refused", "{spelled}: {answer}");
     }
@@ -7947,10 +7939,7 @@ fn file_write_and_append_over_tcp_keep_the_canvas_rules() {
     // A document larger than an ordinary request is accepted by the verbs that carry one;
     // every other verb keeps the 64 KB cap.
     let big = "x".repeat(1_000_000);
-    assert_eq!(
-        ok(&write(&big, serde_json::json!({ "kind": "any" })))["kind"],
-        "written"
-    );
+    assert_eq!(ok(&write(&big, unchanged("# Back\n")))["kind"], "written");
     assert_eq!(fs::read(&plan).unwrap().len(), 1_000_000);
     let padded = tcp_verb(
         port,
@@ -8027,4 +8016,266 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
         vec![plan.clone(), notes.clone()],
         "one report each, and nothing else"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The live file (helm #532): an HTML canvas's `<stem>.data.json`, edited by the page and the agent
+// ---------------------------------------------------------------------------
+
+/// `bench` with `input` on its stdin.
+fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
+    let mut child = isolated(bench_bin())
+        .env("HOME", home)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bench");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// A `file/write` as helm sends one for the page: against the bytes the page saw.
+fn page_write(socket: &Path, path: &str, text: &str, base: &str, notify: bool) -> String {
+    let (reply, _) = raw_request(
+        socket,
+        "file/write",
+        serde_json::json!({ "path": path, "text": text,
+            "expect": { "kind": "unchanged", "text": base }, "notify": notify }),
+    );
+    ok(&reply)["kind"].as_str().unwrap().to_string()
+}
+
+/// An agent with a mailbox in `pane`: a process on a real terminal whose hook reports from it.
+fn agent_in(home: &Path, socket: &Path, pane: &str) -> String {
+    let (_, pid) = terminal_process(home, "opener");
+    hook_verb(
+        socket,
+        serde_json::json!({"harness": "claude", "event": "SessionStart",
+            "session": "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", "cwd": "/tmp", "pid": pid,
+            "pane": pane}),
+    )["handle"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn canvas_pane<'a>(doc: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    doc["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|w| w["bench"]["columns"].as_array().unwrap())
+        .flat_map(|c| c["slots"].as_array().unwrap())
+        .flat_map(|s| s["panes"].as_array().unwrap())
+        .find(|p| p["surface"]["source"]["path"] == path)
+        .unwrap_or_else(|| panic!("no pane shows {path}: {doc}"))
+}
+
+/// The bytes an agent read, as `--expect` wants them: a file.
+fn saved(home: &Path, name: &str, text: &str) -> String {
+    let path = home.join(name);
+    fs::write(&path, text).unwrap();
+    path.display().to_string()
+}
+
+#[test]
+fn an_agents_write_over_a_version_it_has_not_read_is_refused() {
+    let home = TestHome::claim("live-cas");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let data = saved(h, "tasks.data.json", "{\"done\": false}\n");
+
+    // The agent reads the file, and keeps what it read.
+    let read = bench(h, &["file", "read", &data]);
+    assert_eq!(read.code, 0, "{}", read.stderr);
+    assert_eq!(read.stdout, "{\"done\": false}\n", "the bytes, exactly");
+    let base = saved(h, "base.json", &read.stdout);
+
+    // The operator ticks the box on the page.
+    let ticked = "{\n  \"done\" : true\n}\n";
+    assert_eq!(
+        page_write(&daemon.socket, &data, ticked, &read.stdout, true),
+        "written"
+    );
+
+    // The agent writes back its copy: refused, and his edit is still there.
+    let stale = bench_stdin(
+        h,
+        &["file", "write", &data, "--expect", &base],
+        "{\"done\": false, \"note\": \"mine\"}\n",
+    );
+    assert_eq!(stale.code, 3, "{}", stale.stderr);
+    assert!(
+        stale.stderr.contains("changed since you read it"),
+        "{}",
+        stale.stderr
+    );
+    assert_eq!(fs::read_to_string(&data).unwrap(), ticked);
+
+    // Read again, change what is there: written.
+    let again = bench(h, &["file", "read", &data]);
+    let base = saved(h, "base.json", &again.stdout);
+    let merged = bench_stdin(
+        h,
+        &["file", "write", &data, "--expect", &base],
+        "{\"done\": true, \"note\": \"mine\"}\n",
+    );
+    assert_eq!(merged.code, 0, "{}", merged.stderr);
+    assert_eq!(
+        fs::read_to_string(&data).unwrap(),
+        "{\"done\": true, \"note\": \"mine\"}\n"
+    );
+
+    // No --expect is refused before anything is sent; a new file is --expect /dev/null.
+    let blind = bench_stdin(h, &["file", "write", &data], "{}");
+    assert_eq!(blind.code, 3, "{}", blind.stderr);
+    assert!(blind.stderr.contains("--expect"), "{}", blind.stderr);
+    let fresh = h.join("fresh.data.json").display().to_string();
+    let missing = bench(h, &["file", "read", &fresh]);
+    assert_eq!(missing.code, 3, "{}", missing.stderr);
+    let created = bench_stdin(
+        h,
+        &["file", "write", &fresh, "--expect", "/dev/null"],
+        "{}\n",
+    );
+    assert_eq!(created.code, 0, "{}", created.stderr);
+    assert_eq!(fs::read_to_string(&fresh).unwrap(), "{}\n");
+}
+
+#[test]
+fn a_page_edit_mails_the_canvas_opener_once_per_window_naming_every_pointer() {
+    let home = TestHome::claim("live-mail");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (_, right, _) = working_bench(&daemon.socket);
+    let handle = agent_in(h, &daemon.socket, &right);
+    let page = artifact(h, "tasks.html");
+    let data = page.replace("tasks.html", "tasks.data.json");
+    fs::write(&data, r#"{"a":0,"b":0,"c":0}"#).unwrap();
+    let opened = bench_as(h, &["open", &page], &[("HELM_PANE", &right)]);
+    assert_eq!(opened.code, 0, "{}", opened.stderr);
+
+    let mails = || -> Vec<serde_json::Value> {
+        event_kinds(h)
+            .into_iter()
+            .filter(|(kind, d)| kind == "mail/sent" && d["to"] == handle.as_str())
+            .map(|(_, d)| d)
+            .collect()
+    };
+    // Three clicks inside one window, one of them the page reporting on itself (`notify:
+    // false`), and one that only reformats the file.
+    let mut base = fs::read_to_string(&data).unwrap();
+    for (text, notify) in [
+        (r#"{"a":1,"b":0,"c":0}"#, true),
+        (r#"{"a":1,"b":1,"c":0}"#, true),
+        (r#"{"a":1,"b":1,"c":1}"#, false),
+        ("{\n  \"c\": 1, \"b\": 1, \"a\": 1\n}\n", true),
+    ] {
+        assert_eq!(
+            page_write(&daemon.socket, &data, text, &base, notify),
+            "written"
+        );
+        base = text.to_string();
+    }
+    wait_until("the opener's mail", Duration::from_secs(5), || {
+        !mails().is_empty()
+    });
+    std::thread::sleep(Duration::from_millis(1500));
+    let sent = mails();
+    assert_eq!(sent.len(), 1, "one mail for the window: {sent:?}");
+    assert_eq!(sent[0]["from"], "operator");
+    let body = fs::read_to_string(sent[0]["path"].as_str().unwrap()).unwrap();
+    assert!(
+        body.contains(&format!("changed {data} on the canvas tasks.html")),
+        "{body}"
+    );
+    assert!(
+        body.contains("Changed: /a, /b\n"),
+        "the union, and not /c: {body}"
+    );
+
+    // A page reporting on itself alone mails nobody.
+    let quiet = r#"{"a":1,"b":1,"c":2}"#;
+    assert_eq!(
+        page_write(&daemon.socket, &data, quiet, &base, false),
+        "written"
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(mails().len(), 1, "notify: false sends nothing");
+
+    // A canvas the operator opened himself has nobody to tell, and the log says so.
+    let own = artifact(h, "own.html");
+    let own_data = own.replace("own.html", "own.data.json");
+    assert_eq!(bench(h, &["open", &own]).code, 0);
+    assert_eq!(
+        page_write(&daemon.socket, &own_data, "{\"x\":1}", "", true),
+        "written"
+    );
+    wait_until("the unmailed record", Duration::from_secs(5), || {
+        event_kinds(h).iter().any(|(kind, d)| {
+            kind == "live/unmailed"
+                && d["path"] == own_data.as_str()
+                && d["why"].as_str().unwrap().contains("no agent opened")
+        })
+    });
+}
+
+#[test]
+fn the_opener_is_on_the_pane_in_the_document_and_survives_a_restart() {
+    let home = TestHome::claim("live-opener");
+    let h = &home.dir;
+    let page = artifact(h, "tasks.html");
+    let right = {
+        let daemon = DaemonGuard::start(h, None);
+        let (first, right, _) = working_bench(&daemon.socket);
+        // An open from no agent's pane names nobody.
+        assert_eq!(bench(h, &["open", &page]).code, 0);
+        assert!(canvas_pane(&document(&daemon.socket), &page)["opener"].is_null());
+        // An agent's open names its pane, and the newest agent wins.
+        assert_eq!(
+            bench_as(h, &["open", &page], &[("HELM_PANE", &first)]).code,
+            0
+        );
+        assert_eq!(
+            bench_as(h, &["open", &page], &[("HELM_PANE", &right)]).code,
+            0
+        );
+        assert_eq!(
+            canvas_pane(&document(&daemon.socket), &page)["opener"],
+            right.as_str()
+        );
+        // Opened again from no agent's pane: the route stays.
+        assert_eq!(bench(h, &["open", &page]).code, 0);
+        assert_eq!(
+            canvas_pane(&document(&daemon.socket), &page)["opener"],
+            right.as_str()
+        );
+        right
+    };
+    let daemon = DaemonGuard::start(h, None);
+    assert_eq!(
+        canvas_pane(&document(&daemon.socket), &page)["opener"],
+        right.as_str(),
+        "read back from bench.json"
+    );
+    // The live file is watched once the canvas is open: an agent's write reaches helm.
+    let data = page.replace("tasks.html", "tasks.data.json");
+    fs::write(&data, "{}").unwrap();
+    wait_until("the live file's change", Duration::from_secs(5), || {
+        event_kinds(h)
+            .iter()
+            .any(|(kind, d)| kind == "file/changed" && d["path"] == data.as_str())
+    });
 }

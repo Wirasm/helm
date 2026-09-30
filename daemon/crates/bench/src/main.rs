@@ -27,6 +27,7 @@ use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod attach;
+mod files;
 mod verbs;
 
 fn main() {
@@ -36,6 +37,7 @@ fn main() {
     let code = match raw.first().map(String::as_str) {
         Some("hook") => hook(raw.get(1).map(String::as_str)),
         Some("wiring") => wiring(raw.get(1).map(String::as_str)),
+        _ if files::owns(&raw) => files::run(&raw),
         _ if verbs::owns(&raw) => verbs::run(&raw),
         _ => run(),
     };
@@ -90,6 +92,10 @@ fn usage() -> &'static str {
      \x20     close <session>                     drain-then-die the session (a pane id closes\n\
      \x20                                         the pane, above)\n\
      \x20     resume <session>                    re-enter an exited session's runtime state\n\
+     \x20     file read <path>                    the file's bytes on stdout, exactly\n\
+     \x20     file write <path> --expect <f>      stdin over <path>, only if it still holds what\n\
+     \x20                                         <f> holds (what you read); exit 3 when it changed\n\
+     \x20                                         since. A new file: --expect /dev/null\n\
      \x20     mail send --to <h> --body <text>    deliver mail; a live recipient is woken\n\
      \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\

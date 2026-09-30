@@ -32,8 +32,8 @@ pub use hook::{HookArgs, HookReply};
 mod files;
 pub use files::{
     Expect, FILE_CHANGED, FILE_READ_MAX_BYTES, FILE_REQUEST_MAX_BYTES, FileAppendArgs, FileChanged,
-    FileRead, FileReadArgs, FileWrite, FileWriteArgs, NOTES_SUFFIX, base64, is_notes_sidecar,
-    notes_sidecar,
+    FileRead, FileReadArgs, FileWrite, FileWriteArgs, LIVE_SUFFIX, NOTES_SUFFIX, base64,
+    is_notes_sidecar, live_file, notes_sidecar, unbase64,
 };
 
 mod just;
@@ -52,7 +52,6 @@ pub use sessions::{
 
 /// A request line larger than this is refused, not read. The cap is about the reader:
 /// every accepted byte can end up in an event log an agent later pulls into context.
-/// Same argument as helm's 64 KB canvas-state cap.
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 // ---------------------------------------------------------------------------

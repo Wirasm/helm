@@ -68,8 +68,12 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
                         send: { to, _, _, _ in bench.sent.append(to) })),
                 client: client)
         }
+        server = rig.server
         return (rig.model, rig.terminals)
     }
+
+    /// The toy benchd the last `mounted()` drew from, for a second helm to follow.
+    private var server: FakeBenchd?
 
     /// An agent in `terminal` putting the canvas on the bench: `bench open`, which benchd logs as
     /// a `pane/open` from that pane. helm reads the origin off that event (`remember`), which
@@ -169,29 +173,59 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
             "an agent that happens to be running is not an agent that asked to hear")
     }
 
-    /// M3: `bench open` from an agent. benchd logs the verb with the pane the agent runs in, and
-    /// helm reads that off the follow stream (`remember`), so the mark is routed exactly as a
-    /// push's is. The same frame by the operator records nothing.
+    /// M3: `bench open` from an agent. benchd records the pane it runs in on the canvas pane
+    /// (`Pane.opener`), and the mark is routed from that record. The same verb by the operator
+    /// names nobody.
     func testAMarkOnACanvasAnAgentOpenedWithBenchReachesThatAgent() async throws {
         let (model, manager) = try mounted()
         let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
         bench.agents[terminal.id] = handle
-        let agent = BenchActor.agent(pane: terminal.id.uuidString.lowercased(), handle: "sild-611a")
         let pane = try XCTUnwrap(
             model.send(
                 .paneOpen(workspace: workspace.value, surface: .canvas(path: canvas.path)),
-                by: agent))
-
-        model.remember(BenchChange(verb: "pane/open", by: .operatorGesture, pane: pane))
-        model.remember(BenchChange(verb: "pane/close", by: agent, pane: pane))
+                by: .operatorGesture))
         let canvasPane = try XCTUnwrap(model.bench?.pane(pane))
-        try mark("the operator opened nothing", on: model.canvas(for: canvasPane))
-        XCTAssertEqual(messages(in: handle), [], "only an agent's pane/open names an origin")
+        try mark("the operator opened this", on: model.canvas(for: canvasPane))
+        XCTAssertEqual(messages(in: handle), [], "only an agent's pane/open names an opener")
 
-        model.remember(BenchChange(verb: "pane/open", by: agent, pane: pane))
+        let agent = BenchActor.agent(pane: terminal.id.uuidString.lowercased(), handle: "sild-611a")
+        model.send(
+            .paneOpen(workspace: workspace.value, surface: .canvas(path: canvas.path)), by: agent)
         try mark("this reaches the agent that opened it", on: model.canvas(for: canvasPane))
         XCTAssertEqual(messages(in: handle).count, 1)
         XCTAssertEqual(messages(in: otherHandle), [])
+    }
+
+    /// **A helm relaunch keeps the route (#532).** The opener is benchd's record, so a helm that
+    /// starts fresh against the same benchd routes a mark exactly as the one that saw the open
+    /// did. Before #532 the route was helm's memory, and this mark went to the clipboard.
+    func testAMarkAfterAHelmRelaunchStillReachesTheAgentThatOpenedTheCanvas() async throws {
+        let (model, manager) = try mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        bench.agents[terminal.id] = handle
+        try await open(from: terminal, model: model)
+
+        // helm quits and comes back: a new model, drawing the same benchd's document.
+        let bench = self.bench
+        let client = BenchClient(endpoint: try XCTUnwrap(server).endpoint)
+        addTeardownBlock { @MainActor in client.stop() }
+        let relaunched = WorkbenchModel(
+            terminals: TerminalManager(),
+            notes: CanvasNoteCourier(
+                mail: BenchMailbox(
+                    who: { pane in
+                        bench.agents[pane].map {
+                            BenchMailWho(
+                                handle: $0, harness: "claude", session: "s-\($0.value)", pid: 1)
+                        }
+                    },
+                    send: { to, _, _, _ in bench.sent.append(to) })),
+            client: client)
+        XCTAssertNotNil(client.document(atLeast: 1, within: 5))
+        try mark("helm restarted in between", on: try pushedCanvas(of: relaunched))
+
+        XCTAssertEqual(messages(in: handle).count, 1)
+        XCTAssertEqual(copied, [], "routed, so nothing went to the clipboard")
     }
 
     /// A canvas the operator opened by hand has no origin, so there is no route — and the pane
