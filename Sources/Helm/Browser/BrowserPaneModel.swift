@@ -23,6 +23,10 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     @Published private(set) var status: Status = .connecting
     @Published private(set) var tabs = BrowserTabs()
+    /// The shown tab, or one of its frames, is loading.
+    @Published private(set) var loading = false
+    /// Bumped to ask the view to put the keyboard in the address field (⌘L, a new tab).
+    @Published private(set) var addressRequests = 0
     /// Links the operator ⌘-clicked before the browser was reachable, oldest first. Each
     /// opens as a tab once the pane connects, so a click made while benchd's browser is
     /// still starting is not lost.
@@ -42,6 +46,12 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     private var viewport = Viewport(size: CGSize(width: 1280, height: 800), scale: 2)
     private var viewportTask: Task<Void, Never>?
     private var lastFrame: BrowserFrame?
+    /// Frames of the shown tab between `frameStartedLoading` and `frameStoppedLoading`.
+    private var loadingFrames: Set<String> = []
+    /// Whether this connection's tab list is in. `Target.setDiscoverTargets` replays a
+    /// `targetCreated` for every tab that already exists, and those must not read as tabs an
+    /// agent just opened, so target events wait for the list.
+    private var listed = false
 
     struct Viewport: Equatable {
         var size: CGSize
@@ -65,15 +75,16 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     // MARK: - Finding the browser
 
-    /// Ask benchd for the browser once a second while disconnected. A refused ask is one short
-    /// round trip, and it is the only signal there is: benchd answers with a connection once a
-    /// browser runs, and says why not until then.
+    /// Ask benchd for the browser once a second while disconnected, and for the tabs' titles
+    /// once a second while connected. A refused ask is one short round trip, and it is the only
+    /// signal there is: benchd answers with a connection once a browser runs, and says why not
+    /// until then.
     private func startWatching() {
         watch?.cancel()
         watch = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if connection == nil { connect() }
+                if connection == nil { connect() } else if listed { refreshTitles() }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -94,6 +105,7 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             guard let self, self.connection === connection else { return }
             self.connection = nil
             self.session = nil
+            self.listed = false
             switch ending {
             case let .refused(why):
                 self.status = .waiting(Self.waiting(why))
@@ -105,15 +117,32 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         connection.open()
         Task {
             do {
-                let listed = try await connection.call(
-                    "Target.getTargets", returning: TargetInfos.self)
+                // Discovery first, so a tab opened from here on is either in the list or an
+                // event after it. One opened in the instant between is picked up by its next
+                // `targetInfoChanged`, which `changed` treats as a creation.
                 try await connection.call("Target.setDiscoverTargets", Discover(discover: true))
-                apply(tabs.replaceAll(with: listed.targetInfos))
+                let reported = try await connection.call(
+                    "Target.getTargets", returning: TargetInfos.self)
+                listed = true
+                apply(tabs.replaceAll(with: reported.targetInfos))
                 status = .connected
                 openPendingLinks()
             } catch {
                 connection.close("could not read the browser's tabs: \(error)")
             }
+        }
+    }
+
+    /// The strip's titles, asked for again (`BrowserTabs.retitle`). One short round trip a
+    /// second, on the tick that already watches the connection.
+    private func refreshTitles() {
+        guard let connection else { return }
+        Task {
+            guard
+                let reported = try? await connection.call(
+                    "Target.getTargets", returning: TargetInfos.self)
+            else { return }
+            tabs.retitle(from: reported.targetInfos)
         }
     }
 
@@ -137,12 +166,22 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
             guard let image = BrowserFrame(frame) else { return }
             lastFrame = image
             surface?.show(image)
-        case "Target.targetCreated":
+        case "Target.targetCreated" where listed:
             if let info = event.params(TargetEvent.self) { apply(tabs.created(info.targetInfo)) }
-        case "Target.targetInfoChanged":
+        case "Target.targetInfoChanged" where listed:
             if let info = event.params(TargetEvent.self) { apply(tabs.changed(info.targetInfo)) }
-        case "Target.targetDestroyed":
+        case "Target.targetDestroyed" where listed:
             if let gone = event.params(TargetGone.self) { apply(tabs.destroyed(gone.targetId)) }
+        case "Page.frameStartedLoading", "Page.frameStoppedLoading":
+            guard event.sessionId == session, let frame = event.params(FrameEvent.self) else {
+                return
+            }
+            if event.method == "Page.frameStartedLoading" {
+                loadingFrames.insert(frame.frameId)
+            } else {
+                loadingFrames.remove(frame.frameId)
+            }
+            if loading != !loadingFrames.isEmpty { loading = !loadingFrames.isEmpty }
         default:
             break
         }
@@ -152,8 +191,20 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
         switch decision {
         case .stay: break
         case let .show(target): attach(to: target)
-        case .openBlank:
-            connection?.send("Target.createTarget", CreateTarget(url: "about:blank"))
+        case .openBlank: createTab("about:blank")
+        }
+    }
+
+    /// A tab this pane asked for: shown once the browser says which it is (`ownCreated`), and
+    /// never marked as opened from outside.
+    private func createTab(_ url: String) {
+        guard let connection else { return }
+        Task {
+            guard
+                let created = try? await connection.call(
+                    "Target.createTarget", CreateTarget(url: url), returning: Created.self)
+            else { return }
+            apply(tabs.ownCreated(created.targetId))
         }
     }
 
@@ -162,6 +213,8 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     private func attach(to target: String) {
         guard let connection else { return }
         let previous = session
+        loadingFrames.removeAll()
+        loading = false
         Task {
             if let previous {
                 connection.send("Page.stopScreencast", session: previous)
@@ -288,26 +341,57 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     func goBack() { evaluate("history.back()") }
     func goForward() { evaluate("history.forward()") }
     func reload() { connection?.send("Page.reload", session: session) }
+    func stopLoading() { connection?.send("Page.stopLoading", session: session) }
 
     func show(tab target: String) { apply(tabs.show(target)) }
 
+    /// ⌘1–⌘8 pick a tab by position, and ⌘9 the last one, as in Chrome.
+    func show(tabAt index: Int) {
+        let all = tabs.tabs
+        guard let tab = index >= 8 ? all.last : (all.indices.contains(index) ? all[index] : nil)
+        else { return }
+        show(tab: tab.targetId)
+    }
+
+    /// A new blank tab, shown, with the keyboard in its address field — Chrome's ⌘T.
     func newTab() {
-        connection?.send("Target.createTarget", CreateTarget(url: "about:blank"))
+        createTab("about:blank")
+        focusAddress()
+    }
+
+    /// Closes the tab in the shared browser. Its destroy event decides what shows next.
+    func close(tab target: String) {
+        connection?.send("Target.closeTarget", CloseTarget(targetId: target))
+    }
+
+    func focusAddress() { addressRequests += 1 }
+
+    func toggleFollow() { tabs.follow.toggle() }
+
+    /// A browser key (#542), from the pane holding the keyboard (`BrowserKeyboard`).
+    func perform(_ command: BrowserCommand) {
+        switch command {
+        case .newTab: newTab()
+        case .closeTab: if let shown = tabs.showing { close(tab: shown) }
+        case .focusAddress: focusAddress()
+        case .reload: reload()
+        case .back: goBack()
+        case .forward: goForward()
+        case let .showTab(index): show(tabAt: index)
+        }
     }
 
     /// Open `url` as a new tab of the shared browser — a ⌘-clicked link (#376). A new tab
     /// rather than the one on screen, so a page an agent is working in is not navigated away
-    /// under it; `BrowserTabs` follows the new tab, so the pane shows it.
+    /// under it; the operator clicked it, so the pane shows it.
     func open(_ url: URL) {
         pendingLinks.append(url)
         if status == .connected { openPendingLinks() }
     }
 
     private func openPendingLinks() {
-        guard let connection else { return }
-        for url in pendingLinks {
-            connection.send("Target.createTarget", CreateTarget(url: url.absoluteString))
-        }
+        guard connection != nil else { return }
+        for url in pendingLinks { createTab(url.absoluteString) }
         pendingLinks.removeAll()
     }
 
@@ -319,36 +403,14 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
 
     // MARK: - Wire shapes
 
-    struct MouseEvent: Encodable, Equatable {
-        let type: String
-        let x: Double
-        let y: Double
-        var button: String = "none"
-        var buttons: Int = 0
-        var clickCount: Int = 0
-        var modifiers: Int = 0
-        var deltaX: Double?
-        var deltaY: Double?
-    }
-
-    struct KeyEvent: Encodable, Equatable {
-        let type: String
-        let modifiers: Int
-        let key: String
-        let code: String
-        let windowsVirtualKeyCode: Int
-        let nativeVirtualKeyCode: Int
-        var text: String?
-        var unmodifiedText: String?
-        var autoRepeat: Bool?
-        var commands: [String]?
-    }
-
     private struct TargetInfos: Decodable { let targetInfos: [BrowserTab] }
     private struct TargetEvent: Decodable { let targetInfo: BrowserTab }
     private struct TargetGone: Decodable { let targetId: String }
     private struct Discover: Encodable { let discover: Bool }
     private struct CreateTarget: Encodable { let url: String }
+    private struct Created: Decodable { let targetId: String }
+    private struct CloseTarget: Encodable { let targetId: String }
+    private struct FrameEvent: Decodable { let frameId: String }
     private struct Attach: Encodable {
         let targetId: String
         let flatten: Bool
@@ -388,6 +450,36 @@ final class BrowserPaneModel: ObservableObject, BrowserInputSink {
     private struct Evaluated<Value: Decodable>: Decodable {
         struct Remote: Decodable { let value: Value? }
         let result: Remote
+    }
+}
+
+// MARK: - Input wire shapes
+
+/// What the surface sends in, shaped as CDP's `Input.dispatchMouseEvent`/`dispatchKeyEvent`.
+extension BrowserPaneModel {
+    struct MouseEvent: Encodable, Equatable {
+        let type: String
+        let x: Double
+        let y: Double
+        var button: String = "none"
+        var buttons: Int = 0
+        var clickCount: Int = 0
+        var modifiers: Int = 0
+        var deltaX: Double?
+        var deltaY: Double?
+    }
+
+    struct KeyEvent: Encodable, Equatable {
+        let type: String
+        let modifiers: Int
+        let key: String
+        let code: String
+        let windowsVirtualKeyCode: Int
+        let nativeVirtualKeyCode: Int
+        var text: String?
+        var unmodifiedText: String?
+        var autoRepeat: Bool?
+        var commands: [String]?
     }
 }
 

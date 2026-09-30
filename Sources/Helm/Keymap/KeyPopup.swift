@@ -19,16 +19,16 @@ enum KeyPopupContent {
     }
 
     static func of(
-        _ table: [KeyBinding], manage: ManageKey, terminalFocused: Bool
+        _ table: [KeyBinding], manage: ManageKey, focus: KeyFocus
     ) -> Sections {
         let layer = table.filter { manage.holds($0.modifiers) }.map { row in
             KeyBinding(
                 row.trigger, row.modifiers.subtracting(manage.modifiers), row.action,
                 when: row.when, hint: row.hint, menu: row.menu)
         }
-        let held = KeyHints.visible(terminalFocused: terminalFocused, in: layer)
+        let held = KeyHints.visible(focus: focus, in: layer)
         let other = KeyHints.visible(
-            terminalFocused: terminalFocused, in: table.filter { !manage.holds($0.modifiers) })
+            focus: focus, in: table.filter { !manage.holds($0.modifiers) })
         return Sections(
             held: held, other: other.filter { hint in !held.contains { $0.label == hint.label } })
     }
@@ -39,8 +39,8 @@ enum KeyPopupContent {
 struct KeyPopup: View {
     @ObservedObject var keymap: Keymap
     @ObservedObject var hold: ManageHold
-    /// Which keys can fire depends on whether a terminal has the keyboard.
-    @StateObject private var focus = TerminalFocusWatch()
+    /// Which keys can fire depends on what holds the keyboard.
+    @StateObject private var focus = KeyFocusWatch()
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -59,7 +59,7 @@ struct KeyPopup: View {
         KeyPopupPanel(
             manage: keymap.manage,
             sections: KeyPopupContent.of(
-                keymap.table, manage: keymap.manage, terminalFocused: focus.terminalFocused))
+                keymap.table, manage: keymap.manage, focus: focus.focus))
     }
 }
 

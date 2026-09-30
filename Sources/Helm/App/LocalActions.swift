@@ -60,6 +60,8 @@ final class LocalActions: ActionPerformer {
             KeepAwake.shared.toggle()
         case .toggleCommandPalette:
             palette.toggle()
+        case let .browser(command):
+            BrowserKeyboard.holder()?.perform(command)
         }
     }
 }

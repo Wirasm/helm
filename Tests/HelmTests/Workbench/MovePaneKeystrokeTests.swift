@@ -21,13 +21,13 @@ final class MovePaneKeystrokeTests: XCTestCase {
             XCTAssertEqual(
                 KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option, .shift],
-                    terminalFocused: true, in: KeyBindings.all)?.action,
+                    focus: .terminal, in: KeyBindings.all)?.action,
                 .verb(.moveFocused(direction)),
                 "⇧⌥⌘ keyCode \(keyCode)")
             XCTAssertEqual(
                 KeyBindings.match(
                     characters: nil, keyCode: keyCode, modifiers: [.command, .option],
-                    terminalFocused: true, in: KeyBindings.all)?.action,
+                    focus: .terminal, in: KeyBindings.all)?.action,
                 .verb(.stepFocus(direction)),
                 "…and without shift it is still focus movement, keyCode \(keyCode)")
         }

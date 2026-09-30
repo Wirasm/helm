@@ -44,7 +44,7 @@ enum CommandList {
     private static func actions(_ table: [KeyBinding]) -> [Command] {
         var seen: [KeyBinding.Action] = []
         return table.compactMap { row in
-            guard !seen.contains(row.action), !isIndexed(row.action),
+            guard !seen.contains(row.action), !isIndexed(row.action), !isBrowser(row.action),
                 row.action != .local(.toggleCommandPalette)
             else { return nil }
             seen.append(row.action)
@@ -70,6 +70,12 @@ enum CommandList {
         case .verb(.showTab), .verb(.activateWorkspace): true
         default: false
         }
+    }
+
+    /// A browser key acts on the browser pane holding the keyboard, and while the palette is
+    /// open the palette holds it: such a line could only ever do nothing.
+    private static func isBrowser(_ action: KeyBinding.Action) -> Bool {
+        if case .local(.browser) = action { true } else { false }
     }
 
     private static func workspaces(_ document: BenchDocument?, table: [KeyBinding]) -> [Command] {
@@ -174,6 +180,21 @@ extension LocalAction {
         case .toggleKeepAwake: "Keep Awake"
         case .toggleZoom: "Zoom Pane"
         case .toggleCommandPalette: "Command Palette"
+        case let .browser(command): command.title
+        }
+    }
+}
+
+extension BrowserCommand {
+    var title: String {
+        switch self {
+        case .newTab: "New Browser Tab"
+        case .closeTab: "Close Browser Tab"
+        case .focusAddress: "Browser Address"
+        case .reload: "Reload Page"
+        case .back: "Back"
+        case .forward: "Forward"
+        case let .showTab(index): "Browser Tab \(index + 1)"
         }
     }
 }

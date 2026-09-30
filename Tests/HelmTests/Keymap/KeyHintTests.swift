@@ -10,21 +10,32 @@ import XCTest
 /// the renderer and nothing about the pop-up. Fixtures appear only where a rule needs a shape
 /// the real map does not happen to contain.
 final class KeyHintTests: XCTestCase {
-    private func keys(_ label: String, terminalFocused: Bool) -> String? {
-        KeyHints.visible(terminalFocused: terminalFocused, in: KeyBindings.all).first {
+    private func keys(_ label: String, focus: KeyFocus) -> String? {
+        KeyHints.visible(focus: focus, in: KeyBindings.all).first {
             $0.label == label
         }?.keys
     }
 
     // MARK: - Focus
 
+    /// ⌘1–9 is a pane tab everywhere but a browser pane, where it is the browser's tab — and
+    /// the hint says whichever the keystroke would actually do.
+    func testDigitHintsFollowTheBrowser() {
+        XCTAssertEqual(keys("pane", focus: .other), "⌘1–9")
+        XCTAssertNil(keys("tab", focus: .other))
+        XCTAssertEqual(keys("tab", focus: .browser), "⌘1–9")
+        XCTAssertNil(keys("pane", focus: .browser))
+        XCTAssertEqual(keys("new tab", focus: .browser), "⌘T")
+        XCTAssertEqual(keys("back · forward", focus: .browser), "⌘[ ⌘]")
+    }
+
     /// The case the hints exist for. ⌃1–9 is the workspace switcher only while focus is
     /// away from the grid — inside it those are the shell's own control codes — so a fixed
     /// hint would be wrong in whichever state it was not written for.
     func testWorkspaceHintFollowsFocus() {
-        XCTAssertEqual(keys("workspace", terminalFocused: false), "⌃1–9")
+        XCTAssertEqual(keys("workspace", focus: .other), "⌃1–9")
         XCTAssertEqual(
-            keys("workspace", terminalFocused: true), "⌥⌘1–9",
+            keys("workspace", focus: .terminal), "⌥⌘1–9",
             "inside a terminal the fallback binding is the one that fires"
         )
     }
@@ -32,10 +43,10 @@ final class KeyHintTests: XCTestCase {
     /// A command that cannot fire is not advertised, in either direction: ⌘↑↓ exists only
     /// inside a terminal, ⌃←→ only outside one.
     func testHintsDisappearWhereTheirBindingCannotFire() {
-        XCTAssertEqual(keys("turn", terminalFocused: true), "⌘↑↓")
-        XCTAssertNil(keys("turn", terminalFocused: false))
-        XCTAssertEqual(keys("cycle", terminalFocused: false), "⌃←→")
-        XCTAssertNil(keys("cycle", terminalFocused: true))
+        XCTAssertEqual(keys("turn", focus: .terminal), "⌘↑↓")
+        XCTAssertNil(keys("turn", focus: .other))
+        XCTAssertEqual(keys("cycle", focus: .other), "⌃←→")
+        XCTAssertNil(keys("cycle", focus: .terminal))
     }
 
     // MARK: - Rendering
@@ -44,15 +55,15 @@ final class KeyHintTests: XCTestCase {
     /// because that is how it is said out loud, while every menu on the machine — including
     /// helm's own — prints ⇧⌘D. The pop-up matches the menus.
     func testGlyphsMatchWhatAMenuWouldPrint() {
-        XCTAssertEqual(keys("new", terminalFocused: true), "⌘N")
-        XCTAssertEqual(keys("split", terminalFocused: true), "⌘D")
-        XCTAssertEqual(keys("split down", terminalFocused: true), "⇧⌘D")
-        XCTAssertEqual(keys("close", terminalFocused: true), "⌥⌘W")
-        XCTAssertEqual(keys("folder", terminalFocused: true), "⇧⌘O")
-        XCTAssertEqual(keys("pane", terminalFocused: true), "⌘1–9")
-        XCTAssertEqual(keys("focus", terminalFocused: true), "⌥⌘↑↓←→ HJKL")
-        XCTAssertEqual(keys("move", terminalFocused: true), "⌥⇧⌘↑↓←→ HJKL")
-        XCTAssertEqual(keys("archon", terminalFocused: true), "⇧⌘R")
+        XCTAssertEqual(keys("new", focus: .terminal), "⌘N")
+        XCTAssertEqual(keys("split", focus: .terminal), "⌘D")
+        XCTAssertEqual(keys("split down", focus: .terminal), "⇧⌘D")
+        XCTAssertEqual(keys("close", focus: .terminal), "⌥⌘W")
+        XCTAssertEqual(keys("folder", focus: .terminal), "⇧⌘O")
+        XCTAssertEqual(keys("pane", focus: .terminal), "⌘1–9")
+        XCTAssertEqual(keys("focus", focus: .terminal), "⌥⌘↑↓←→ HJKL")
+        XCTAssertEqual(keys("move", focus: .terminal), "⌥⇧⌘↑↓←→ HJKL")
+        XCTAssertEqual(keys("archon", focus: .terminal), "⇧⌘R")
     }
 
     func testModifiersRenderInTheCanonicalMenuOrder() {
@@ -68,7 +79,7 @@ final class KeyHintTests: XCTestCase {
                 .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
         }
         XCTAssertEqual(
-            KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2")
+            KeyHints.visible(focus: .terminal, in: rows).first?.keys, "⌘1 ⌘2")
     }
 
     /// Non-consecutive digits are a list too — a gap means the run is a lie about what is
@@ -79,7 +90,7 @@ final class KeyHintTests: XCTestCase {
                 .character("\(index)"), .command, .verb(.showTab(index: index - 1)), hint: "pane")
         }
         XCTAssertEqual(
-            KeyHints.visible(terminalFocused: true, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
+            KeyHints.visible(focus: .terminal, in: rows).first?.keys, "⌘1 ⌘2 ⌘4")
     }
 
     // MARK: - One action's keys, for surfaces outside the pop-up
@@ -95,7 +106,7 @@ final class KeyHintTests: XCTestCase {
             KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all), "⇧⌘O")
         XCTAssertEqual(
             KeyGlyph.binding(for: .local(.openWorkspacePanel), in: KeyBindings.all),
-            keys("folder", terminalFocused: true),
+            keys("folder", focus: .terminal),
             "the empty bench and the key pop-up must not be able to disagree")
         XCTAssertEqual(KeyGlyph.binding(for: .verb(.newTerminal), in: KeyBindings.all), "⌘N")
         XCTAssertEqual(
@@ -144,8 +155,8 @@ final class KeyHintTests: XCTestCase {
     /// SwiftUI's `ForEach` renders wrong rather than refusing. Rows share a label on purpose
     /// (⌘↑ and ⌘↓ are one "turn"), so this asks it of what the pop-up draws.
     func testVisibleLabelsAreUnique() {
-        for focused in [true, false] {
-            let labels = KeyHints.visible(terminalFocused: focused, in: KeyBindings.all).map(
+        for focus in [KeyFocus.terminal, .browser, .other] {
+            let labels = KeyHints.visible(focus: focus, in: KeyBindings.all).map(
                 \.label)
             XCTAssertEqual(Set(labels).count, labels.count, "duplicate hint label in \(labels)")
         }
@@ -155,7 +166,7 @@ final class KeyHintTests: XCTestCase {
     /// operator needs on day one and nothing else in the window hints at.
     func testHintsReadInTheTablesOrder() {
         XCTAssertEqual(
-            KeyHints.visible(terminalFocused: true, in: KeyBindings.all).map(\.label),
+            KeyHints.visible(focus: .terminal, in: KeyBindings.all).map(\.label),
             [
                 "new", "note", "split", "split down", "close", "pane", "focus", "move",
                 "artifact", "turn", "workspace", "commands", "folder", "archon", "worktrees",
@@ -167,8 +178,8 @@ final class KeyHintTests: XCTestCase {
     /// Every hint the pop-up draws says something in both halves. An empty glyph string would
     /// render as a floating word with no key, which reads as a bug rather than as a hint.
     func testEveryVisibleHintIsComplete() {
-        for focused in [true, false] {
-            for hint in KeyHints.visible(terminalFocused: focused, in: KeyBindings.all) {
+        for focus in [KeyFocus.terminal, .browser, .other] {
+            for hint in KeyHints.visible(focus: focus, in: KeyBindings.all) {
                 XCTAssertFalse(hint.keys.isEmpty, hint.label)
                 XCTAssertFalse(hint.label.isEmpty, hint.keys)
             }

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// A browser pane: a thin address bar over the shared browser's current tab.
+/// A browser pane: the shared browser's tabs, a thin address bar, and the tab it shows.
 struct BrowserPaneView: View {
     @ObservedObject var model: BrowserPaneModel
     /// Whether the bench says this pane holds the keyboard. Same contract as a terminal's:
@@ -13,6 +13,8 @@ struct BrowserPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            BrowserTabStrip(model: model)
+                .disabled(model.status != .connected)
             bar
             Divider()
             ZStack {
@@ -26,6 +28,17 @@ struct BrowserPaneView: View {
         .onChange(of: model.tabs.current?.url) { _, url in
             if !addressFocused { address = url ?? "" }
         }
+        .onChange(of: model.addressRequests) { addressFocused = true }
+        .onChange(of: addressFocused) { _, focused in
+            if focused {
+                BrowserKeyboard.editingAddress = model
+            } else if BrowserKeyboard.editingAddress === model {
+                BrowserKeyboard.editingAddress = nil
+            }
+        }
+        .onDisappear {
+            if BrowserKeyboard.editingAddress === model { BrowserKeyboard.editingAddress = nil }
+        }
     }
 
     private var bar: some View {
@@ -35,19 +48,20 @@ struct BrowserPaneView: View {
             } label: {
                 Image(systemName: "chevron.left").frame(width: 20, height: 20)
             }
-            .help("Back")
+            .help("Back (⌘[)")
             Button {
                 model.goForward()
             } label: {
                 Image(systemName: "chevron.right").frame(width: 20, height: 20)
             }
-            .help("Forward")
+            .help("Forward (⌘])")
             Button {
-                model.reload()
+                model.loading ? model.stopLoading() : model.reload()
             } label: {
-                Image(systemName: "arrow.clockwise").frame(width: 20, height: 20)
+                Image(systemName: model.loading ? "xmark" : "arrow.clockwise")
+                    .frame(width: 20, height: 20)
             }
-            .help("Reload")
+            .help(model.loading ? "Stop loading" : "Reload (⌘R)")
             TextField("Address", text: $address)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -55,41 +69,24 @@ struct BrowserPaneView: View {
                 .focused($addressFocused)
                 .onSubmit {
                     model.navigate(to: address)
-                    addressFocused = false
+                    returnKeyboardToPage()
                 }
-            tabMenu
+                .onExitCommand {
+                    address = model.tabs.current?.url ?? ""
+                    returnKeyboardToPage()
+                }
         }
         .buttonStyle(.chrome)
         .foregroundStyle(Color.textMuted)
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .disabled(model.status != .connected)
     }
 
-    /// Every tab in the shared browser. The pane follows the newest on its own; this is for
-    /// going somewhere else by hand.
-    private var tabMenu: some View {
-        Menu {
-            ForEach(model.tabs.tabs) { tab in
-                Button {
-                    model.show(tab: tab.targetId)
-                } label: {
-                    if tab.targetId == model.tabs.showing {
-                        Label(tab.title.isEmpty ? tab.url : tab.title, systemImage: "checkmark")
-                    } else {
-                        Text(tab.title.isEmpty ? tab.url : tab.title)
-                    }
-                }
-            }
-            Divider()
-            Button("New Tab") { model.newTab() }
-        } label: {
-            Text(model.tabs.tabs.count == 1 ? "1 tab" : "\(model.tabs.tabs.count) tabs")
-                .font(.system(size: 11))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("The shared browser's tabs")
+    /// Done with the address: the keyboard goes back to the page, as a browser's does.
+    private func returnKeyboardToPage() {
+        addressFocused = false
+        if let surface = model.surface { surface.window?.makeFirstResponder(surface) }
     }
 
     @ViewBuilder

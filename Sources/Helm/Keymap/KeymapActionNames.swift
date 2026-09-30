@@ -76,6 +76,7 @@ extension LocalAction {
         case .newNote: ("new-note", .none)
         case .toggleKeepAwake: ("keep-awake", .none)
         case .toggleCommandPalette: ("command-palette", .none)
+        case let .browser(command): command.spelled
         }
     }
 
@@ -89,6 +90,35 @@ extension LocalAction {
         case "new-note": try a.none(name); self = .newNote
         case "keep-awake": try a.none(name); self = .toggleKeepAwake
         case "command-palette": try a.none(name); self = .toggleCommandPalette
+        default:
+            guard let command = try BrowserCommand(name: name, arguments: a) else { return nil }
+            self = .browser(command)
+        }
+    }
+}
+
+extension BrowserCommand {
+    var spelled: (name: String, arguments: KeymapArguments) {
+        switch self {
+        case .newTab: ("browser-new-tab", .none)
+        case .closeTab: ("browser-close-tab", .none)
+        case .focusAddress: ("browser-address", .none)
+        case .reload: ("browser-reload", .none)
+        case .back: ("browser-back", .none)
+        case .forward: ("browser-forward", .none)
+        case let .showTab(index): ("browser-tab", .init(index: index + 1))
+        }
+    }
+
+    init?(name: String, arguments a: KeymapArguments) throws(KeymapProblem) {
+        switch name {
+        case "browser-new-tab": try a.none(name); self = .newTab
+        case "browser-close-tab": try a.none(name); self = .closeTab
+        case "browser-address": try a.none(name); self = .focusAddress
+        case "browser-reload": try a.none(name); self = .reload
+        case "browser-back": try a.none(name); self = .back
+        case "browser-forward": try a.none(name); self = .forward
+        case "browser-tab": self = .showTab(index: try a.index(name))
         default: return nil
         }
     }

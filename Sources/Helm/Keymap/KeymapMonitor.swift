@@ -36,7 +36,7 @@ enum KeymapMonitor {
                 guard
                     let row = KeyBindings.match(
                         characters: characters, keyCode: keyCode, modifiers: modifiers,
-                        terminalFocused: TerminalManager.shared.anyTerminalHasFocus,
+                        focus: .current(),
                         in: Keymap.shared.table)
                 else { return false }
                 Actions.perform(row.action)

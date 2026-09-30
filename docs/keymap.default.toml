@@ -13,7 +13,8 @@
 # key:    manage, cmd, ctrl, alt, shift joined by + before one character, plus, left,
 #         right, up, down or keycode:N. manage is the manage key: hold it and the
 #         manage+ keys arrange the bench, release it and the keyboard types again
-# when:   anywhere (the default), terminal, away-from-terminal
+# when:   anywhere (the default), terminal, away-from-terminal, browser (a browser pane's
+#         page or address field has the keyboard), away-from-browser
 # action: one of the names below; index is 1-based. `drawer` takes name and, optionally,
 #         surface = "browser", "sessions", "archon", "worktrees" or "file:<path>" for a
 #         drawer that holds nothing.
@@ -62,57 +63,165 @@ menu = "Close Pane"
 
 [[bind]]
 key = "cmd+1"
+when = "away-from-browser"
 action = "show-tab"
 index = 1
 hint = "pane"
 
 [[bind]]
 key = "cmd+2"
+when = "away-from-browser"
 action = "show-tab"
 index = 2
 hint = "pane"
 
 [[bind]]
 key = "cmd+3"
+when = "away-from-browser"
 action = "show-tab"
 index = 3
 hint = "pane"
 
 [[bind]]
 key = "cmd+4"
+when = "away-from-browser"
 action = "show-tab"
 index = 4
 hint = "pane"
 
 [[bind]]
 key = "cmd+5"
+when = "away-from-browser"
 action = "show-tab"
 index = 5
 hint = "pane"
 
 [[bind]]
 key = "cmd+6"
+when = "away-from-browser"
 action = "show-tab"
 index = 6
 hint = "pane"
 
 [[bind]]
 key = "cmd+7"
+when = "away-from-browser"
 action = "show-tab"
 index = 7
 hint = "pane"
 
 [[bind]]
 key = "cmd+8"
+when = "away-from-browser"
 action = "show-tab"
 index = 8
 hint = "pane"
 
 [[bind]]
 key = "cmd+9"
+when = "away-from-browser"
 action = "show-tab"
 index = 9
 hint = "pane"
+
+[[bind]]
+key = "cmd+t"
+when = "browser"
+action = "browser-new-tab"
+hint = "new tab"
+
+[[bind]]
+key = "cmd+w"
+when = "browser"
+action = "browser-close-tab"
+hint = "close tab"
+
+[[bind]]
+key = "cmd+l"
+when = "browser"
+action = "browser-address"
+hint = "address"
+
+[[bind]]
+key = "cmd+r"
+when = "browser"
+action = "browser-reload"
+hint = "reload"
+
+[[bind]]
+key = "cmd+["
+when = "browser"
+action = "browser-back"
+hint = "back · forward"
+
+[[bind]]
+key = "cmd+]"
+when = "browser"
+action = "browser-forward"
+hint = "back · forward"
+
+[[bind]]
+key = "cmd+1"
+when = "browser"
+action = "browser-tab"
+index = 1
+hint = "tab"
+
+[[bind]]
+key = "cmd+2"
+when = "browser"
+action = "browser-tab"
+index = 2
+hint = "tab"
+
+[[bind]]
+key = "cmd+3"
+when = "browser"
+action = "browser-tab"
+index = 3
+hint = "tab"
+
+[[bind]]
+key = "cmd+4"
+when = "browser"
+action = "browser-tab"
+index = 4
+hint = "tab"
+
+[[bind]]
+key = "cmd+5"
+when = "browser"
+action = "browser-tab"
+index = 5
+hint = "tab"
+
+[[bind]]
+key = "cmd+6"
+when = "browser"
+action = "browser-tab"
+index = 6
+hint = "tab"
+
+[[bind]]
+key = "cmd+7"
+when = "browser"
+action = "browser-tab"
+index = 7
+hint = "tab"
+
+[[bind]]
+key = "cmd+8"
+when = "browser"
+action = "browser-tab"
+index = 8
+hint = "tab"
+
+[[bind]]
+key = "cmd+9"
+when = "browser"
+action = "browser-tab"
+index = 9
+hint = "tab"
 
 [[bind]]
 key = "manage+left"

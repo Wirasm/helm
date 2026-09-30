@@ -48,11 +48,25 @@ struct KeyBinding: Equatable {
 
     /// Where the operator's keyboard is when the chord may fire. The reason the table cannot be
     /// a dictionary: ⌃3 switches workspace outside a terminal and must reach a focused shell as
-    /// a control code inside one.
+    /// a control code inside one, and ⌘3 shows a pane tab everywhere but a browser pane, where
+    /// it is the browser's third tab (#542).
     enum When: Equatable {
         case anywhere
         case terminalFocused
         case awayFromTerminal
+        case browserFocused
+        case awayFromBrowser
+
+        /// Where the keyboard may be for the row to fire. Two rows overlap when these meet.
+        var fires: Set<KeyFocus> {
+            switch self {
+            case .anywhere: [.terminal, .browser, .other]
+            case .terminalFocused: [.terminal]
+            case .awayFromTerminal: [.browser, .other]
+            case .browserFocused: [.browser]
+            case .awayFromBrowser: [.terminal, .other]
+            }
+        }
     }
 
     enum Action: Equatable {
@@ -82,13 +96,17 @@ struct KeyBinding: Equatable {
         return KeyboardShortcut(key, modifiers: flags)
     }
 
-    func canFire(terminalFocused: Bool) -> Bool {
-        switch when {
-        case .anywhere: true
-        case .terminalFocused: terminalFocused
-        case .awayFromTerminal: !terminalFocused
-        }
-    }
+    func canFire(_ focus: KeyFocus) -> Bool { when.fires.contains(focus) }
+}
+
+/// What holds the keyboard when a key is pressed: a terminal, a browser pane (its page or its
+/// address field), or anything else. Read from AppKit's first responder at the moment of the
+/// keystroke (`KeyFocus.current`), because that, not the bench's focused pane, is where the
+/// operator is typing.
+enum KeyFocus: Hashable {
+    case terminal
+    case browser
+    case other
 }
 
 // MARK: - The actions
@@ -163,4 +181,20 @@ enum LocalAction: Equatable {
     /// The command palette (#500): every action in the table, every workspace and pane, and the
     /// bench justfile's recipes, searchable.
     case toggleCommandPalette
+    /// A browser key (#542), done by the browser pane holding the keyboard. Its rows fire only
+    /// there (`When.browserFocused`), so there is always a pane to do it.
+    case browser(BrowserCommand)
+}
+
+/// What a browser key asks the browser pane for — the keys the operator already knows from
+/// Chrome.
+enum BrowserCommand: Equatable {
+    case newTab
+    case closeTab
+    case focusAddress
+    case reload
+    case back
+    case forward
+    /// 0-based; ⌘9 is the last tab, as in Chrome.
+    case showTab(index: Int)
 }

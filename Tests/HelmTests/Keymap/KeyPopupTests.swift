@@ -85,9 +85,9 @@ final class KeyPopupTests: XCTestCase {
 
     private func sections(
         _ table: [KeyBinding] = KeyBindings.all, manage: ManageKey = .builtIn,
-        terminalFocused: Bool = true
+        focus: KeyFocus = .terminal
     ) -> KeyPopupContent.Sections {
-        KeyPopupContent.of(table, manage: manage, terminalFocused: terminalFocused)
+        KeyPopupContent.of(table, manage: manage, focus: focus)
     }
 
     private func keys(_ hints: [KeyHint], _ label: String) -> String? {
@@ -121,7 +121,7 @@ final class KeyPopupTests: XCTestCase {
         XCTAssertEqual(keys(popup.held, "jot"), "N")
         XCTAssertEqual(keys(popup.held, "focus"), "↑↓←→ HJKL")
         let away = sections(
-            try file.overlay(on: KeyBindings.all), manage: file.manage, terminalFocused: false)
+            try file.overlay(on: KeyBindings.all), manage: file.manage, focus: .other)
         XCTAssertEqual(
             keys(away.other, "cycle"), "⌃←→", "a key that fires only away is listed there")
         XCTAssertNil(keys(popup.other, "cycle"), "and not in a terminal, where it cannot fire")
