@@ -478,9 +478,11 @@ extension BrowserPaneModel: BrowserInputSink {
         connection?.send("Input.insertText", InsertText(text: text), session: inputSession)
     }
 
-    /// The page's selection as text: a text field's selected range, else the document's.
+    /// The page's selection as text: a text field's selected range, else the document's. None
+    /// under a dialog: the evaluate would wait for the answer and then overwrite the clipboard,
+    /// maybe after the operator had copied something else.
     func selectedText() async -> String? {
-        guard let connection, let session else { return nil }
+        guard let connection, let session = inputSession else { return nil }
         let expression = """
             (() => { const a = document.activeElement;
               if (a && typeof a.selectionStart === 'number' && typeof a.value === 'string')

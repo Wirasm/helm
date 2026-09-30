@@ -103,6 +103,10 @@ final class BrowserPaneLiveTests: XCTestCase {
                 + "}, 300)</script>")
         try await eventually("the alert is on the pane") { self.pane.dialogs[target] != nil }
         pane.insertText("typed-under-the-dialog")
+        // ⌘C asks for the selection; under a dialog that would wait for the answer and then
+        // overwrite whatever the operator copied meanwhile.
+        let copied = await pane.selectedText()
+        XCTAssertNil(copied, "no selection is read from a stopped page")
         for type in ["mousePressed", "mouseReleased"] {
             pane.mouse(.init(type: type, x: 20, y: 20, button: "left", clickCount: 1))
         }
