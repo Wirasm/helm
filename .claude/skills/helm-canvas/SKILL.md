@@ -42,7 +42,8 @@ echo "$PANE"
   helm. There is no terminal to find and no escape sequence to write; the verb goes to benchd,
   which helm follows. (The old `push.sh` wrote one, and it was silent from every place helm could
   not read — #124, #184, #282. It is gone.)
-- A mark the operator makes on the canvas is mailed to you (the `bench-mail` skill reads it).
+- A mark the operator makes on the canvas is mailed to you (the `bench-mail` skill reads it), and
+  so is his change to an HTML canvas's live file (*A page that holds state*, below).
 
 The `bench-panes` skill has the rest of the verbs.
 
@@ -104,9 +105,9 @@ is a page in the operator's window, not a transcript.
 
 ## A page that holds state
 
-An `.html` canvas is not write-only. A page that is *being used* — a game mid-play, a form
-half-filled, a simulation running — can take your updates without being thrown away, and can tell
-you how it is going. Both are opt-in and both are ordinary JavaScript.
+An `.html` canvas is not write-only. A page that is *being used* — a game mid-play, a checklist
+half-ticked, a form half-filled — can take your updates without being thrown away, and can hand the
+operator's changes back to you. Both are opt-in and both are ordinary JavaScript.
 
 **Take an update instead of being reloaded.** Rewriting the artifact normally reloads the page, and
 a reload destroys scroll, focus, form input and a half-played game. Define `window.helmCanvasUpdate`
@@ -114,58 +115,98 @@ and helm hands you the change as data instead — **a page that defines it is ne
 
 ```js
 window.helmCanvasUpdate = function (update) {
-  // update.kind === "canvas.update", plus update.version, update.artifact, update.generation
-  refetchState();  // ./state.json, whatever you just rewrote
-  return true;     // handled
-  // return false; // "not now" — the operator gets an "Updated — reload?" strip and decides
+  // update.kind === "canvas.update", plus update.version, update.artifact, update.generation,
+  // and update.file: which file changed — the artifact's own name, or its live file (below)
+  if (update.file === "tasks.data.json") { load(); return true; }  // handled
+  return false; // "not now" — the operator gets an "Updated — reload?" strip and decides
 };
 ```
 
 Returning `false`, or throwing, leaves the page exactly where it is and puts the choice on a strip
 above it. The operator's Reload button is the only thing that then takes the page away.
 
-**Report what the page is doing.** Post to `helmCanvasState` and helm writes it beside the artifact:
+### The live file: data you and the operator both edit
+
+**An HTML canvas has one data file beside it: `tasks.html` → `tasks.data.json`.** The page shows
+it and writes it through helm; you read and write it with `bench file`; each side hears about the
+other's change. That is the whole two-way surface — no server, no protocol of your own.
+
+The page reads the file with `fetch` and writes it by posting to `helmCanvasData`, naming the text
+it last saw (`base`). helm writes only if the file still holds exactly that (or is gone), so
+nobody's write replaces a version its writer has not seen:
 
 ```js
-const helm = window.webkit?.messageHandlers?.helmCanvasState;
-helm?.postMessage({ kind: "canvas.state", state: { score: 12, lesson: 3, lastMotion: "dw" } });
-```
+const helm = window.webkit?.messageHandlers?.helmCanvasData;
+let base = null;   // the file's text as this page last saw it; null when there was none
+let data = {};
 
-`state` is yours — any JSON **object**, meaning whatever you decide it means. helm never reads it.
+async function load() {
+  const res = await fetch("./tasks.data.json", { cache: "no-store" });
+  base = res.ok ? await res.text() : null;
+  data = base ? JSON.parse(base) : {};
+  render(data);
+}
 
-**You read it back from `<name>.state.json`, beside the artifact.** `motions.html` →
-`motions.state.json`:
-
-```json
-{
-  "format": "helm.canvas-state",
-  "version": 1,
-  "writtenAt": "2026-08-07T09:11:53Z",
-  "artifact": "motions.html",
-  "state": { "score": 12, "lesson": 3, "lastMotion": "dw" }
+// Keep a change as a function of the data, so it can be applied again to a newer version.
+async function change(edit) {
+  edit(data);
+  const answer = await helm.postMessage({ kind: "canvas.data.write", data, base });
+  base = answer.text;
+  if (answer.kind === "changed") {   // the agent wrote first: take its version, apply yours again
+    data = JSON.parse(answer.text);
+    return change(edit);
+  }
+  render(data);
 }
 ```
 
-Four things about it are worth knowing before you design around it:
+- **`data` is any JSON object or array, meaning whatever you decide it means.** helm writes it
+  with sorted keys and a trailing newline and never reads what is in it.
+- **The answer is `{kind: "written", text}` or `{kind: "changed", text}`**; `text` is the file now,
+  and the page's next `base`. A write helm refuses — not JSON, no `base`, benchd unreachable —
+  rejects the promise with the reason.
+- **A page write mails the agent that opened the canvas**, you, once the file changed: one mail
+  per file per second, naming the JSON pointers that changed. Add `notify: false` to a write that
+  should wake nobody, such as a page reporting its own state. Writing what is already there sends
+  nothing.
 
-- **Latest-wins overwrite, not a log.** Every report replaces the last one. If you want history,
-  keep it *inside* `state` — helm will not accumulate it for you.
-- **Report when something meaningful changed, never on a frame or a timer.** A changed report is a
-  file write, so a page reporting from `requestAnimationFrame` writes sixty times a second in the
-  pane the operator is using. helm does not throttle you — a delay would make the latch stale
-  exactly when it is moving fastest — so the judgement is yours. A lesson completed is a report; a
-  cursor moving is not.
-- **You read it on your next turn. It cannot reach you sooner.** Nothing wakes your session,
-  nothing starts a turn, and a page cannot type into a prompt. `cat` it when you next run.
-- **`writtenAt` is a change signal.** A report identical to the previous one is not written, so the
-  timestamp answers *"when did the page last do something different"*. Check it before acting on
-  state you may have read a while ago.
-- **Cap of 64 KB, and a report helm cannot use is dropped silently from the page's side.** An array,
-  a number, or a state over the limit is refused — with the reason in `log show`, not in the page.
-  Feature-detect and keep the object small; name a sibling file in `state` if you have more to say.
+**What reaches you** is ordinary mail from `operator` (the `bench-mail` skill reads it):
 
-Neither of these exists on a **markdown** canvas: helm generates that page, so there is no script of
-yours on it to register a handler or post a report.
+```
+/…/tasks.data.json was changed on the canvas tasks.html, by the operator's page.
+Changed: /items/0/done, /items/2/done
+```
+
+It names the file and the pointers, never what they mean: read the file for the values. You are
+mailed because you opened the canvas; the newest agent to `bench open` it is the one mailed, and
+that holds across a helm restart. A canvas nobody opened with `bench open` mails nobody.
+
+**To change the data, read it, change it, and write it naming what you read:**
+
+```bash
+BENCH="${BENCH:-bench}"
+READ=$(mktemp) NEW=$(mktemp)
+"$BENCH" file read "$LIVE" > "$READ"
+python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["reply"] = "on it"; print(json.dumps(d, indent=2))' "$READ" > "$NEW"
+"$BENCH" file write "$LIVE" --expect "$READ" < "$NEW"
+rm -f "$READ" "$NEW"
+```
+
+- **Exit 3 from `bench file write` means the operator changed the file since you read it**, and
+  nothing was written. Read it again and make your change on what is there. A new file is
+  `--expect /dev/null`.
+- **Make the new text a file first, as above, rather than piping into `bench file write`.** A
+  pipe whose first step fails still hands over nothing. `bench` refuses an empty write, and for a
+  live file a write that is not JSON, but a file your shell stopped at is the plain version.
+- **Never write the live file any other way.** A plain write of a copy you read a minute ago
+  silently undoes whatever he ticked in between; `--expect` is what refuses it. The one case it
+  lets through: a file deleted since you read it is written, as there is nothing left to protect.
+- **The open page gets your write in about a fifth of a second**, through `helmCanvasUpdate` with
+  `file: "tasks.data.json"`; a page that defines no handler is reloaded, which is also how a plain
+  page shows your data.
+
+Neither exists on a **markdown** canvas: helm generates that page, so there is no script of yours
+on it to register a handler or write a file.
 
 ## A page that takes the pointer
 
@@ -193,7 +234,7 @@ the declared element — a heading, a caption, prose beside the surface.
 **The second half is deliberate and worth knowing before you use it.** helm resolves a mark against
 DOM elements, so a surface that is one `<canvas>` has nothing inside it helm could honestly name.
 Declaring the region says *the addressable things in here are mine*, and reporting them is then your
-page's job — through `helmCanvasState`, above.
+page's job — through its live file, above.
 
 ## Taking a dependency
 
@@ -249,8 +290,8 @@ he is in, the same store your artifacts go to — named for the day, `2026-08-07
 Four things follow, and they are the whole of what you need to know:
 
 - **Read the file again before you rewrite it.** He may have edited it since you last read it, and
-  **nothing will tell you** — no notification, no push, same as the state latch, for the same
-  reason: nothing wakes your session. The file's own mtime is the only fact available, and it is
+  **nothing will tell you** — no notification, no push: a markdown canvas has no live file, and
+  nothing wakes your session. The file's own mtime is the only fact available, and it is
   the filesystem's rather than helm's. A rewrite from a stale copy silently deletes his edit.
 - **Your rewrite always lands, and helm protects him rather than blocking you.** If he happens to
   be editing that file when you write it, helm notices, stops saving his buffer, and asks him
@@ -273,7 +314,8 @@ the options that work.
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 
 **Editing ONLY a sibling changes nothing on screen until you open it again.** helm watches the
-**artifact**, not its siblings, so rewriting `app.js` fires no reload by itself.
+**artifact** and its live file, not its other siblings, so rewriting `app.js` fires no reload by
+itself.
 
 **Pushing the same path again is what refreshes it** (helm #261). The pane re-renders where it
 already is — no tab switch, no focus move, nothing pulled forward — and the reload refetches every
@@ -327,5 +369,5 @@ being reviewable on its own terms.
 
 One exists so far: **`helm-board`** — a drawable canvas. It is the worked example of everything
 above at once, and reading it is the fastest way to see the three together: it declares
-`data-helm-surface`, it takes `helmCanvasUpdate` instead of being reloaded, and it reports through
-`helmCanvasState` what the operator drew and what they drew it over.
+`data-helm-surface`, it takes `helmCanvasUpdate` instead of being reloaded, and it writes to its live
+file what the operator drew and what they drew it over.

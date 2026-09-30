@@ -32,6 +32,7 @@ mod files;
 mod hook;
 mod just;
 mod layout;
+mod live;
 mod prompts;
 mod restore;
 mod rules;
@@ -697,6 +698,8 @@ fn boot(
 
     // Tells helm when a canvas file or its sidecar changed (M5c): helm watches nothing itself.
     files::spawn_watcher(Arc::clone(&core));
+    // Mails the operator's live-file edits to each canvas's opener, batched per file (#532).
+    live::spawn(Arc::clone(&core));
 
     // A browser that was wanted when the last daemon went away comes back with this one.
     // On its own thread: the launch waits for the browser to listen, and the socket must
@@ -1283,56 +1286,16 @@ fn dispatch(
                     return (refused(format!("{role}: {why}")), AfterResponse::Done);
                 }
             }
-            let (seq, root) = {
-                let mut c = core.lock().unwrap();
-                let seq = c.next_mail;
-                c.next_mail += 1;
-                (seq, c.root.clone())
-            };
-            let (id, path) = match bench_mail::deliver(
-                &root,
-                seq,
+            match send_mail(
+                core,
                 &parsed.from,
                 &parsed.to,
                 parsed.subject.as_deref(),
-                &now_rfc3339(),
                 &parsed.body,
             ) {
-                Ok(pair) => pair,
-                Err(why) => return (errored(why), AfterResponse::Done),
-            };
-            let wake = {
-                let mut c = core.lock().unwrap();
-                if let Err(why) = c.append(
-                    "mail/sent",
-                    json!({
-                        "id": id,
-                        "from": parsed.from,
-                        "to": parsed.to,
-                        "subject": parsed.subject,
-                        "path": path.display().to_string(),
-                    }),
-                ) {
-                    return (errored(why), AfterResponse::Done);
-                }
-                // Queued: benchd starts a turn for it once it is idle. Next turn: it waits
-                // for the recipient's next prompt or tool call, which is when its hook
-                // hands it out.
-                if c.pushable_handles().contains(&parsed.to) {
-                    "queued"
-                } else {
-                    "next-turn"
-                }
-            };
-            (
-                ok(json!({
-                    "id": id,
-                    "to": parsed.to,
-                    "path": path.display().to_string(),
-                    "wake": wake,
-                })),
-                AfterResponse::Done,
-            )
+                Ok(sent) => (ok(sent), AfterResponse::Done),
+                Err(why) => (errored(why), AfterResponse::Done),
+            }
         }
 
         Some(Verb::MailList) => {
@@ -1749,6 +1712,50 @@ fn respond_keep_open(mut stream: &UnixStream, response: &Response) {
         line.push('\n');
         let _ = stream.write_all(line.as_bytes());
     }
+}
+
+/// Deliver one mail and log it (`mail/send`, and benchd's own mail: the live file's, helm #532).
+/// The inbox file is the delivery: the wake reactor reads inboxes, not this event, so mail sent
+/// here reaches an idle agent exactly as a `mail/send` does. Takes the core lock itself, twice,
+/// and writes the file off it.
+pub(crate) fn send_mail(
+    core: &Arc<Mutex<Core>>,
+    from: &str,
+    to: &str,
+    subject: Option<&str>,
+    body: &str,
+) -> Result<Value, String> {
+    let (seq, root) = {
+        let mut c = core.lock().unwrap();
+        let seq = c.next_mail;
+        c.next_mail += 1;
+        (seq, c.root.clone())
+    };
+    let (id, path) = bench_mail::deliver(&root, seq, from, to, subject, &now_rfc3339(), body)?;
+    let mut c = core.lock().unwrap();
+    c.append(
+        "mail/sent",
+        json!({
+            "id": id,
+            "from": from,
+            "to": to,
+            "subject": subject,
+            "path": path.display().to_string(),
+        }),
+    )?;
+    // Queued: benchd starts a turn for it once it is idle. Next turn: it waits for the
+    // recipient's next prompt or tool call, which is when its hook hands it out.
+    let wake = if c.pushable_handles().contains(to) {
+        "queued"
+    } else {
+        "next-turn"
+    };
+    Ok(json!({
+        "id": id,
+        "to": to,
+        "path": path.display().to_string(),
+        "wake": wake,
+    }))
 }
 
 fn now_rfc3339() -> String {

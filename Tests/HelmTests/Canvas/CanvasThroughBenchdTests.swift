@@ -32,8 +32,12 @@ final class CanvasThroughBenchdTests: XCTestCase {
         func read(_ path: String, within folder: String?) -> CanvasFileRead {
             files.read(path, within: folder)
         }
-        func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite {
-            files.write(text, to: path, expect: expect)
+        func write(
+            _ text: String, to path: String, expect: BenchFileExpect, notify: Bool
+        )
+            -> CanvasFileWrite
+        {
+            files.write(text, to: path, expect: expect, notify: notify)
         }
         func append(_ text: String, to path: String) throws { try files.append(text, to: path) }
     }
@@ -299,7 +303,7 @@ final class CanvasThroughBenchdTests: XCTestCase {
         try files.append("## one\n", to: notes.path)
         try files.append("## two\n", to: notes.path)
         XCTAssertEqual(try String(contentsOf: notes, encoding: .utf8), "## one\n## two\n")
-        guard case .failed = files.write("", to: notes.path, expect: .any) else {
+        guard case .failed = files.write("", to: notes.path, expect: .unchanged("")) else {
             return XCTFail("a sidecar is never written whole")
         }
 

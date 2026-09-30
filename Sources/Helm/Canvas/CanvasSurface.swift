@@ -58,7 +58,7 @@ import Foundation
 /// own persistence, and — the part that decides it — its own **ids**, caller-supplied and never
 /// regenerated on load. A stroke on the board becomes a record with an id, resolvable by
 /// bounding-box overlap against the shapes the agent authored, and it reaches the agent through
-/// the state latch (#110) as a name the agent can find again. helm's ink over the same gesture
+/// the board's live file (#532) as a name the agent can find again. helm's ink over the same gesture
 /// reaches the agent as a quote of a toolbar. Circling a shape with helm's ink on a board that
 /// has its own selection model is not a smaller version of the right answer; it is a different
 /// and worse one.

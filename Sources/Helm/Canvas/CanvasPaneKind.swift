@@ -3,9 +3,8 @@ import SwiftUI
 /// The canvas as a `SurfaceKind`: a `CanvasModel` over a file, drawn by `CanvasView`.
 ///
 /// `configure` runs once on every model this kind makes. It is how the bench wires the mark
-/// route (#205) without the kind knowing about origins or mail: `WorkbenchModel` passes it in,
-/// because the bench is the only thing holding both the origin of a push and the sessions it
-/// names.
+/// route (#205) without the kind knowing about openers or mail: `WorkbenchModel` passes it in,
+/// because the bench holds the document that names each canvas's opener.
 @MainActor
 final class CanvasPaneKind: SurfaceKind {
     private let configure: (CanvasModel, Pane.ID) -> Void

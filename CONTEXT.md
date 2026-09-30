@@ -286,14 +286,14 @@ visibility, focus and freshness without a display or request round trip. It is a
 not persistence and never a control channel; the **bench verbs** are how an agent acts.
 _Avoid_: bench API, layout database, restore file
 
-**canvas state latch**:
-A versioned JSON file beside a canvas — `<artifact>.state.json` — holding what that page last
-said about **itself**, written latest-wins and read by the agent on its **next turn**. A latch,
-not an interrupt: nothing wakes a session, starts a turn or spends a credit, and a page still
-cannot say anything into a live prompt. The **sidecar** is its opposite number and stays
-separate — that one is the operator's own notes, appended and never rewritten, where this one
-is machine state and every earlier value is noise.
-_Avoid_: callback, event, message (nothing is delivered — the agent reads a file); telemetry
+**live file**:
+The one JSON file beside an HTML canvas — `tasks.html` → `tasks.data.json` — that the page and
+the agent both edit. The page writes through helm and an agent through `bench file write
+--expect`, and each names the bytes it saw, so no write replaces a version its writer has not
+seen (a file deleted meanwhile is simply written). benchd tells the open page about the agent's write (`helmCanvasUpdate`) and mails the
+canvas's opener about the operator's, naming the JSON pointers that changed. A page reporting on
+itself writes with `notify: false` and wakes nobody. Replaced the canvas state latch (#532).
+_Avoid_: state latch, data channel, sync (nothing is merged — a stale writer is refused)
 
 **teardown**:
 Closing a pane with `bench close` — the inverse of a spawn, and it stops at the **pane**. benchd

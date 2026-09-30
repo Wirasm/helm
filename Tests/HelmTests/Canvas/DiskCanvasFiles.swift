@@ -29,18 +29,26 @@ struct DiskCanvasFiles: CanvasFiles {
         return .bytes(data)
     }
 
-    func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite {
+    /// `notify` is benchd's to act on (the live file's mail); the disk has nobody to tell.
+    func write(
+        _ text: String, to path: String, expect: BenchFileExpect, notify: Bool
+    )
+        -> CanvasFileWrite
+    {
         if let failing { return .failed(failing) }
         let url = URL(fileURLWithPath: path)
         if CanvasNotes.isSidecar(url) { return .failed("\(path) is a notes sidecar") }
-        if case let .unchanged(expected) = expect {
-            switch read(path, within: nil) {
-            case let .bytes(now) where now != Data(expected.utf8): return .changed(now)
-            case .bytes, .absent: break
-            case .outside: return .failed("outside")
-            case let .failed(why): return .failed(why)
-            }
+        let expected: String
+        switch expect {
+        case let .unchanged(text): expected = text
         }
+        switch read(path, within: nil) {
+        case let .bytes(now) where now != Data(expected.utf8): return .changed(now)
+        case .bytes, .absent: break
+        case .outside: return .failed("outside")
+        case let .failed(why): return .failed(why)
+        }
+        if case .bytes(Data(text.utf8)) = read(path, within: nil) { return .written }
         do {
             try Data(text.utf8).write(to: url, options: .atomic)
             return .written
@@ -107,10 +115,14 @@ extension FakeBenchd {
                 }
             case "file/write":
                 let expect = args["expect"] as? [String: Any] ?? [:]
-                let expected: BenchFileExpect =
-                    expect["kind"] as? String == "unchanged"
-                    ? .unchanged(expect["text"] as? String ?? "") : .any
-                switch files.write(args["text"] as? String ?? "", to: path, expect: expected) {
+                guard expect["kind"] as? String == "unchanged" else {
+                    return refused("file/write args: expect must be unchanged")
+                }
+                switch files.write(
+                    args["text"] as? String ?? "", to: path,
+                    expect: .unchanged(expect["text"] as? String ?? ""),
+                    notify: args["notify"] as? Bool ?? false)
+                {
                 case .written: return ok(["kind": "written"])
                 case let .changed(now):
                     return ok(["kind": "changed", "base64": now.base64EncodedString()])
@@ -141,7 +153,7 @@ func fileChangedFrame(_ path: String, seq: Int = 900) -> Data {
     return try! JSONSerialization.data(withJSONObject: frame)
 }
 
-// The sidecar and the latch on this test's disk, for the tests written before benchd held them.
+// The sidecar on this test's disk, for the tests written before benchd held it.
 extension CanvasNotes {
     static func append(_ annotation: CanvasAnnotation, for canvas: URL, at timestamp: Date) throws {
         try append(annotation, for: canvas, at: timestamp, through: DiskCanvasFiles())
@@ -149,16 +161,5 @@ extension CanvasNotes {
 
     static func markdown(in sidecar: URL) -> String? {
         markdown(in: sidecar, through: DiskCanvasFiles())
-    }
-}
-
-extension CanvasStateLatch {
-    @discardableResult
-    static func write(
-        _ body: CanvasStateBody, for canvas: URL, at timestamp: Date
-    ) throws
-        -> CanvasStateLatch
-    {
-        try write(body, for: canvas, at: timestamp, through: DiskCanvasFiles())
     }
 }

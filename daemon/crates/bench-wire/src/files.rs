@@ -6,9 +6,11 @@
 //! - `file/read` answers the bytes, or that nothing is there, or — with `within` — that the
 //!   path leaves the canvas's folder. Only benchd can follow a symlink on its own disk, so the
 //!   folder boundary a page's fetch is held to is decided here.
-//! - `file/write` says what the writer expects to replace (`Expect`). `unchanged` is helm's
-//!   "never write over bytes the operator has not been shown", done as one compare-and-write on
-//!   benchd's side. A notes sidecar is refused: it is only ever appended to.
+//! - `file/write` says what the writer expects to replace (`Expect`): "only if the file still
+//!   holds these bytes", done as one compare-and-write on benchd's side. That is helm's "never
+//!   write over bytes the operator has not been shown", and an agent's `bench file write
+//!   --expect`. A notes sidecar is refused: it is only ever appended to. `notify` marks the
+//!   operator's own edit through a canvas page, which benchd mails to the canvas's opener.
 //! - `file/append` is the sidecar's one write.
 //! - `file/changed` is benchd telling its followers that a canvas file or its sidecar changed.
 //!
@@ -32,6 +34,10 @@ pub const FILE_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// What makes a file some canvas's notes sidecar (helm's `CanvasNotes.sidecarSuffix`).
 pub const NOTES_SUFFIX: &str = ".notes.md";
+
+/// What makes a file an HTML canvas's live file: the one JSON file the page and the agent both
+/// edit (helm's `BenchLiveFile`).
+pub const LIVE_SUFFIX: &str = ".data.json";
 
 /// `file/read`'s payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,12 +63,12 @@ pub enum FileRead {
     Outside,
 }
 
-/// What a `file/write` expects to replace.
+/// What a `file/write` expects to replace. Every writer names what it saw: a write that skips
+/// the compare is how an agent's stale copy undoes the operator's edit (helm #532). Tagged, with
+/// one kind, so a second is an addition rather than a migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expect {
-    /// Write whatever is there. The state latch, which only helm writes.
-    Any,
     /// Write only if the file still holds exactly `text`, or is gone.
     Unchanged { text: String },
 }
@@ -74,6 +80,11 @@ pub struct FileWriteArgs {
     pub path: String,
     pub text: String,
     pub expect: Expect,
+    /// A canvas page, the operator's surface, changed this: once written, benchd mails the agent
+    /// that opened each canvas whose live file this is, naming the JSON pointers that changed.
+    /// A page reporting its own state says `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notify: bool,
 }
 
 /// `file/write`'s answer.
@@ -113,6 +124,18 @@ pub fn notes_sidecar(canvas: &str) -> String {
     format!("{dir}/{stem}{NOTES_SUFFIX}")
 }
 
+/// `/a/tasks.html` → `/a/tasks.data.json`: an HTML canvas's live file, and `None` for any other
+/// canvas. The stem is `notes_sidecar`'s. helm's `BenchLiveFile.path` is the same rule, pinned by
+/// the fixture's table.
+pub fn live_file(canvas: &str) -> Option<String> {
+    let (dir, name) = canvas.rsplit_once('/').unwrap_or(("", canvas));
+    let (stem, extension) = name.rsplit_once('.')?;
+    if stem.is_empty() || !matches!(extension.to_lowercase().as_str(), "html" | "htm") {
+        return None;
+    }
+    Some(format!("{dir}/{stem}{LIVE_SUFFIX}"))
+}
+
 /// Whether `path` is some canvas's notes sidecar, which `file/write` refuses. In any case:
 /// `plan.NOTES.md` is the same file on a case-insensitive volume. helm's `CanvasNotes.isSidecar`
 /// is the same rule, pinned by the fixture's table.
@@ -142,6 +165,34 @@ pub fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// `base64`'s inverse, for `bench file read` and `bench file write`'s answers. `None` for text
+/// that is not standard base64.
+pub fn unbase64(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(u32::from(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        }))
+    };
+    let clean = text.trim_end_matches('=').as_bytes();
+    if clean.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= value(c)? << (18 - 6 * i);
+        }
+        out.extend(&n.to_be_bytes()[1..chunk.len()]);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +207,17 @@ mod tests {
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
         assert_eq!(base64(&[0xff, 0xfe, 0x00]), "//4A");
+        for bytes in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foobar",
+            &[0xff, 0xfe, 0x00],
+        ] {
+            assert_eq!(unbase64(&base64(bytes)).as_deref(), Some(bytes));
+        }
+        assert_eq!(unbase64("Zm9v!"), None);
     }
 
     /// `fixtures/file-verbs.json` pins what helm sends and reads — each request, each answer and
@@ -177,8 +239,9 @@ mod tests {
         let sibling_args: FileReadArgs = serde_json::from_value(sibling.args.clone()).unwrap();
         let write = request("write", "file/write");
         let write_args: FileWriteArgs = serde_json::from_value(write.args.clone()).unwrap();
-        let latch = request("write_latch", "file/write");
-        let latch_args: FileWriteArgs = serde_json::from_value(latch.args.clone()).unwrap();
+        let page = request("write_page", "file/write");
+        let page_args: FileWriteArgs = serde_json::from_value(page.args.clone()).unwrap();
+        assert!(page_args.notify && !write_args.notify);
         let append = request("append", "file/append");
         let append_args: FileAppendArgs = serde_json::from_value(append.args.clone()).unwrap();
         let answers: Vec<FileRead> = serde_json::from_value(value["read_answers"].clone()).unwrap();
@@ -195,12 +258,13 @@ mod tests {
             "read": with(read, json!(read_args)),
             "read_sibling": with(sibling, json!(sibling_args)),
             "write": with(write, json!(write_args)),
-            "write_latch": with(latch, json!(latch_args)),
+            "write_page": with(page, json!(page_args)),
             "append": with(append, json!(append_args)),
             "read_answers": answers,
             "write_answers": written,
             "changed": frame,
             "sidecars": value["sidecars"],
+            "live_files": value["live_files"],
         }))
         .unwrap()
             + "\n";
@@ -220,6 +284,14 @@ mod tests {
                 "{canvas}"
             );
             assert!(is_notes_sidecar(&notes_sidecar(canvas)));
+        }
+        for row in value["live_files"].as_array().unwrap() {
+            let canvas = row["canvas"].as_str().unwrap();
+            assert_eq!(
+                live_file(canvas).as_deref(),
+                row["live_file"].as_str(),
+                "{canvas}"
+            );
         }
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
 // The file layer as helm sends and reads it (M5c, #459): a canvas's file, its sibling assets,
-// its notes sidecar and its state latch, read and written by benchd. The spelling is
+// its notes sidecar and an HTML canvas's live file (#532), read and written by benchd. The spelling is
 // `bench_wire::files`; `daemon/fixtures/file-verbs.json` pins both sides.
 
 /// `file/read`: a file's bytes, or — with `within` — a page's sibling, which benchd refuses to
@@ -61,10 +61,8 @@ package enum BenchFileRead: Decodable, Equatable, Sendable {
     }
 }
 
-/// What a `file/write` expects to replace.
+/// What a `file/write` expects to replace. Every writer names what it saw (#532).
 package enum BenchFileExpect: Equatable, Sendable {
-    /// Whatever is there: the state latch, which only helm writes.
-    case any
     /// Only if the file still holds exactly these bytes, or is gone.
     case unchanged(String)
 }
@@ -75,16 +73,22 @@ package struct BenchFileWriteRequest: Encodable, Equatable, Sendable {
     package var path: String
     package var text: String
     package var expect: BenchFileExpect
+    /// A canvas page, the operator's surface, changed its live file: benchd mails the canvas's opener once
+    /// it is written. Encoded only when true, as on the Rust side.
+    package var notify: Bool
 
-    package init(id: String, path: String, text: String, expect: BenchFileExpect) {
+    package init(
+        id: String, path: String, text: String, expect: BenchFileExpect, notify: Bool = false
+    ) {
         self.id = id
         self.path = path
         self.text = text
         self.expect = expect
+        self.notify = notify
     }
 
     private enum CodingKeys: String, CodingKey { case id, verb, args }
-    private enum ArgKeys: String, CodingKey { case path, text, expect }
+    private enum ArgKeys: String, CodingKey { case path, text, expect, notify }
     private enum ExpectKeys: String, CodingKey { case kind, text }
 
     package func encode(to encoder: any Encoder) throws {
@@ -96,11 +100,11 @@ package struct BenchFileWriteRequest: Encodable, Equatable, Sendable {
         try a.encode(text, forKey: .text)
         var e = a.nestedContainer(keyedBy: ExpectKeys.self, forKey: .expect)
         switch expect {
-        case .any: try e.encode("any", forKey: .kind)
         case let .unchanged(text):
             try e.encode("unchanged", forKey: .kind)
             try e.encode(text, forKey: .text)
         }
+        if notify { try a.encode(true, forKey: .notify) }
     }
 }
 
@@ -158,4 +162,23 @@ package struct BenchFileAppended: Decodable, Equatable, Sendable {}
 package struct BenchFileChanged: Decodable, Equatable, Sendable {
     package static let kind = "file/changed"
     package var path: String
+}
+
+/// An HTML canvas's live file (#532): `/a/tasks.html` → `/a/tasks.data.json`, the one JSON file
+/// the page and the agent both edit. `bench_wire::live_file` is the same rule, pinned by
+/// `file-verbs.json`'s `live_files` table.
+package enum BenchLiveFile {
+    package static let suffix = ".data.json"
+
+    /// The live file beside `canvas`, or nil for a canvas that is not HTML.
+    package static func path(for canvas: String) -> String? {
+        let slash = canvas.lastIndex(of: "/")
+        let name = slash.map { canvas[canvas.index(after: $0)...] } ?? canvas[...]
+        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return nil }
+        guard ["html", "htm"].contains(name[name.index(after: dot)...].lowercased()) else {
+            return nil
+        }
+        let directory = slash.map { String(canvas[..<$0]) } ?? ""
+        return "\(directory)/\(name[..<dot])\(suffix)"
+    }
 }

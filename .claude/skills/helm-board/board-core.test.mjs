@@ -282,7 +282,7 @@ console.log("the report");
   check("a busy board reports at most the cap", report.marks.length, core.MAX_MARKS);
   check("and says how many it left out rather than quietly truncating", report.truncated.marks, 5);
   ok(
-    "a full report stays well inside helm's 64 KB latch limit",
+    "a full report stays small enough to read every turn (under 64 KB)",
     JSON.stringify(report).length < 64000,
     `${JSON.stringify(report).length} bytes`
   );

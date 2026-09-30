@@ -197,6 +197,34 @@ impl Document {
         self.live_panes().map(|p| p.id).collect()
     }
 
+    /// Every canvas pane, as the file it shows and the pane that opened it.
+    pub fn canvases(&self) -> Vec<(&StandardPath, Option<PaneId>)> {
+        self.live_panes()
+            .filter_map(|pane| match &pane.surface {
+                Surface::Canvas {
+                    source: crate::surface::CanvasSource::File { path },
+                } => Some((path, pane.opener)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Record that the agent in pane `opener` opened canvas pane `pane`. Answers whether that
+    /// changed anything; a pane that is not a canvas is left alone. Not a verb: benchd calls it
+    /// for an agent's `pane/open`, from the verb's own `by`.
+    pub fn record_opener(&mut self, pane: PaneId, opener: PaneId) -> bool {
+        let benches = self.workspaces.iter_mut().flat_map(|w| w.bench.panes_mut());
+        let drawers = self.drawers.iter_mut().flat_map(|d| d.panes.iter_mut());
+        for p in benches.chain(drawers) {
+            if p.id == pane && matches!(p.surface, Surface::Canvas { .. }) {
+                let changed = p.opener != Some(opener);
+                p.opener = Some(opener);
+                return changed;
+            }
+        }
+        false
+    }
+
     /// Show benchd session `session` in terminal pane `pane`, keeping its agent record. Answers
     /// whether `pane` is a terminal here. Not a verb: benchd calls it for a session it started
     /// for the pane, and the change is committed like any other.

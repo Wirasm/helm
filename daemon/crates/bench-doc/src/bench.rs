@@ -73,6 +73,12 @@ pub struct Pane {
     /// Beside the surface rather than inside it: a name means the same thing for every kind.
     #[serde(default, skip_serializing_if = "PaneName::is_unnamed")]
     pub name: PaneName,
+    /// The agent's pane whose `pane/open` last put this canvas here (helm #205, #532): where a
+    /// mark or a live-file edit on it is mailed. benchd writes it from the verb's `by`, never
+    /// from what a verb carries, and the agent in that pane is looked up when the mail goes, so a
+    /// restarted agent is still reached. Kept in the document so the route outlives helm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<PaneId>,
 }
 
 impl Pane {
@@ -81,6 +87,7 @@ impl Pane {
             id: PaneId::mint(),
             surface,
             name: PaneName::Unnamed,
+            opener: None,
         }
     }
 
@@ -89,6 +96,7 @@ impl Pane {
             id,
             surface,
             name: PaneName::Unnamed,
+            opener: None,
         }
     }
 }

@@ -63,7 +63,7 @@ export function overlapArea(a, b) {
 // **Raw intersection area, not a normalised fraction.** Raw area is what was measured to be
 // right; a fraction of the mark, or of the candidate, is a different ranking that nobody has
 // run. The number is reported rather than only compared, and the runner-up's alongside it, so
-// a caller reading the latch has the confidence signal the spike used: a top score with a
+// a caller reading the report has the confidence signal the spike used: a top score with a
 // runner-up at zero is unambiguous, two close scores are a mark between two things.
 //
 // Ties break on id so the answer is stable across runs. An unstable ranking is the defect
@@ -199,9 +199,8 @@ export const MAX_SHAPES = 96;
 
 // **`format` and `version` INSIDE the state, and that is not a duplicate of helm's envelope.**
 //
-// helm's latch wraps this in `{format: "helm.canvas-state", version, writtenAt, artifact,
-// state}` — that envelope versions *helm's file*, and helm never reads what is inside it. This
-// object is a second thing an agent parses, with its own vocabulary that will grow, so it
+// helm writes this object as the board's live file (`<base>.data.json`) and never reads what is
+// inside it. It is a thing an agent parses, with its own vocabulary that will grow, so it
 // carries its own discriminator from the first message rather than acquiring one when a second
 // shape arrives. helm's canvas has paid the other bill once already: the page→helm bridge
 // shipped `{id, text, rect}` with no `kind`, and the gate that had to infer the shape dropped
@@ -241,7 +240,7 @@ export function boardReport({ records, boundsOf, ownedIds, generation, warnings,
     format: "helm.board",
     version: 1,
     // **Always present, both ways round.** `board.js` posts `mounted: false` when it cannot find
-    // its container — the one failure that would otherwise be a blank page and a silent latch —
+    // its container — the one failure that would otherwise be a blank page and a silent report —
     // and a field that only ever appears on failure is one a reader has to know to look for.
     // Absent is not a third state; it is an older build.
     mounted: true,
@@ -268,7 +267,7 @@ export function boardReport({ records, boundsOf, ownedIds, generation, warnings,
   // **The page's only way to be loud.** helm's log records what helm dropped; nothing records
   // what the page could not do. A drawing that has quietly stopped surviving reloads, or a
   // document file that answered 500, is a fact the agent has to be able to read — and this
-  // latch is the only channel a canvas has. Absent when there is nothing wrong, so its presence
+  // report is the only channel the page has. Absent when there is nothing wrong, so its presence
   // is the signal.
   if (warnings && warnings.length) report.warnings = warnings.slice(0, 8);
   return report;

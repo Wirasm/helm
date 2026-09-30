@@ -5,7 +5,7 @@ import XCTest
 @testable import Helm
 
 /// A canvas against a real benchd reached only over TCP, whose folder this process cannot read
-/// (M5c, #459): it opens, edits, conflicts, annotates, latches state and serves a page's
+/// (M5c, #459): it opens, edits, conflicts, annotates, writes a page's live file and serves its
 /// siblings, with every byte going through benchd.
 ///
 /// **Skipped unless a harness sets it up**, because the Swift gate needs no benchd: a benchd with
@@ -88,7 +88,8 @@ final class CanvasOverTCPTests: XCTestCase {
         // An agent rewrites it under a dirty draft: benchd reports it, the strip goes up, and a
         // save writes nothing over theirs.
         model.edit("# Plan\n\nMine, longer.\n")
-        _ = BenchCanvasFiles(client: client).write("# Theirs\n", to: plan.path, expect: .any)
+        _ = BenchCanvasFiles(client: client).write(
+            "# Theirs\n", to: plan.path, expect: .unchanged("# Plan\n\nMine.\n"))
         try await eventually("the conflict strip") { model.draft?.conflict != nil }
         model.saveDraft()
         XCTAssertEqual(onBenchd("plan.md"), "# Theirs\n", "nothing written over bytes not shown")
@@ -108,7 +109,7 @@ final class CanvasOverTCPTests: XCTestCase {
         XCTAssertEqual(model.notes.count, 1)
     }
 
-    func testAnHTMLCanvasGetsItsSiblingsAndLatchesItsState() throws {
+    func testAnHTMLCanvasGetsItsSiblingsAndWritesItsLiveFile() throws {
         let page = folder.appendingPathComponent("page.html")
         XCTAssertNotNil(files.document(page), "the page itself")
         XCTAssertEqual(
@@ -118,12 +119,12 @@ final class CanvasOverTCPTests: XCTestCase {
             files.read(folder.path + "/../outside.txt", within: folder.path), .outside)
 
         let model = CanvasModel(source: .file(page), files: files)
-        guard
-            case let .success(report) = CanvasPageState.decode([
-                "kind": "canvas.state", "state": ["level": 3],
-            ])
-        else { return XCTFail("a state the page may report") }
-        model.pageDidReportState(report)
-        XCTAssertTrue(onBenchd("page.state.json")?.contains("\"level\" : 3") == true)
+        let write = try CanvasDataWrite.decode([
+            "kind": CanvasDataWrite.kind, "data": ["level": 3], "base": NSNull(),
+        ]).get()
+        guard case .success(.written) = model.pageWroteData(write) else {
+            return XCTFail("the page's write did not land")
+        }
+        XCTAssertEqual(onBenchd("page.data.json"), "{\n  \"level\" : 3\n}\n")
     }
 }

@@ -1,5 +1,5 @@
 //! A canvas's files, read and written by benchd (M5c, helm #459): the three `file/*` verbs, and
-//! the watcher that tells followers when a canvas file or its sidecar changed.
+//! the watcher that tells followers when a canvas file, its sidecar or its live file changed.
 //!
 //! helm draws canvases and never touches their files itself, on one machine as much as across
 //! two, so this is the one place a canvas's bytes are read, compared and written. The wire types
@@ -9,7 +9,7 @@ use crate::Core;
 use bench_doc::StandardPath;
 use bench_wire::{
     Expect, FILE_CHANGED, FILE_READ_MAX_BYTES, FileAppendArgs, FileChanged, FileRead, FileReadArgs,
-    FileWrite, FileWriteArgs, base64, is_notes_sidecar, notes_sidecar,
+    FileWrite, FileWriteArgs, base64, is_notes_sidecar, live_file, notes_sidecar,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -87,10 +87,12 @@ fn inside(path: &Path, dir: &Path) -> bool {
     }
 }
 
-/// `file/write`: temp file and rename, beside the target. With `Expect::Unchanged` the file is
-/// compared first, under `WRITES`: gone or byte-equal is written, anything else answers
-/// `changed` with what is there and writes nothing. A file that cannot be read for the compare
-/// is refused, never written: "could not look" is not "unchanged".
+/// `file/write`: temp file and rename, beside the target. The file is compared first, under
+/// `WRITES`: gone or byte-equal to `expect` is written, anything else answers `changed` with what
+/// is there and writes nothing. A file that cannot be read for the compare is refused, never
+/// written: "could not look" is not "unchanged". Text that is already there is `written` without
+/// touching the file. A write that says `notify` is handed to the
+/// live-file mailer once it is on disk (`live::edited`).
 pub fn write(args: &Value) -> Result<Value, String> {
     let args: FileWriteArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("file/write args: {e}"))?;
@@ -102,28 +104,35 @@ pub fn write(args: &Value) -> Result<Value, String> {
             path.display()
         ));
     }
-    let _held = WRITES
+    let held = WRITES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Expect::Unchanged { text } = &args.expect {
-        match fs::read(&path) {
-            Ok(now) if now != text.as_bytes() => {
-                return Ok(json!(FileWrite::Changed {
-                    base64: base64(&now)
-                }));
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(format!(
-                    "cannot read {} to compare before writing: {e}",
-                    path.display()
-                ));
-            }
+    let Expect::Unchanged { text: expected } = &args.expect;
+    let before = match fs::read(&path) {
+        Ok(now) if now != expected.as_bytes() => {
+            return Ok(json!(FileWrite::Changed {
+                base64: base64(&now)
+            }));
         }
+        Ok(now) => Some(now),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(format!(
+                "cannot read {} to compare before writing: {e}",
+                path.display()
+            ));
+        }
+    };
+    // Already there: nothing is rewritten, so the file's time still says when it last changed.
+    if before.as_deref() == Some(args.text.as_bytes()) {
+        return Ok(json!(FileWrite::Written));
     }
     replace(&path, args.text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    drop(held);
+    if args.notify {
+        crate::live::edited(&path.to_string_lossy(), before.as_deref(), &args.text);
+    }
     Ok(json!(FileWrite::Written))
 }
 
@@ -218,13 +227,18 @@ impl Watch {
     }
 }
 
-/// Every file to watch: each canvas file in the document, and its notes sidecar.
+/// Every file to watch: each canvas file in the document, its notes sidecar, and an HTML
+/// canvas's live file (helm #532), which an agent writes and the open page is told about.
 fn watched(core: &Arc<Mutex<Core>>) -> Vec<String> {
     let files = core.lock().unwrap().bench.document.canvas_files();
     let mut seen = HashSet::new();
     files
         .iter()
-        .flat_map(|f| [f.as_str().to_string(), notes_sidecar(f.as_str())])
+        .flat_map(|f| {
+            let f = f.as_str();
+            [Some(f.to_string()), Some(notes_sidecar(f)), live_file(f)]
+        })
+        .flatten()
         .filter(|p| seen.insert(p.clone()))
         .collect()
 }

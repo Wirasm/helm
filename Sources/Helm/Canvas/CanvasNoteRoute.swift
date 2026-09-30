@@ -3,30 +3,20 @@ import HelmWire
 
 // MARK: - CanvasOrigin
 
-/// The terminal that put a canvas on the bench.
+/// The terminal pane whose agent put a canvas on the bench (#205).
 ///
-/// **The identity existed at push time and was thrown away** (#205, and #210's second seam).
-/// `TerminalSession.terminalDidRequestDesktopNotification` classifies the push with the session
-/// — and therefore its pid, and therefore its mailbox — right there in scope, and
-/// the push request carried only `{artifact, workspacePath}` onward. So a mark made on that canvas
-/// had no route home and ended at the operator's clipboard, which is #115's own measurement of
-/// why marking lost to typing.
+/// **benchd's record, read off the document** (`Pane.opener`, #532). benchd writes it from an
+/// agent's `pane/open`, whether the canvas was new or already open, so the newest opener is the
+/// one a mark reaches. Being in the document is what lets the route survive a helm relaunch: every
+/// terminal pane is a benchd session (M5b), so the agent that opened the canvas is still in its
+/// pane after helm comes back.
 ///
-/// **A newtype over the pane id rather than a bare `UUID`, and that is not decoration here.** The
-/// map this appears in is `[Pane.ID: CanvasOrigin]` — canvas pane to terminal pane — and both
-/// sides are `UUID`. `AGENTS.md` asks for the newtype the day the comment gets written; this is
-/// that day, and the comment would have read "the key is the canvas, the value is the terminal".
+/// **A newtype over the pane id rather than a bare `UUID`**: the canvas pane and the terminal
+/// pane are both `UUID`s, and this says which one it is.
 ///
-/// **Resolved late, never at push time.** What is recorded is which pane, not which pid or which
-/// handle: a handle read when the push arrived would be stale the moment that agent restarted in
-/// the same pane, and stale silently — mail to an old session's mailbox is never read and never
-/// bounces. Asking benchd who is in the pane *now* (`mail/who`), at the moment the operator marks
-/// something, is the only answer that cannot be quietly wrong.
-///
-/// **Which is also why it is not persisted.** A restored terminal pane is a fresh empty shell —
-/// *attach never own*, `Pane.Content`'s encoder says so in as many words — so after a relaunch the
-/// agent that pushed the canvas is gone by construction. An origin that survived the restart could
-/// only name a pane running somebody else.
+/// **Resolved late.** What is recorded is which pane, not which pid or handle: a handle read at
+/// open time would be stale the moment that agent restarted in the same pane, and stale silently.
+/// Asking benchd who is in the pane *now* (`mail/who`), when the mark is made, cannot be.
 struct CanvasOrigin: Equatable, Hashable {
     /// The terminal pane, which for a terminal *is* its `TerminalSession.ID` (`Pane`'s header).
     let terminal: Pane.ID
@@ -48,8 +38,7 @@ enum CanvasNoteRoute: Equatable {
     case clipboard(Fallback)
 
     enum Fallback: Equatable {
-        /// No agent pushed this canvas: the operator opened it themselves, or a restart dropped
-        /// the origin that named one.
+        /// No agent opened this canvas: the operator opened it himself.
         case noOrigin
         /// An agent pushed it, and benchd knows no mailbox in that pane — the pane was closed, the
         /// session ended, or its harness does not report to benchd.

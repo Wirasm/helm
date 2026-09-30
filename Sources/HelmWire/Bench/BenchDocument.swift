@@ -125,20 +125,28 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         /// Absent means unnamed: the key is omitted rather than written empty, as on the Rust
         /// side.
         package var name: PaneName
+        /// The agent's pane whose `pane/open` last put this canvas here (#205, #532): where a
+        /// mark on it is mailed. benchd writes it; helm only reads it. In the document, so the
+        /// route outlives a helm relaunch.
+        package var opener: UUID?
 
-        package init(id: UUID, surface: Surface, name: PaneName = .unnamed) {
+        package init(
+            id: UUID, surface: Surface, name: PaneName = .unnamed, opener: UUID? = nil
+        ) {
             self.id = id
             self.surface = surface
             self.name = name
+            self.opener = opener
         }
 
-        private enum CodingKeys: String, CodingKey { case id, surface, name }
+        private enum CodingKeys: String, CodingKey { case id, surface, name, opener }
 
         package init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             id = try c.decode(UUID.self, forKey: .id)
             surface = try c.decode(Surface.self, forKey: .surface)
             name = try c.decodeIfPresent(PaneName.self, forKey: .name) ?? .unnamed
+            opener = try c.decodeIfPresent(UUID.self, forKey: .opener)
         }
 
         package func encode(to encoder: any Encoder) throws {
@@ -146,6 +154,7 @@ package struct BenchDocument: Codable, Equatable, Sendable {
             try c.encode(id, forKey: .id)
             try c.encode(surface, forKey: .surface)
             if name != .unnamed { try c.encode(name, forKey: .name) }
+            try c.encodeIfPresent(opener, forKey: .opener)
         }
     }
 

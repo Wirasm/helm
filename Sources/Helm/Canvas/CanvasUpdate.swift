@@ -18,8 +18,9 @@ import Foundation
 ///
 /// ```js
 /// window.helmCanvasUpdate = function (update) {
-///   // update.kind === "canvas.update", update.version, update.artifact, update.generation
-///   refetchState();            // ./state.json, whatever the agent rewrote
+///   // update.kind === "canvas.update", update.version, update.artifact, update.generation,
+///   // update.file: "tasks.data.json" when the live file changed, else the artifact's name
+///   refetchData();             // ./tasks.data.json, whatever the agent rewrote
 ///   return true;               // handled
 ///   // return false;           // "not now" — helm shows the operator "Updated — reload"
 /// };
@@ -68,9 +69,15 @@ struct CanvasUpdate: Equatable, Codable {
     /// two offers apart and a test can say which one it answered.
     var generation: Int
 
-    init(artifact: URL, generation: Int) {
+    /// The name of the file that changed (#532): the artifact's own, or its live file
+    /// (`tasks.data.json`). A page that holds state tells new data from new markup by this, and a
+    /// name rather than a path for `artifact`'s reason.
+    var file: String
+
+    init(artifact: URL, generation: Int, file: String? = nil) {
         self.artifact = artifact.lastPathComponent
         self.generation = generation
+        self.file = file ?? artifact.lastPathComponent
     }
 
     /// The wrapper helm evaluates in the **page** content world. Returns the answer envelope
