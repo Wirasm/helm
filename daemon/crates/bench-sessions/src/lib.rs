@@ -25,7 +25,7 @@ pub mod snapshot;
 pub mod transcript;
 
 use bench_doc::StandardPath;
-use bench_session::{AgentKind, SpawnSpec};
+use bench_session::{AgentKind, Conversation, Posture, SpawnSpec};
 use bench_wire::{
     Activity, Dismissal, Harness, Host, HostedSession, HostedVia, MailAddress, OPERATOR_HANDLE,
     OpenAction, SessionKey, SessionList, SessionRow, SessionState, Unreadable, Waiting,
@@ -149,6 +149,7 @@ pub fn open_action(
     cwd: &str,
     host: &Host,
     state: &SessionState,
+    posture: Posture,
 ) -> Result<OpenAction, String> {
     let running = state.is_running();
     match (host, running) {
@@ -173,8 +174,8 @@ pub fn open_action(
                 cwd: cwd.to_string(),
                 model: None,
                 effort: None,
-                runtime_session: Some(id.to_string()),
-                resume: true,
+                conversation: Conversation::Resume(id.to_string()),
+                posture,
                 prompt_file: None,
                 settings: None,
                 extra_args: Vec::new(),
@@ -214,10 +215,16 @@ struct Draft {
 impl Rows<'_> {
     /// Adds the row when `scope_cwd` is in the workspace.
     fn push(&mut self, scope_cwd: &str, d: Draft) {
+        self.push_resumable(scope_cwd, d, Posture::Unattended);
+    }
+
+    /// [`Rows::push`], for a row whose resume takes `posture`: a finished fork's is read-only
+    /// (#531).
+    fn push_resumable(&mut self, scope_cwd: &str, d: Draft, posture: Posture) {
         let Some(root) = self.ws.root_of(scope_cwd) else {
             return;
         };
-        let open = match open_action(d.harness, &d.id, &d.cwd, &d.host, &d.state) {
+        let open = match open_action(d.harness, &d.id, &d.cwd, &d.host, &d.state, posture) {
             Ok(o) => o,
             Err(why) => {
                 self.unreadable.push(Unreadable {
@@ -324,6 +331,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 cwd: cwd.to_string(),
                 via: HostedVia::Pane { pane, handle: None },
                 recorded_at: inputs.now.to_string(),
+                forked_from: None,
             });
         }
     };
@@ -524,7 +532,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         if dismissed.get(&k).is_some_and(|d| at_ms <= *d) {
             continue;
         }
-        out.push(
+        out.push_resumable(
             &h.cwd,
             Draft {
                 harness: h.harness,
@@ -540,6 +548,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 mail: h.handle().map(|handle| (inputs.mailbox)(handle)),
                 updated_at_ms: at_ms,
             },
+            Posture::resuming(h.forked_from.as_deref()),
         );
     }
 

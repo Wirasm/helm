@@ -52,8 +52,9 @@ fn usage() -> &'static str {
      \x20     stop                                log the stop, kill sessions, exit\n\
      \x20     spawn --agent <a> --cwd <dir>       an agent in a bench pty, shown in a pane of\n\
      \x20           [--name <handle>]             <dir>'s workspace; --resume <id> re-enters a\n\
-     \x20           [--prompt-file <p>]           claude or pi conversation, --arg adds a flag\n\
-     \x20           [--model <m>] [--effort <e>] [--resume <id>] [--arg <flag>]... [--asked]\n\
+     \x20           [--prompt-file <p>]           claude or pi conversation, --fork <id> copies a\n\
+     \x20           [--model <m>] [--effort <e>]  claude one to run read-only, --arg adds a flag\n\
+     \x20           [--resume <id> | --fork <id>] [--arg <flag>]... [--asked]\n\
      \x20     open <file|browser|terminal>        a pane in your workspace (a .md/.html file is\n\
      \x20           [--workspace <dir> | --drawer <name>] [--asked]      a canvas)\n\
      \x20     split <right|down> [--surface <s>]  a new column or row beside the focused slot\n\

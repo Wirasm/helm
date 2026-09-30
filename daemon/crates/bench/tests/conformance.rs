@@ -8028,3 +8028,177 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
         "one report each, and nothing else"
     );
 }
+
+/// A claude that writes the argv it was started with to `$HOME/argv-<bench session>`, then
+/// echoes: what a fork was asked to run is a fact the stub can report.
+const ARGV_CLAUDE: &str = "printf '%s\\n' \"$@\" > \"$HOME/argv-$BENCH_SESSION\"\nexec cat";
+
+/// The argv the stub claude of session `sid` was started with.
+fn stub_argv(home: &Path, sid: &str) -> Vec<String> {
+    let file = home.join(format!("argv-{sid}"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !file.is_file() {
+        assert!(Instant::now() < deadline, "session {sid} never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fs::read_to_string(file)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Claude has a transcript for `id`: what `restore` needs before it resumes a claude.
+fn fake_transcript(home: &Path, id: &str) {
+    let project = home.join(".claude/projects/ws");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join(format!("{id}.jsonl")), "{}\n").unwrap();
+}
+
+#[test]
+fn a_fork_is_its_own_read_only_conversation_so_the_author_restores_beside_it() {
+    // #531: the operator asks an agent about its work in a fork of its conversation. Before, a
+    // fork (`--resume <id> --arg --fork-session`) was recorded under the author's id, and while it
+    // ran the author's pane would not restore: "already live in another session".
+    let home = TestHome::claim("fork");
+    let ws = workspace(&home.dir).display().to_string();
+    let (author_pane, author) = {
+        let daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(
+            &home.dir,
+            &["spawn", "--agent", "claude", "--cwd", &ws],
+        ));
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+        )
+    };
+    fake_transcript(&home.dir, &author);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+
+    let run = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &ws, "--fork", &author,
+        ],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let fork = json_of(&run);
+    let (fork_sid, fork_id) = (
+        fork["session"].as_str().unwrap().to_string(),
+        fork["runtime_session"].as_str().unwrap().to_string(),
+    );
+    assert_ne!(fork_id, author, "a fork is a conversation of its own");
+    assert_eq!(fork_id.len(), 36, "minted like any spawn's: {fork_id}");
+    assert_eq!(fork["forked_from"], author.as_str());
+
+    // What claude was asked to run: the author's conversation copied under the minted id, in
+    // plan mode rather than the unattended posture.
+    let argv = stub_argv(&home.dir, &fork_sid);
+    let pos = |flag: &str| argv.iter().position(|a| a == flag);
+    assert_eq!(argv[pos("--resume").unwrap() + 1], author, "{argv:?}");
+    assert!(pos("--fork-session").is_some(), "{argv:?}");
+    assert_eq!(argv[pos("--session-id").unwrap() + 1], fork_id, "{argv:?}");
+    assert_eq!(
+        argv[pos("--permission-mode").unwrap() + 1],
+        "plan",
+        "{argv:?}"
+    );
+    assert!(pos("--dangerously-skip-permissions").is_none(), "{argv:?}");
+
+    // Every record names the fork's own conversation.
+    assert_eq!(
+        session_row(&home.dir, &fork_sid)["runtime_session"],
+        fork_id.as_str()
+    );
+    assert_eq!(
+        pane_agent(&home.dir, fork["pane"].as_str().unwrap())["session"],
+        fork_id.as_str()
+    );
+    let events = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap();
+    let spawned = events
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|e| e["kind"] == "session/spawned" && e["data"]["session"] == fork_sid.as_str())
+        .expect("the fork's spawn is logged");
+    assert_eq!(spawned["data"]["runtime_session"], fork_id.as_str());
+    assert_eq!(spawned["data"]["forked_from"], author.as_str());
+    assert_eq!(spawned["data"]["resumed"], false);
+
+    // The author's pane comes back while the fork runs.
+    let restored = json_of(&bench(&home.dir, &["restore", &author_pane]));
+    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    let author_sid = restored["restored"][0]["session"].as_str().unwrap();
+    let author_argv = stub_argv(&home.dir, author_sid);
+    assert!(
+        author_argv.contains(&"--dangerously-skip-permissions".to_string()),
+        "the author keeps its posture: {author_argv:?}"
+    );
+
+    // After another restart the fork comes back read-only, from benchd's record of it.
+    drop(_daemon);
+    fake_transcript(&home.dir, &fork_id);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+    let again = json_of(&bench(
+        &home.dir,
+        &["restore", fork["pane"].as_str().unwrap()],
+    ));
+    assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
+    let argv = stub_argv(&home.dir, again["restored"][0]["session"].as_str().unwrap());
+    assert_eq!(argv[..2], ["--permission-mode", "plan"], "{argv:?}");
+    assert_eq!(
+        argv[argv.iter().position(|a| a == "--resume").unwrap() + 1],
+        fork_id
+    );
+
+    // And by any other route: a caller re-entering the fork by its id gets it read-only too.
+    drop(_daemon);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+    let resumed = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &ws, "--resume", &fork_id,
+        ],
+    );
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+    let argv = stub_argv(&home.dir, json_of(&resumed)["session"].as_str().unwrap());
+    assert_eq!(argv[..2], ["--permission-mode", "plan"], "{argv:?}");
+}
+
+#[test]
+fn a_fork_is_refused_where_it_cannot_run() {
+    let home = TestHome::claim("fork-refused");
+    let ws = workspace(&home.dir).display().to_string();
+    let _daemon = DaemonGuard::start_with_fake(&home.dir, "claude");
+    for (cmd, rule) in [
+        (vec!["--agent", "codex", "--fork", "x1"], "codex fork"),
+        (vec!["--agent", "pi", "--fork", "x1"], "no read-only mode"),
+        (
+            vec!["--agent", "claude", "--fork", "x1", "--resume", "x2"],
+            "pass one of them",
+        ),
+        (
+            vec!["--agent", "claude", "--fork", "--looks-like-a-flag"],
+            "--fork",
+        ),
+    ] {
+        let mut args = vec!["spawn", "--cwd", ws.as_str()];
+        args.extend(cmd);
+        let run = bench(&home.dir, &args);
+        assert_eq!(run.code, 3, "{args:?}: {}", run.stderr);
+        assert!(run.stderr.contains(rule), "{args:?}: {}", run.stderr);
+    }
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    assert_eq!(
+        listed["sessions"],
+        serde_json::json!([]),
+        "nothing started: {listed}"
+    );
+}
