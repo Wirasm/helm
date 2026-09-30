@@ -74,7 +74,10 @@ fn a_canvas_keeps_the_conversation_that_opened_it() {
 
     assert!(doc.record_opener(canvas_id, opener));
     let wrote = author(&doc).expect("the opener's conversation is recorded");
-    assert_eq!((wrote.command.as_str(), wrote.session.as_str()), ("claude", "4b1c"));
+    assert_eq!(
+        (wrote.command.as_str(), wrote.session.as_str()),
+        ("claude", "4b1c")
+    );
 
     // The agent `/clear`s: its pane now holds another conversation. The canvas does not follow.
     let cleared = ResumableAgent {

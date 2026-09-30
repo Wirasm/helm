@@ -8569,7 +8569,10 @@ fn a_fork_helm_asks_for_gets_its_prompt_as_a_file_and_leaves_focus_alone() {
     for key in fixture["fork_reply"].as_object().unwrap().keys() {
         assert!(fork.get(key).is_some(), "benchd answers {key}: {fork}");
     }
-    assert!(!focused.is_null() && !fork["focused_pane_before"].is_null(), "{fork}");
+    assert!(
+        !focused.is_null() && !fork["focused_pane_before"].is_null(),
+        "{fork}"
+    );
     assert_eq!(
         fork["focused_pane_before"], fork["focused_pane_after"],
         "appear, don't seize: {fork}"

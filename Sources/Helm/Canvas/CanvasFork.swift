@@ -85,7 +85,9 @@ enum CanvasForkPrompt {
         case let .some(range) where range.count == 1: span = "Line: \(range.lowerBound)"
         case let .some(range): span = "Lines: \(range.lowerBound)-\(range.upperBound)"
         case .none:
-            span = "Lines: not found; the marked text is as the page rendered it, not verbatim from the file"
+            span =
+                "Lines: not found; the marked text is as the page rendered it, "
+                + "not verbatim from the file"
         }
         return """
             You are a fork of the conversation that wrote the file below. The original is still \

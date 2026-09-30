@@ -101,7 +101,7 @@ struct CanvasCommentField: View {
                     Label("Send", systemImage: "arrow.up.circle.fill")
                 }
                 .disabled(empty)
-                .help("Write this note to the sidecar and send it to the agent that opened the canvas")
+                .help("Write this note to the sidecar and mail it to the agent that opened it")
             }
             .buttonStyle(.chrome)
             .font(.system(size: 11))
