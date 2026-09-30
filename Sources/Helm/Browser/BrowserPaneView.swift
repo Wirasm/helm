@@ -327,7 +327,7 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
             .init(
                 type: type, modifiers: Self.modifiers(event.modifierFlags).rawValue, key: key.key,
                 code: key.code, windowsVirtualKeyCode: key.windowsVirtualKeyCode,
-                nativeVirtualKeyCode: key.nativeVirtualKeyCode, text: text, unmodifiedText: text,
+                text: text, unmodifiedText: text,
                 autoRepeat: type == "keyUp" ? nil : event.isARepeat, commands: commands))
     }
 
@@ -379,7 +379,7 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     ) -> BrowserPaneModel.KeyEvent {
         .init(
             type: "rawKeyDown", modifiers: meta ? BrowserModifiers.meta.rawValue : 0, key: key,
-            code: code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: 0, commands: [name])
+            code: code, windowsVirtualKeyCode: vk, commands: [name])
     }
 
     // MARK: NSTextInputClient
