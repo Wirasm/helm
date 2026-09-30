@@ -1638,7 +1638,7 @@ fn browser_start_publishes_the_endpoint_it_logged_and_a_second_start_finds_it() 
     assert_eq!(
         keys(&written),
         keys(&fixture),
-        "endpoint.json drifted from the fixture helm reads"
+        "endpoint.json drifted from its pinned fixture"
     );
     serde_json::from_value::<bench_wire::BrowserEndpoint>(fixture)
         .expect("the fixture is a real endpoint");
