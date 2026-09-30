@@ -56,6 +56,12 @@ enum CanvasText {
         guard String(data: data, encoding: .utf8) != nil else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// The text as a renderer should see it: without the byte-order mark the draft keeps, which
+    /// `marked` would otherwise read as part of the first line (a heading would not be one).
+    static func rendered(_ text: String) -> String {
+        text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+    }
 }
 
 struct CanvasFileFailure: Error, LocalizedError, Equatable {

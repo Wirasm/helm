@@ -139,6 +139,7 @@ final class CanvasThroughBenchdTests: XCTestCase {
             return XCTFail("the canvas read its file through the stand-in benchd")
         }
 
+        _ = try file("plan.md", "# Plan\n\nRewritten.\n")
         rig.model.fileChanged(fileChangedFrame(plan.path).replacingKind(with: "just/finished"))
         XCTAssertEqual(canvas.showing?.generation, first)
 
@@ -169,6 +170,34 @@ final class CanvasThroughBenchdTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTFail("the canvas still shows what it read before the follower dropped")
+    }
+
+    /// A re-read whose bytes did not change renders nothing, so a follower reconnect or benchd's
+    /// first report of a new canvas does not reload a page (its scroll, its state, a
+    /// `helmCanvasUpdate` offer that is not an update). An agent's re-push still renders: that is
+    /// how a sibling edit, which leaves these bytes alone, reaches the page (#261).
+    func testAReReadOfUnchangedBytesDoesNotReloadThePage() throws {
+        let page = try file("page.html", "<h1>page</h1>")
+        let model = CanvasModel(source: .file(page))
+        let first = try XCTUnwrap(model.showing?.generation)
+
+        model.reread()
+        model.fileChanged(page.path)
+        XCTAssertEqual(model.showing?.generation, first, "nothing changed, nothing reloads")
+
+        model.refresh()
+        XCTAssertEqual(model.showing?.generation, first + 1, "a re-push still renders")
+
+        _ = try file("page.html", "<h1>page, rewritten</h1>")
+        model.fileChanged(page.path)
+        XCTAssertEqual(model.showing?.generation, first + 2)
+    }
+
+    /// The draft keeps a byte-order mark; the page does not show it, or a first-line heading
+    /// would render as text.
+    func testTheRenderedPageDoesNotSeeTheByteOrderMark() {
+        XCTAssertEqual(CanvasText.rendered("\u{FEFF}# Plan\n"), "# Plan\n")
+        XCTAssertEqual(CanvasText.rendered("# Plan\n"), "# Plan\n")
     }
 
     // MARK: - What the save compares

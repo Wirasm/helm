@@ -95,9 +95,8 @@ pub fn write(args: &Value) -> Result<Value, String> {
     let args: FileWriteArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("file/write args: {e}"))?;
     let path = absolute(&args.path)?;
-    // The standardized path, and any case: `plan.notes.md/.` and `plan.NOTES.md` are the sidecar
-    // on a case-insensitive volume too.
-    if is_notes_sidecar(&path.to_string_lossy().to_lowercase()) {
+    // The standardized path: `plan.notes.md/.` is the sidecar too.
+    if is_notes_sidecar(&path.to_string_lossy()) {
         return Err(format!(
             "{} is a notes sidecar, which is only ever appended to (file/append)",
             path.display()

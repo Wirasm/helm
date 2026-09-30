@@ -89,6 +89,11 @@
       "canvas": "/a/plan.notes.md",
       "canvas_is_sidecar": true,
       "sidecar": "/a/plan.notes.notes.md"
+    },
+    {
+      "canvas": "/a/plan.NOTES.md",
+      "canvas_is_sidecar": true,
+      "sidecar": "/a/plan.NOTES.notes.md"
     }
   ],
   "write": {

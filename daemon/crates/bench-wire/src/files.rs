@@ -113,9 +113,11 @@ pub fn notes_sidecar(canvas: &str) -> String {
     format!("{dir}/{stem}{NOTES_SUFFIX}")
 }
 
-/// Whether `path` is some canvas's notes sidecar, which `file/write` refuses.
+/// Whether `path` is some canvas's notes sidecar, which `file/write` refuses. In any case:
+/// `plan.NOTES.md` is the same file on a case-insensitive volume. helm's `CanvasNotes.isSidecar`
+/// is the same rule, pinned by the fixture's table.
 pub fn is_notes_sidecar(path: &str) -> bool {
-    path.ends_with(NOTES_SUFFIX)
+    path.to_lowercase().ends_with(NOTES_SUFFIX)
 }
 
 /// Standard base64 with padding, which Swift's `Data(base64Encoded:)` reads.

@@ -171,7 +171,7 @@ enum MarkdownCanvasPage {
         coordinator.loadedKey = key
         coordinator.forgetPushedState()
         coordinator.stagedDocument = Data(
-            CanvasHTML.documentPage(markdown: markdown, theme: theme).utf8)
+            CanvasHTML.documentPage(markdown: CanvasText.rendered(markdown), theme: theme).utf8)
         guard let address = CanvasAddress.url(for: path) else { return }
         webView.load(URLRequest(url: address, cachePolicy: .reloadIgnoringLocalCacheData))
     }

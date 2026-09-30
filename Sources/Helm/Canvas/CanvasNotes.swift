@@ -34,7 +34,9 @@ enum CanvasNotes {
     /// notes"*. So the exclusion is not tidiness — it is that sentence enforced from the one
     /// place that could otherwise break it.
     static func isSidecar(_ url: URL) -> Bool {
-        url.lastPathComponent.hasSuffix(sidecarSuffix)
+        // Any case: `plan.NOTES.md` is the same file on a case-insensitive volume, and benchd
+        // refuses to write it whole whatever it is called (`bench_wire::is_notes_sidecar`).
+        url.lastPathComponent.lowercased().hasSuffix(sidecarSuffix)
     }
 
     /// One entry, in the shape an agent reads without being taught anything: the anchor as
@@ -139,15 +141,16 @@ enum CanvasNotes {
     /// read, which is logged: the drawer has nothing true to show either way, and the notes
     /// themselves are safe on benchd's side.
     static func markdown(in sidecar: URL, through files: any CanvasFiles) -> String? {
-        let data: Data
-        switch files.read(sidecar.path, within: nil) {
-        case let .bytes(bytes): data = bytes
-        case .absent, .outside: return nil
-        case let .failed(why):
+        let read = files.read(sidecar.path, within: nil)
+        if case let .failed(why) = read {
             NSLog("helm: could not read \(sidecar.lastPathComponent) — \(why)")
-            return nil
         }
-        guard let text = CanvasText.decode(data),
+        return markdown(from: read)
+    }
+
+    /// The same, from a read already made.
+    static func markdown(from read: CanvasFileRead) -> String? {
+        guard case let .bytes(data) = read, let text = CanvasText.decode(data),
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return text

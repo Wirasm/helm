@@ -639,7 +639,7 @@ final class CanvasModel: ObservableObject {
         guard let url = fileURL else { return }
         let changed = StandardizedPath(path)
         if changed == StandardizedPath(url) {
-            refresh()
+            refreshIfChanged()
         } else if changed == StandardizedPath(CanvasNotes.sidecarURL(for: url)) {
             refreshNotes()
         }
@@ -821,16 +821,32 @@ final class CanvasModel: ObservableObject {
     /// there, and taking the Notes button away would say there are none.
     func refreshNotes() {
         guard let sidecar = sidecarURL else { return }
-        if case .failed = files.read(sidecar.path, within: nil) { return }
-        let text = CanvasNotes.markdown(in: sidecar, through: files)
+        let read = files.read(sidecar.path, within: nil)
+        if case .failed = read { return }
+        let text = CanvasNotes.markdown(from: read)
         if text != notesText { notesText = text }
     }
 
     /// Read the file and its notes again whatever benchd has said: its follower (re)connected,
     /// and a change made while nobody was listening sent no `file/changed` to anyone.
     func reread() {
-        refresh()
+        refreshIfChanged()
         refreshNotes()
+    }
+
+    /// `refresh()`, but only when the file's bytes differ from the ones last loaded.
+    ///
+    /// **A re-read is not a reload.** benchd's first report of a canvas it just started watching,
+    /// every follower reconnect and a benchd restart all ask for the file again whether or not it
+    /// changed; reloading on each would take a markdown page's scroll position, an HTML page's own
+    /// state, and offer a `helmCanvasUpdate` page an update that is not one. So only a change in
+    /// the bytes renders. An agent's re-push still calls `refresh()` itself, because that is how
+    /// a *sibling* edit, which leaves these bytes alone, reaches the page (#261).
+    func refreshIfChanged() {
+        guard let previous = showing else { return }
+        let read = files.read(previous.url.path, within: nil)
+        if case let .bytes(now) = read, now == loadedBytes { return }
+        render(previous, from: read)
     }
 
     func revealNotes() {
@@ -867,20 +883,33 @@ final class CanvasModel: ObservableObject {
     /// disk.
     func refresh() {
         guard let previous = showing else { return }
-        let content = load(previous.url)
+        render(previous, from: files.read(previous.url.path, within: nil))
+    }
+
+    private func render(_ previous: Document, from read: CanvasFileRead) {
+        let content = load(previous.url, from: read)
         reconcile(content)
         showing = Document(
             url: previous.url, content: content, generation: previous.generation + 1)
     }
 
+    /// The artifact's bytes as last loaded, nil when they could not be read: what
+    /// `refreshIfChanged` compares a re-read against.
+    private var loadedBytes: Data?
+
     private func load(_ url: URL) -> Content {
+        load(url, from: files.read(url.path, within: nil))
+    }
+
+    private func load(_ url: URL, from read: CanvasFileRead) -> Content {
+        if case let .bytes(bytes) = read { loadedBytes = bytes } else { loadedBytes = nil }
         // .html renders in a full-pane WKWebView from its own URL — no text
         // pipeline (and no UTF-8/size gate; the scheme handler serves the bytes itself).
         if RenderableFile.isHTML(url) {
             return .web
         }
         let data: Data
-        switch files.read(url.path, within: nil) {
+        switch read {
         case let .bytes(bytes): data = bytes
         case .absent, .outside: return .notice("Could not read \(url.path): there is no file there")
         case let .failed(why): return .notice("Could not read \(url.path): \(why)")

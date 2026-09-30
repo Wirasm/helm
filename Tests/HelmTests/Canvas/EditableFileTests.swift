@@ -57,6 +57,8 @@ final class EditableFileTests: XCTestCase {
     func testACanvassOwnSidecarIsNotEditable() {
         let plan = URL(fileURLWithPath: "/p/plans/feature.plan.md")
 
+        // Any case, as benchd refuses it: `plan.NOTES.md` is the same file on APFS.
+        XCTAssertNil(editable("/p/plans/feature.plan.NOTES.md"))
         XCTAssertNil(editable("/p/plans/feature.plan.notes.md"))
         // Derived from `CanvasNotes` rather than spelled again, so a change to the suffix is still
         // measured here instead of quietly passing.
