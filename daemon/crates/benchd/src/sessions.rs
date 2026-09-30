@@ -176,6 +176,7 @@ pub fn record_spawn(
     cwd: &str,
     session: &str,
     handle: &str,
+    forked_from: Option<&str>,
 ) -> Result<(), String> {
     let (Some(harness), Some(id)) = (harness, id) else {
         return Ok(());
@@ -191,8 +192,18 @@ pub fn record_spawn(
                 handle: Some(handle.to_string()),
             },
             recorded_at: now_rfc3339(),
+            forked_from: forked_from.map(str::to_string),
         }],
     )
+}
+
+/// The record's entry for conversation `id` of the runtime `agent` names, if it holds one.
+pub fn recorded<'a>(core: &'a Core, agent: &str, id: &str) -> Option<&'a HostedSession> {
+    let key = SessionKey {
+        harness: Harness::parse(agent)?,
+        id: id.to_string(),
+    };
+    core.session_records.hosted.iter().find(|h| h.key() == key)
 }
 
 /// A mailbox claimed through `bench hook` (#358): logged as `mail/claimed`, then written.

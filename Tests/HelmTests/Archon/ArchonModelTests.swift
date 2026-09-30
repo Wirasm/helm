@@ -300,7 +300,7 @@ final class ArchonModelTests: XCTestCase {
 
         model.config = ArchonLaunchConfig(workflow: "  ", worktree: .automatic)
         await model.launch(in: workspace)
-        XCTAssertEqual(model.launchFailure, "Choose a workflow in the settings before launching.")
+        XCTAssertEqual(model.launchFailure, "Choose a workflow before launching.")
 
         model.config = ArchonLaunchConfig(workflow: "ship", worktree: .automatic)
         model.draft = "   \n "
@@ -385,7 +385,7 @@ final class ArchonModelTests: XCTestCase {
     }
 
     @MainActor
-    func testOpeningTheSettingsLoadsWorkflowsAndSeedsAnUnsetChoice() async throws {
+    func testLoadingWorkflowsSeedsAnUnsetChoice() async throws {
         let client = FakeArchonClient(
             workflowList: .init(
                 workflows: [.init(name: "ship", description: "Ship it", provider: nil, model: nil)],
@@ -395,13 +395,12 @@ final class ArchonModelTests: XCTestCase {
 
         await model.loadWorkflows(in: workspace)
 
-        XCTAssertTrue(model.isConfigOpen)
         XCTAssertEqual(model.workflows.map(\.name), ["ship"])
         XCTAssertEqual(model.config.workflow, "ship")
     }
 
     @MainActor
-    func testOpeningTheSettingsWithNoWorkspaceSaysSoRatherThanShowingNothing() async throws {
+    func testLoadingWorkflowsWithNoWorkspaceSaysSoRatherThanShowingNothing() async throws {
         let model = ArchonModel(
             client: FakeArchonClient(),
             defaults: try isolatedDefaults("archon-rail-settings-empty"))

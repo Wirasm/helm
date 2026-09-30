@@ -8,7 +8,7 @@
 //!
 //! - **Postures are the operator's unattended table (helm #179), plus the model/effort columns the
 //!   model-selection spike proved.** A posture removes a prompt; it never withholds
-//!   capability (helm #179).
+//!   capability (helm #179), except a fork's, which is read-only by the operator's ruling (#531).
 //! - **The agent allowlist is the security line** (as helm's spool had it): a spawn request
 //!   arrives over a socket, and `sh` in a login shell is what an ungated spawn would be.
 //! - **Prompts travel by file, never argv** (helm #93) — and are pasted, then submitted
@@ -91,18 +91,71 @@ impl AgentKind {
     }
 }
 
-/// What a spawn (or resume — `resume_from` set) wants. Pure data; `argv()` is the one
-/// spelling of every posture/model/effort/resume flag, unit-tested per runtime.
+/// Which conversation a session holds, and how it came by it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conversation {
+    /// A new conversation: under the id benchd minted (claude, pi), or none for a runtime that
+    /// names its own after the fact (codex).
+    New(Option<String>),
+    /// Re-enter conversation `id`.
+    Resume(String),
+    /// A new conversation `id` that starts as a copy of `from`, which carries on untouched: how
+    /// the operator asks an agent about its work without interrupting it (#531). benchd mints
+    /// `id` as it does for [`Conversation::New`], so no record of the fork ever names `from`.
+    Fork { from: String, id: String },
+}
+
+impl Conversation {
+    /// The conversation the session holds, when the bench knows it.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Conversation::New(id) => id.as_deref(),
+            Conversation::Resume(id) | Conversation::Fork { id, .. } => Some(id),
+        }
+    }
+
+    /// The conversation this one was copied from, for a fork.
+    pub fn forked_from(&self) -> Option<&str> {
+        match self {
+            Conversation::Fork { from, .. } => Some(from),
+            _ => None,
+        }
+    }
+}
+
+/// How much an agent may do without asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Posture {
+    /// The operator's unattended table (helm #179): removes every prompt it can.
+    #[default]
+    Unattended,
+    /// Reads, never writes: a fork (#531), which exists to answer, in the author's worktree
+    /// where an edit would collide with the author's work. The one posture that withholds
+    /// capability, by the operator's ruling. claude's plan mode; the other runtimes refuse it.
+    ReadOnly,
+}
+
+impl Posture {
+    /// The posture a recorded conversation is resumed in: the one it was spawned in, which for a
+    /// fork (it records the conversation it was `forked_from`) is read-only.
+    pub fn resuming(forked_from: Option<&str>) -> Posture {
+        match forked_from {
+            Some(_) => Posture::ReadOnly,
+            None => Posture::Unattended,
+        }
+    }
+}
+
+/// What a spawn (or resume, or fork) wants. Pure data; `argv()` is the one spelling of every
+/// posture/model/effort/resume/fork flag, unit-tested per runtime.
 #[derive(Debug, Clone)]
 pub struct SpawnSpec {
     pub agent: AgentKind,
     pub cwd: String,
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// The runtime session id this bench minted (claude, pi) — present on spawn for
-    /// minting runtimes, and on resume naming what to re-enter.
-    pub runtime_session: Option<String>,
-    pub resume: bool,
+    pub conversation: Conversation,
+    pub posture: Posture,
     /// The first prompt's file. argv carries a sentence naming it, never its text: the
     /// agent reads it as its first act, so nothing waits for a TUI to be ready and nothing is
     /// typed into the pty (#358), and `ps` shows a path rather than a plan (helm #93). The
@@ -172,40 +225,30 @@ pub fn login_shell() -> String {
 
 /// The single spelling of how each runtime is started unattended. Postures verbatim
 /// from the operator's unattended table (helm #179); model/effort flags verbatim from the
-/// model-selection spike; resume flags from the session-state spike.
+/// model-selection spike; resume flags from the session-state spike; the fork from the
+/// fork-author-session spike (#531).
 pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
     let mut args: Vec<String> = Vec::new();
     let program = match spec.agent {
         AgentKind::Claude => {
-            args.push("--dangerously-skip-permissions".into());
-            if let Some(settings) = &spec.settings {
-                args.extend(["--settings".into(), settings.clone()]);
-            }
-            if let Some(m) = &spec.model {
-                args.extend(["--model".into(), m.clone()]);
-            }
-            if let Some(e) = &spec.effort {
-                args.extend(["--effort".into(), e.clone()]);
-            }
-            match (&spec.runtime_session, spec.resume) {
-                (Some(id), false) => args.extend(["--session-id".into(), id.clone()]),
-                (Some(id), true) => args.extend(["--resume".into(), id.clone()]),
-                (None, false) => {}
-                (None, true) => return Err("claude resume needs the minted session id".into()),
-            }
+            args.extend(claude_flags(spec));
             "claude"
         }
         AgentKind::Codex => {
             // codex names its session after the fact; the id comes from its own hook, which is
             // how a pane's record knows it (M5b), and `codex resume <id>` takes every flag below.
-            if spec.resume {
-                let Some(id) = &spec.runtime_session else {
-                    return Err(
-                        "codex resume needs the session id its hook reported — spawn fresh, or use claude/pi where the bench mints the id"
-                            .into(),
-                    );
-                };
-                args.extend(["resume".into(), id.clone()]);
+            match &spec.conversation {
+                Conversation::New(_) => {}
+                Conversation::Resume(id) => args.extend(["resume".into(), id.clone()]),
+                // `codex fork` is a subcommand of the embedded TUI; benchd runs codex against
+                // an app-server of its own (`codex --remote`), where a fork is a different call.
+                Conversation::Fork { .. } => return Err(
+                    "codex forks through `codex fork`, which a codex benchd serves (`codex --remote`) cannot take — fork a claude conversation instead"
+                        .into(),
+                ),
+            }
+            if spec.posture == Posture::ReadOnly {
+                return Err("codex has no read-only posture on the bench".into());
             }
             args.push("--dangerously-bypass-approvals-and-sandbox".into());
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
@@ -235,6 +278,16 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             "codex"
         }
         AgentKind::Pi => {
+            // pi's `--fork <id>` is untested with a `--session-id` benchd mints, and pi has no
+            // plan mode to make a fork read-only.
+            if matches!(spec.conversation, Conversation::Fork { .. })
+                || spec.posture == Posture::ReadOnly
+            {
+                return Err(
+                    "pi forks are not on the bench: its --fork is untested with an id benchd mints, and pi has no read-only mode to run one in — fork a claude conversation instead"
+                        .into(),
+                );
+            }
             args.push("--approve".into());
             if let Some(m) = &spec.model {
                 // pi carries thinking as a `:<level>` suffix on the model — one flag,
@@ -249,23 +302,21 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             }
             // --session-id creates when missing and re-enters when present, so spawn
             // and resume are the same flag (session-state spike).
-            if let Some(id) = &spec.runtime_session {
-                args.extend(["--session-id".into(), id.clone()]);
-            } else if spec.resume {
-                return Err("pi resume needs the minted session id".into());
+            if let Some(id) = spec.conversation.id() {
+                args.extend(["--session-id".into(), id.to_string()]);
             }
             "pi"
         }
         AgentKind::TestEcho => {
-            if spec.resume {
-                return Err("the test agent has no sessions to resume".into());
+            if spec.conversation != Conversation::New(None) {
+                return Err("the test agent has no sessions to resume or fork".into());
             }
             // `cat` would read a pointer as a file to print; it takes no prompt.
             return Ok(("/bin/cat".to_string(), args));
         }
         AgentKind::Shell => {
-            if spec.resume {
-                return Err("a shell has no conversation to resume".into());
+            if spec.conversation != Conversation::New(None) {
+                return Err("a shell has no conversation to resume or fork".into());
             }
             return Ok((login_shell(), vec!["-l".to_string()]));
         }
@@ -280,6 +331,39 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
         return Ok(("/bin/sh".to_string(), served));
     }
     Ok((program.to_string(), args))
+}
+
+/// claude's half of [`argv`]: posture, settings, model and effort, then the conversation.
+fn claude_flags(spec: &SpawnSpec) -> Vec<String> {
+    let mut args: Vec<String> = match spec.posture {
+        Posture::Unattended => vec!["--dangerously-skip-permissions".into()],
+        Posture::ReadOnly => vec!["--permission-mode".into(), "plan".into()],
+    };
+    if let Some(settings) = &spec.settings {
+        args.extend(["--settings".into(), settings.clone()]);
+    }
+    if let Some(m) = &spec.model {
+        args.extend(["--model".into(), m.clone()]);
+    }
+    if let Some(e) = &spec.effort {
+        args.extend(["--effort".into(), e.clone()]);
+    }
+    match &spec.conversation {
+        Conversation::New(Some(id)) => args.extend(["--session-id".into(), id.clone()]),
+        Conversation::New(None) => {}
+        Conversation::Resume(id) => args.extend(["--resume".into(), id.clone()]),
+        // Claude takes `--session-id` beside `--resume` only with `--fork-session` (2.1.285:
+        // "--session-id can only be used with --continue or --resume if --fork-session is also
+        // specified"), which is what names the fork up front.
+        Conversation::Fork { from, id } => args.extend([
+            "--resume".into(),
+            from.clone(),
+            "--fork-session".into(),
+            "--session-id".into(),
+            id.clone(),
+        ]),
+    }
+    args
 }
 
 /// Mint a runtime session id. `uuidgen` where present; a /dev/urandom-derived v4 shape
@@ -425,7 +509,7 @@ impl Session {
             id,
             agent: spec.agent,
             cwd: spec.cwd.clone(),
-            runtime_session: spec.runtime_session.clone(),
+            runtime_session: spec.conversation.id().map(str::to_string),
             spawned_at: Instant::now(),
             master,
             terminal,
@@ -608,8 +692,8 @@ mod tests {
             cwd: "/tmp".into(),
             model: None,
             effort: None,
-            runtime_session: None,
-            resume: false,
+            conversation: Conversation::New(None),
+            posture: Posture::Unattended,
             prompt_file: None,
             settings: None,
             extra_args: Vec::new(),
@@ -620,8 +704,7 @@ mod tests {
     #[test]
     fn a_resume_of_a_named_conversation_carries_the_callers_flags_then_its_new_message() {
         let mut s = spec(AgentKind::Claude);
-        s.runtime_session = Some("4b1c".into());
-        s.resume = true;
+        s.conversation = Conversation::Resume("4b1c".into());
         s.extra_args = vec!["--remote-control".into(), "helm abc123".into()];
         s.prompt_file = Some("/tmp/notice.txt".into());
         let (_, a) = argv(&s).unwrap();
@@ -643,7 +726,7 @@ mod tests {
         for agent in [AgentKind::Claude, AgentKind::Codex, AgentKind::Pi] {
             let mut s = spec(agent);
             s.prompt_file = Some("/tmp/p.txt".into());
-            s.runtime_session = Some("id-1".into());
+            s.conversation = Conversation::New(Some("id-1".into()));
             let (_, a) = argv(&s).unwrap();
             assert_eq!(
                 a.last().unwrap(),
@@ -830,19 +913,17 @@ mod tests {
     }
 
     #[test]
-    fn resume_needs_the_conversation_id_for_every_runtime() {
+    fn resume_re_enters_the_conversation_for_every_runtime() {
         let mut s = spec(AgentKind::Claude);
-        s.resume = true;
-        assert!(argv(&s).is_err(), "resume without an id must refuse");
-        s.runtime_session = Some("abc-123".into());
+        s.conversation = Conversation::Resume("abc-123".into());
         let (_, a) = argv(&s).unwrap();
         assert!(a.contains(&"--resume".to_string()) && a.contains(&"abc-123".to_string()));
 
         let mut s = spec(AgentKind::Pi);
-        s.runtime_session = Some("sess-9".into());
+        s.conversation = Conversation::New(Some("sess-9".into()));
         let (_, a) = argv(&s).unwrap();
         assert!(a.contains(&"--session-id".to_string()));
-        s.resume = true;
+        s.conversation = Conversation::Resume("sess-9".into());
         let (_, a) = argv(&s).unwrap();
         assert!(
             a.contains(&"--session-id".to_string()),
@@ -850,13 +931,7 @@ mod tests {
         );
 
         let mut s = spec(AgentKind::Codex);
-        s.resume = true;
-        let err = argv(&s).unwrap_err();
-        assert!(
-            err.contains("the session id its hook reported"),
-            "the refusal names the reason: {err}"
-        );
-        s.runtime_session = Some("019a-codex".into());
+        s.conversation = Conversation::Resume("019a-codex".into());
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "codex");
         assert_eq!(
@@ -867,6 +942,54 @@ mod tests {
                 "--dangerously-bypass-approvals-and-sandbox"
             ]
         );
+    }
+
+    #[test]
+    fn a_claude_fork_copies_the_conversation_under_the_minted_id_in_plan_mode() {
+        let mut s = spec(AgentKind::Claude);
+        s.conversation = Conversation::Fork {
+            from: "author-1".into(),
+            id: "fork-2".into(),
+        };
+        s.posture = Posture::ReadOnly;
+        s.prompt_file = Some("/tmp/q.md".into());
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "claude");
+        assert_eq!(
+            a,
+            [
+                "--permission-mode",
+                "plan",
+                "--resume",
+                "author-1",
+                "--fork-session",
+                "--session-id",
+                "fork-2",
+                "Read and act on the prompt in /tmp/q.md"
+            ]
+        );
+        // A fork resumed later is still read-only: the posture travels apart from the conversation.
+        s.conversation = Conversation::Resume("fork-2".into());
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(a[..4], ["--permission-mode", "plan", "--resume", "fork-2"]);
+    }
+
+    #[test]
+    fn codex_and_pi_refuse_a_fork_naming_why() {
+        let fork = Conversation::Fork {
+            from: "a".into(),
+            id: "b".into(),
+        };
+        let mut s = spec(AgentKind::Codex);
+        s.conversation = fork.clone();
+        s.posture = Posture::ReadOnly;
+        let err = argv(&s).unwrap_err();
+        assert!(err.contains("codex fork"), "{err}");
+        let mut s = spec(AgentKind::Pi);
+        s.conversation = fork;
+        s.posture = Posture::ReadOnly;
+        let err = argv(&s).unwrap_err();
+        assert!(err.contains("no read-only mode"), "{err}");
     }
 
     #[test]

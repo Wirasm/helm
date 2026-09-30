@@ -240,6 +240,10 @@ pub struct HostedSession {
     pub cwd: String,
     pub via: HostedVia,
     pub recorded_at: String,
+    /// The conversation this one was forked from (#531): a fork is resumed read-only, as it
+    /// was spawned. Absent for everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
 }
 
 impl HostedSession {

@@ -441,6 +441,14 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     `claude` → `--dangerously-skip-permissions` (what `cls` is), `codex` →
     `--dangerously-bypass-approvals-and-sandbox`, `pi` → `--approve`, spelled once in
     `bench_session::argv`, the one copy.
+  - **A fork is the one posture that withholds capability, deliberately (#531).** `bench spawn
+    --fork <conversation>` copies a claude conversation so the operator can ask the agent about
+    its work without interrupting it, and the copy runs in claude's plan mode (`--permission-mode
+    plan`) rather than `--dangerously-skip-permissions`. The operator's ruling: a fork exists to
+    answer, and it works in the author's worktree, so an edit would collide with the author's
+    work. benchd mints the fork's id (`--resume <author> --fork-session --session-id <new>`) and
+    records it as `forked_from` the author, so a restore or `bench resume` brings it back
+    read-only too. codex and pi refuse `--fork`.
   - **A posture cannot remove every prompt, and no flag will fix that — #283 is the measurement.**
     Claude Code keeps some guardrails **bypass-immune** (`CIRCUIT_BREAKER_TRAITS.dangerousRemoval =
     { bypassImmune: true }` in 2.1.226): under `--dangerously-skip-permissions` a plain

@@ -128,7 +128,8 @@ The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active
 cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
 (`workflow runs --json`, and `workflow status --json --verbose` while a run is live); helm keeps no
 record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
-cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work. It polls only while
+cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work, and `w` picks the
+workflow it launches from a searchable list (#528). It polls only while
 open. Painted on Archon's own console surfaces. Agents do not use it: Archon's CLI is theirs.
 _Avoid_: Archon pane, run list, monitor, Archon rail (retired)
 

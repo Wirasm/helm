@@ -79,6 +79,9 @@ actor FakeArchonClient: ArchonClient {
 
     func workflows(in workspacePath: WorkspacePath) async throws -> ArchonWorkflowListResponse {
         workspacePaths.append(workspacePath)
+        // Throwing, unlike `runs`: a cancelled `archon` call throws `CancellationError`
+        // (`Subprocess.run`), and the workflow load is cancelled with the drawer's task.
+        if let delay { try await Task.sleep(for: delay) }
         if let failure { throw failure }
         return workflowList
     }

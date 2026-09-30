@@ -447,6 +447,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
                     handle: Some(handle.clone()),
                 },
                 recorded_at: now_rfc3339(),
+                forked_from: None,
             },
             args.pid,
         )?;
@@ -502,6 +503,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
             cwd: args.cwd.clone(),
             via,
             recorded_at: now_rfc3339(),
+            forked_from: None,
         },
         args.pid,
     )?;
