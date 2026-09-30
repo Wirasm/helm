@@ -129,7 +129,7 @@ final class ArchonDrawerModelTests: XCTestCase {
 
         await model.cycleWorkflow(by: 1, in: workspace)
         XCTAssertEqual(model.config.workflow, "deliver", "the first load seeds plan, then steps")
-        XCTAssertFalse(model.isConfigOpen, "picking from the keyboard opens no popover")
+        XCTAssertFalse(model.isPickingWorkflow, "cycling from the keyboard opens no list")
         await model.cycleWorkflow(by: 1, in: workspace)
         await model.cycleWorkflow(by: 1, in: workspace)
         XCTAssertEqual(model.config.workflow, "plan")

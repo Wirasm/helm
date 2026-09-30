@@ -87,7 +87,9 @@ push**. A pane appearing unbidden is helm rearranging the bench on the agent's w
 A drawer along the bottom of the window (⌘⇧R, #382), over the bench like every drawer. Not an API
 client — the `archon` CLI's `--json`, captured through a temporary file. No HTTP and no direct
 SQLite reads. **Input first** (#40): the same workflow is started over and over, so the composer
-is always at the drawer's foot, ⌥↑/⌥↓ picks the workflow, and Enter runs it detached.
+is always at the drawer's foot with the workflow it launches named beside it (`archon-ship` until
+another is picked, #528). Clicking that name or pressing `w` opens a list searched by typing;
+⌥↑/⌥↓ step through it. Enter runs it detached.
 
 **What it shows**, for the active workspace's project: runs **waiting on you** (paused at a gate),
 **running** runs, and **finished** runs not yet cleared — each a row with **a dot per stage**,
