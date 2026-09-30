@@ -28,6 +28,7 @@
 
 mod ask;
 mod codex;
+mod files;
 mod hook;
 mod just;
 mod layout;
@@ -44,10 +45,11 @@ mod waiting;
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
 use bench_session::{Notice, Session};
 use bench_wire::{
-    BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event, KNOWN_VERBS,
-    MAX_REQUEST_BYTES, MailListArgs, MailReadArgs, MailSendArgs, Request, Response, SessionArgs,
-    Status, SuiteName, Verb, browser_endpoint_path, browser_wanted_path, check_socket_path,
-    events_path, resolve_root, socket_path, validate_handle,
+    BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
+    FILE_REQUEST_MAX_BYTES, KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs,
+    MailSendArgs, Request, Response, SessionArgs, Status, SuiteName, Verb, browser_endpoint_path,
+    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
+    validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame, attach};
 use serde_json::{Value, json};
@@ -693,6 +695,9 @@ fn boot(
         });
     }
 
+    // Tells helm when a canvas file or its sidecar changed (M5c): helm watches nothing itself.
+    files::spawn_watcher(Arc::clone(&core));
+
     // A browser that was wanted when the last daemon went away comes back with this one.
     // On its own thread: the launch waits for the browser to listen, and the socket must
     // answer meanwhile. A `browser/start` that races it finds this browser.
@@ -822,7 +827,9 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         Err(_) => return,
     });
     let mut line = String::new();
-    let mut limited = (&mut reader).take(MAX_REQUEST_BYTES as u64 + 1);
+    // Read up to the larger cap `file/write` and `file/append` get; every other verb is held to
+    // `MAX_REQUEST_BYTES` once the line says which verb it is.
+    let mut limited = (&mut reader).take(FILE_REQUEST_MAX_BYTES as u64 + 1);
     if limited.read_line(&mut line).is_err() {
         respond(
             &stream,
@@ -838,16 +845,19 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         );
         return;
     }
-    if line.len() > MAX_REQUEST_BYTES {
+    let oversized = |cap: usize| {
         respond(
             &stream,
             &Response {
                 id: "oversized".into(),
                 status: Status::Refused,
-                reason: Some(format!("request exceeds {MAX_REQUEST_BYTES} bytes")),
+                reason: Some(format!("request exceeds {cap} bytes")),
                 data: None,
             },
         );
+    };
+    if line.len() > FILE_REQUEST_MAX_BYTES {
+        oversized(FILE_REQUEST_MAX_BYTES);
         return;
     }
     let request: Request = match serde_json::from_str(&line) {
@@ -865,6 +875,15 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
             return;
         }
     };
+
+    let carries_a_document = matches!(
+        Verb::parse(&request.verb),
+        Some(Verb::FileWrite | Verb::FileAppend)
+    );
+    if line.len() > MAX_REQUEST_BYTES && !carries_a_document {
+        oversized(MAX_REQUEST_BYTES);
+        return;
+    }
 
     let (response, after) = dispatch(&core, &request, &stream);
     match after {
@@ -1028,6 +1047,9 @@ fn dispatch(
             answered(req, screen::answer(core, verb, &req.args, req.by.clone()))
         }
         Some(Verb::Restore) => answered(req, restore::answer(core, &req.args, req.by.clone())),
+        Some(Verb::FileRead) => answered(req, files::read(&req.args)),
+        Some(Verb::FileWrite) => answered(req, files::write(&req.args)),
+        Some(Verb::FileAppend) => answered(req, files::append(&req.args)),
         Some(Verb::Layout) => {
             let response = layout::answer(&mut core.lock().unwrap(), req);
             (response, AfterResponse::Done)

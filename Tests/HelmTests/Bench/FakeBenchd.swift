@@ -95,8 +95,14 @@ final class FakeBenchd: @unchecked Sendable {
         return recorded
     }
 
-    /// The layout verbs among them — not the follower's own `events` line.
-    var verbs: [[String: Any]] { requests.filter { $0["verb"] as? String != "events" } }
+    /// The layout verbs among them — not the follower's own `events` line, nor a canvas reading
+    /// or writing its file (`file/*`).
+    var verbs: [[String: Any]] {
+        requests.filter {
+            let verb = $0["verb"] as? String ?? ""
+            return verb != "events" && !verb.hasPrefix("file/")
+        }
+    }
 
     /// The document the follower's first line would carry now: the last one set or pushed.
     var current: DocumentAt {

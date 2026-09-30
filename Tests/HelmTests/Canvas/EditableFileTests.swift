@@ -57,6 +57,8 @@ final class EditableFileTests: XCTestCase {
     func testACanvassOwnSidecarIsNotEditable() {
         let plan = URL(fileURLWithPath: "/p/plans/feature.plan.md")
 
+        // Any case, as benchd refuses it: `plan.NOTES.md` is the same file on APFS.
+        XCTAssertNil(editable("/p/plans/feature.plan.NOTES.md"))
         XCTAssertNil(editable("/p/plans/feature.plan.notes.md"))
         // Derived from `CanvasNotes` rather than spelled again, so a change to the suffix is still
         // measured here instead of quietly passing.
@@ -71,24 +73,33 @@ final class EditableFileTests: XCTestCase {
     /// `try? String(contentsOf:)` answers `nil` for both "nothing is there" and "there is
     /// something and I could not read it" — and those want opposite handling: the first is safe to
     /// write over, the second is the one case with no safe default.
-    func testDiskContentsTellsAbsentFromUnreadable() throws {
+    func testContentsTellAbsentFromUnreadable() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("helm-disk-contents-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = try XCTUnwrap(EditableFile(directory.appendingPathComponent("a.md")))
 
-        XCTAssertEqual(file.diskContents(), .absent, "nothing there is not an unknown")
+        let files = DiskCanvasFiles()
+
+        XCTAssertEqual(file.contents(through: files), .absent, "nothing there is not an unknown")
 
         try "# Plan\n".write(to: file.url, atomically: true, encoding: .utf8)
-        XCTAssertEqual(file.diskContents(), .bytes("# Plan\n"))
+        XCTAssertEqual(file.contents(through: files), .bytes("# Plan\n"))
 
         // The first two bytes of a three-byte UTF-8 sequence — what a read lands on while an agent
-        // streams a long document, which is the very case `FileWatcher`'s debounce exists for.
+        // streams a long document.
         try Data([0x23, 0x20, 0xE2, 0x82]).write(to: file.url)
-        XCTAssertEqual(
-            file.diskContents(), .unreadable,
-            "present and undecodable is its own answer, not the absent one")
+        guard case .unreadable = file.contents(through: files) else {
+            return XCTFail("present and undecodable is its own answer, not the absent one")
+        }
+
+        // benchd not answering tells helm nothing about the file: never `absent`, which would
+        // license an empty draft over it (M5c).
+        guard
+            case .unreadable = file.contents(
+                through: DiskCanvasFiles(failing: "benchd is not answering"))
+        else { return XCTFail("an unreachable benchd is not an absent file") }
     }
 
     // MARK: - Identity

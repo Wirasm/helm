@@ -73,14 +73,17 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         }
     }
 
-    private func handler(document: @escaping @MainActor () -> Data?) -> CanvasSchemeHandler {
-        CanvasSchemeHandler(artifact: artifact, document: document)
+    private func handler(
+        files: DiskCanvasFiles, document: @escaping @MainActor () -> Data?
+    ) -> CanvasSchemeHandler {
+        CanvasSchemeHandler(artifact: artifact, files: files, document: document)
     }
 
     /// Requests `path` on the canvas's own origin and returns what the handler answered.
     @discardableResult
     private func request(
         _ path: String,
+        files: DiskCanvasFiles = DiskCanvasFiles(),
         // Spelled out rather than `Self.` — a default argument cannot name a covariant
         // `Self`, even in a final class.
         document: @escaping @MainActor () -> Data? = {
@@ -92,7 +95,7 @@ final class CanvasSchemeHandlerTests: XCTestCase {
         components.host = CanvasAddress.host(for: StandardizedPath(artifact))
         components.path = path
         let task = SchemeTask(try XCTUnwrap(components.url))
-        handler(document: document).serve(task)
+        handler(files: files, document: document).serve(task)
         return task
     }
 
@@ -155,8 +158,9 @@ final class CanvasSchemeHandlerTests: XCTestCase {
     // MARK: - A path the boundary refuses
 
     func testASymlinkOutOfTheDirectoryIs403() throws {
-        // The refusal `CanvasFileBoundary` actually exists for. Distinct from 404 on purpose:
-        // "helm will not serve this" is not "this is not there".
+        // The refusal the folder boundary actually exists for — decided by benchd, which follows
+        // the link on its own disk. Distinct from 404 on purpose: "helm will not serve this" is
+        // not "this is not there".
         try FileManager.default.createSymbolicLink(
             at: directory.appendingPathComponent("escape.txt"),
             withDestinationURL: root.appendingPathComponent("outside.txt"))
@@ -191,6 +195,17 @@ final class CanvasSchemeHandlerTests: XCTestCase {
 
         XCTAssertEqual(task.status, 403)
         XCTAssertTrue(task.body.isEmpty)
+    }
+
+    /// benchd could not be asked, or could not read the file: the page must not be told the
+    /// sibling is missing, because it may well be there. A transport error, like any fetch whose
+    /// server did not answer.
+    func testASiblingBenchdCouldNotReadIsNotReportedMissing() throws {
+        let task = try request(
+            "/scene.json", files: DiskCanvasFiles(failing: "benchd is not answering"))
+
+        XCTAssertNil(task.status, "no status: nothing was learned about the file")
+        XCTAssertEqual((task.error as? URLError)?.code, .resourceUnavailable)
     }
 
     // MARK: - The canvas that cannot be served at all

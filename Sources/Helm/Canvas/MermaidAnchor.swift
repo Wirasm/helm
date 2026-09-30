@@ -19,7 +19,7 @@ import Foundation
 /// WKWebView (#113): with `deterministicIds: true` the whole id is stable across
 /// *re-renders*, but four of five source edits — adding a node above, removing one,
 /// reordering, or adding a second diagram to the page — still move the prefix or the
-/// counter. Since `FileWatcher` re-renders precisely *because* the agent rewrote the
+/// counter. Since a canvas re-renders precisely *because* the agent rewrote the
 /// file, an anchor holding the full id is stale exactly when it is needed.
 ///
 /// So helm hands over `phase2`, following the greppability principle: prefer an

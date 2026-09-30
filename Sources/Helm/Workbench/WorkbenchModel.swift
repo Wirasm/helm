@@ -158,7 +158,9 @@ final class WorkbenchModel: ObservableObject {
         // kind the mark route, the browser kind a factory the caller chose. Re-registering
         // replaces, so a second model on one manager rewires them to itself.
         terminals.surfaces.register(
-            CanvasPaneKind { [weak self] model, pane in self?.wireMarks(model, in: pane) })
+            CanvasPaneKind(files: BenchCanvasFiles(client: client)) { [weak self] model, pane in
+                self?.wireMarks(model, in: pane)
+            })
         terminals.surfaces.register(BrowserPaneKind(make: makeBrowser))
         terminals.surfaces.register(UnsupportedPaneKind())
         terminals.surfaces.register(SessionsPaneKind(workbench: self, terminals: terminals))
@@ -170,6 +172,9 @@ final class WorkbenchModel: ObservableObject {
         subscribe()
         client.onDocument = { [weak self] at in self?.apply(at) }
         client.onChange = { [weak self] change in self?.remember(change) }
+        // A `file/changed` sent while the follower was down, or before a benchd restart, reached
+        // nobody: every open canvas reads its file again rather than show it stale.
+        client.onConnected = { [weak self] in self?.rereadCanvases() }
         client.start()
     }
 
@@ -348,6 +353,25 @@ final class WorkbenchModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.noteFailure = nil
         }
+    }
+
+    /// benchd's follower said a canvas file or its sidecar changed (`file/changed`, M5c): every
+    /// canvas hears it and decides whether the path is its own. A frame of any other kind is not
+    /// this method's and is ignored.
+    func fileChanged(_ line: Data) {
+        guard
+            let frame = try? JSONDecoder().decode(
+                BenchEventFrame<BenchFileChanged>.self, from: line),
+            frame.event.kind == BenchFileChanged.kind
+        else { return }
+        for canvas in surfaces.models(CanvasModel.self) {
+            canvas.fileChanged(frame.event.data.path)
+        }
+    }
+
+    /// Every open canvas reads its file and notes again (`BenchClient.onConnected`).
+    func rereadCanvases() {
+        for canvas in surfaces.models(CanvasModel.self) { canvas.reread() }
     }
 
     /// Write every open draft now (#289).

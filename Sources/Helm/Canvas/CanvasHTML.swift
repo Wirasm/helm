@@ -56,7 +56,7 @@ enum CanvasHTML {
     ///
     /// `deterministicIds: true` is load-bearing, not tidiness. Left unset, mermaid
     /// seeds its id generator from `Date.now()` (`InitIDGenerator`), so every render
-    /// gives a node a different DOM id — and `FileWatcher` re-renders on each agent
+    /// gives a node a different DOM id — and a canvas re-renders on each agent
     /// write. An annotation would anchor to `#mermaid-1785839165688-flowchart-phase2-1`,
     /// which is stale before the operator finishes typing the comment. See
     /// `MermaidAnchor` for the other half: reducing that id to the fence identifier.

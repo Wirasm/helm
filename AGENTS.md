@@ -74,8 +74,8 @@ way in, and it never involves the helper at all. Useful against a bundle you did
 build — including an old one, which is how #192 was settled.
 
 **What the gate guarantees when several agents share the machine — which is now the normal
-state here, not the exception.** `swift test` is *broadly* not load-sensitive — the two
-documented exceptions are named immediately below, and everything else in the suite is not one
+state here, not the exception.** `swift test` is *broadly* not load-sensitive — the one
+documented exception is named immediately below, and everything else in the suite is not one
 — and a red keyboard test is *not* evidence that the machine is busy. That was assumed once, cost
 two confident wrong diagnoses in an afternoon, and #192 is the measurement that disproved it: a
 test bundle built
@@ -83,21 +83,20 @@ at 13:19 and never rebuilt was green at 13:19 and red at 19:00, and every worktr
 machine went red within the same second (17:17:19). Concurrency did not do that; nothing in
 any diff did.
 
-**Two tests are the documented exceptions to that line, and the shape they share is the thing
-to recognise rather than the list to memorise: an assertion whose truth depends on a
-`Task.sleep` staying *inside* a deadline.** `Task.sleep(for:)` is a floor and not a promise, so
-a contended machine overshoots it, the behaviour under test happens **correctly**, and the test
-calls that a failure.
+**One test is the documented exception to that line, and the shape is the thing to recognise
+rather than the name to memorise: an assertion whose truth depends on a `Task.sleep` staying
+*inside* a deadline.** `Task.sleep(for:)` is a floor and not a promise, so a contended machine
+overshoots it, the behaviour under test happens **correctly**, and the test calls that a failure.
 
-- `FileWatcherTests.testAWriteThatArrivesInChunksRendersOnceAndOnlyWhenItIsWhole` — chunks that
-  must all land inside one debounce window (#305).
-- `CanvasEditorTests.testARunOfTypingIsOneSave` — the same shape on the editor's autosave, and
-  it went red in CI on #314 while every other test passed (#289).
+- `CanvasEditorTests.testARunOfTypingIsOneSave` — the editor's autosave, and it went red in CI
+  on #314 while every other test passed (#289).
 
-Both now carry margins of 50× or more and say so in their own headers. **The direction is what
-makes the rest of the suite safe**: a test that sleeps to let a window *elapse* is only made
-more certain by an overshoot, which is why the sibling tests beside both of these have never
-flaked — say which direction yours sleeps in before adding a third.
+It now carries a margin of 50× and says so in its header. The second exception,
+`FileWatcherTests`' chunked write (#305), went with helm's file watcher (M5c): benchd watches
+canvas files now, and that case is a Rust unit test with no clock (`benchd/src/files.rs`).
+**The direction is what makes the rest of the suite safe**: a test that sleeps to let a window
+*elapse* is only made more certain by an overshoot, which is why the sibling tests beside it have
+never flaked — say which direction yours sleeps in before adding another.
 
 **Reproduce one by inverting its parameters, not by adding load.** Measured twice, on two
 different tests: #305's six bounded burners reached load 7.68 and the old values passed three
@@ -525,10 +524,11 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     deferred, and the reason it could.** helm cannot stop the write: an agent writes the file
     directly and nothing in helm is in that path. What helm guarantees is the other direction —
     **it never writes over bytes it has not shown the operator, and it never discards his buffer.**
-    `CanvasModel.reconcile` runs on every `refresh()` (the `FileWatcher`'s call and `offer`'s, so
+    `CanvasModel.reconcile` runs on every `refresh()` (benchd's `file/changed` and `offer`'s, so
     neither route can miss it) and compares what is on disk against `draft.saved`, which is
-    *helm's own belief about the file*:
-    - **the same** — helm's own save firing its own watcher. Nothing happens, which is what lets
+    *helm's own belief about the file*. A save says what it expects to replace
+    (`file/write` with `unchanged`), and benchd compares and writes in one step:
+    - **the same** — helm's own save coming back as a change. Nothing happens, which is what lets
       autosave and a live watcher share one file at all.
     - **different, nothing typed since the last write** — adopted silently. Reading an agent's
       plan with the editor open is the ordinary case, and there is provably nothing to lose.
@@ -553,6 +553,16 @@ learn how, and a Swift contributor should never need a JS toolchain to go green.
     directory: writing there is still wrong, for a reason about ownership rather than about what
     helm will let anyone type into. Artifacts go to `plans/`, `research/`, … and reach the bench
     through `bench open`.
+- **helm touches no canvas file itself (M5c, #459).** Every read, write and append — the
+  artifact, a page's siblings, the `.notes.md` sidecar, the state latch — is a `file/*` verb to
+  benchd (`CanvasFiles`, `bench_wire::files`), on one machine as much as across two, and a change
+  arrives as benchd's `file/changed` on the follower: benchd polls each canvas file in its document
+  and its sidecar and reports one once it has held still, and helm reads every open canvas again
+  whenever its follower (re)connects, since a change nobody was listening for sent nothing. benchd holds the rules only it can: a
+  sibling read is confined to the artifact's folder with symlinks followed on its own disk, a
+  `file/write` never replaces a `.notes.md`, and `unchanged` writes only over the bytes named. A
+  canvas benchd cannot reach says so rather than rendering nothing, and a read helm could not make
+  is never taken for an absent file.
 - **A canvas talks back on three channels, and none of them is a notification.** `bench open` is
   the way out; these are the ways in, and an agent that pushed a page and then waited for something to
   happen has misread all three. **Nothing wakes you.** The skill (`.claude/skills/helm-canvas/`)

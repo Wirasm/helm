@@ -10,9 +10,9 @@ import WebKit
 /// relative references an `.html` artifact makes.
 ///
 /// **The artifact's directory is the read boundary**, the same one
-/// `loadFileURL(_:allowingReadAccessTo:)` enforced before. Deciding what is inside it is
-/// `CanvasFileBoundary`'s job rather than this type's, so it can be tested without a live
-/// `WKURLSchemeTask`.
+/// `loadFileURL(_:allowingReadAccessTo:)` enforced before. Every file is read through benchd
+/// (`CanvasFiles`, M5c), and benchd decides what is inside the folder: only it can follow a
+/// symlink on the disk the artifact is on, which may not be this Mac's.
 ///
 /// **What a page sees when it asks for a file is a status** — 200 for bytes, 404 for a
 /// sibling that is not there, 403 for one the boundary refuses — so `res.ok` and
@@ -55,6 +55,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
     /// The artifact's own directory — nothing outside it is served.
     private let directory: URL
+    /// Where every sibling is read from, confined to `directory`.
+    private let files: any CanvasFiles
     /// The artifact's file name, which is the one path that maps to `document`.
     private let documentName: String
     /// The main document's current bytes. A closure because a markdown canvas's page is
@@ -62,8 +64,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// would have loaded rather than a stale snapshot.
     private let document: @MainActor () -> Data?
 
-    init(artifact: URL, document: @escaping @MainActor () -> Data?) {
+    init(artifact: URL, files: any CanvasFiles, document: @escaping @MainActor () -> Data?) {
         self.directory = artifact.deletingLastPathComponent()
+        self.files = files
         self.documentName = artifact.lastPathComponent
         self.document = document
     }
@@ -76,9 +79,11 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// a task double instead of standing up a live WebKit process to ask what status a
     /// sibling comes back with.
     ///
-    /// Everything here completes synchronously — the bytes are already in memory or on
-    /// local disk — so a task can never be stopped between `start` and its completion, and
-    /// there is no live-task bookkeeping to get wrong.
+    /// Everything here completes synchronously — the bytes are in memory, or one verb away,
+    /// which is how every verb helm sends from the main thread works — so a task can never be
+    /// stopped between `start` and its completion, and there is no live-task bookkeeping to get
+    /// wrong. The cost, on a benchd across a network, is one round trip per sibling on the main
+    /// thread.
     func serve(_ task: any WKURLSchemeTask) {
         guard let url = task.request.url else { return fail(task, .badURL) }
 
@@ -90,15 +95,23 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             return respond(task, url: url, data: data, mimeType: Self.documentMIMEType)
         }
 
-        // A sibling it referenced.
-        guard let file = CanvasFileBoundary.resolve(request: url.path, inDirectory: directory)
-        else { return refuse(task, url: url, status: Self.forbidden) }
-        guard let data = try? Data(contentsOf: file) else {
-            return refuse(task, url: url, status: Self.notFound)
+        // A sibling it referenced. An empty path would name the folder itself.
+        let relative = String(url.path.drop(while: { $0 == "/" }))
+        guard !relative.isEmpty else { return refuse(task, url: url, status: Self.forbidden) }
+        let file = directory.appendingPathComponent(relative).path
+        switch files.read(file, within: directory.path) {
+        case let .bytes(data):
+            respond(
+                task, url: url, data: data,
+                mimeType: Self.mimeType(for: (url.path as NSString).lastPathComponent))
+        case .absent: refuse(task, url: url, status: Self.notFound)
+        case .outside: refuse(task, url: url, status: Self.forbidden)
+        case let .failed(why):
+            // Not a 404: the file may well be there, and a page that reads `res.status` would be
+            // told something false. The page gets a transport error, and the log says why.
+            NSLog("helm: could not read \(relative) for its canvas — \(why)")
+            fail(task, .resourceUnavailable)
         }
-        respond(
-            task, url: url, data: data,
-            mimeType: Self.mimeType(for: (url.path as NSString).lastPathComponent))
     }
 
     /// Bytes, and the status that says they are bytes.
@@ -152,10 +165,11 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
-    /// No status to report, on any of its four call sites.
+    /// No status to report, on any of its five call sites.
     ///
-    /// Two are requests helm cannot answer *as a request*: one with no URL at all, and an
-    /// artifact the document closure cannot produce — the deliberate asymmetry the type's
+    /// Three are requests helm cannot answer *as a request*: one with no URL at all, a sibling
+    /// benchd could not be asked for or could not read, and an artifact the document closure
+    /// cannot produce — the deliberate asymmetry the type's
     /// header argues, where failing beats blanking a live pane.
     ///
     /// The other two are `respond` and `refuse` failing to build a response at all. That is

@@ -219,7 +219,8 @@ final class CanvasStateLiveTests: XCTestCase {
             path = StandardizedPath(artifact.path)
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: { _ in })
-            webView = HTMLCanvasPage.makeWebView(for: path, coordinator: coordinator)
+            webView = HTMLCanvasPage.makeWebView(
+                for: path, coordinator: coordinator, files: DiskCanvasFiles())
             super.init()
             model.open(artifact)
             coordinator.onState = { [weak self] in self?.model.pageDidReportState($0) }

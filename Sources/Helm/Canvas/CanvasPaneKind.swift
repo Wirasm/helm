@@ -9,8 +9,11 @@ import SwiftUI
 @MainActor
 final class CanvasPaneKind: SurfaceKind {
     private let configure: (CanvasModel, Pane.ID) -> Void
+    /// Where every canvas this kind makes reads and writes its files: benchd.
+    private let files: any CanvasFiles
 
-    init(configure: @escaping (CanvasModel, Pane.ID) -> Void) {
+    init(files: any CanvasFiles, configure: @escaping (CanvasModel, Pane.ID) -> Void) {
+        self.files = files
         self.configure = configure
     }
 
@@ -18,7 +21,7 @@ final class CanvasPaneKind: SurfaceKind {
 
     func make(for pane: Pane, in workspace: WorkspacePath?) -> CanvasModel? {
         guard case let .canvas(source) = pane.content else { return nil }
-        let model = CanvasModel(source: source)
+        let model = CanvasModel(source: source, files: files)
         configure(model, pane.id)
         return model
     }
@@ -32,7 +35,7 @@ final class CanvasPaneKind: SurfaceKind {
         return AnyView(CanvasTab(source: source, slot: slot))
     }
 
-    /// Saves a draft being typed (the last moment a save can happen) and stops watching.
+    /// Saves a draft being typed (the last moment a save can happen).
     func close(_ model: CanvasModel) {
         model.close()
     }

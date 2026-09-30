@@ -164,8 +164,22 @@ helm runs its own `bench` for a pane, since the one `status` names is on benchd'
 `bench attach --in-pane` no longer reads "no answer" as "the session ended": it says it cannot
 reach benchd and asks again with a capped backoff until benchd answers, then attaches and
 redraws from benchd's screen, or ends if benchd says the session did. That holds on one machine
-too, across a benchd restart. Canvases, screenshots, the browser and the drawers still reach
-around the socket; they are the next slices.
+too, across a benchd restart.
+
+**A canvas's files are benchd's too (M5c, second slice).** helm reads, writes and appends a
+canvas's files only through `file/read`, `file/write` and `file/append` (`bench_wire::files`,
+pinned by `fixtures/file-verbs.json`), and hears that one changed from `file/changed`: a thread
+(`benchd/src/files.rs`) stats every canvas file in the document and its notes sidecar every
+100 ms and reports a path once its size, time or inode moved and then held still for one look.
+A path it has just started watching is reported once too, so a write between helm's read at
+open and benchd's first look, or made while benchd was down, still reaches the pane; and helm
+reads every open canvas again whenever its follower connects.
+The verbs carry the canvas's rules, because benchd is the side with the disk: a sibling read is
+confined to the page's folder with symlinks followed, `file/write` compares against the bytes the
+writer names (`unchanged`) and answers `changed` with what is there instead of writing, and a
+`.notes.md` sidecar is never written whole. Their text is never logged, so `file/write` and
+`file/append` get a 16 MiB request line where every other verb keeps 64 KB. Screenshots, the
+browser and the drawers still reach around the socket; they are the next slices.
 
 **And benchd sees an agent waiting on the operator (M1, #357).** #283's failure was an agent
 parked at a prompt its hooks never reported, and nobody knew for hours. Each session's engine

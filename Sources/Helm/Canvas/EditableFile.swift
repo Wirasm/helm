@@ -55,7 +55,7 @@ struct EditableFile: Equatable {
 // MARK: - What is actually there
 
 extension EditableFile {
-    /// What is on disk right now, as far as helm can tell.
+    /// What is on disk right now, as far as benchd can tell helm.
     ///
     /// **Three cases because a read has three outcomes, and collapsing two of them is a clobber.**
     /// The first version of the pre-write check in `CanvasModel.saveDraft` was
@@ -65,16 +65,13 @@ extension EditableFile {
     /// no notice: the exact clobber `CanvasConflict` exists to prevent, reached through the check
     /// built to close it.
     ///
-    /// **It is reachable, and this codebase names the case itself.** `FileWatcher` debounces 120ms
-    /// *because* an agent may stream a long document non-atomically; a read landing inside that
-    /// window hits a torn multi-byte sequence and throws. A writer saving in Latin-1 or UTF-16 is
-    /// the other way — a complete, valid, atomic write that is simply not UTF-8. The comment that
-    /// licensed the fallthrough reasoned that an unreadable file would fail the write too, and
-    /// that is false: `write(to:atomically:)` writes a temp file and renames, so it needs the
-    /// **directory**, not a decodable file to replace.
+    /// **It is reachable, and there are more ways in now.** An agent streaming a long document
+    /// non-atomically leaves a torn multi-byte sequence for a read that lands mid-write; a writer
+    /// saving in Latin-1 or UTF-16 makes a complete file that is simply not UTF-8; and with the
+    /// file on benchd's side (M5c), benchd not answering is a read that told helm nothing at all.
     ///
-    /// So the type carries the distinction the `try?` threw away, and every reader has to say what
-    /// it does about not knowing.
+    /// So the type carries the distinction, and every reader has to say what it does about not
+    /// knowing.
     enum DiskContents: Equatable {
         /// Read and decoded. These are the bytes, and they can be compared.
         case bytes(String)
@@ -82,15 +79,22 @@ extension EditableFile {
         /// the file — which is what a note deleted under the operator, and one `write()` seeded
         /// empty, both depend on.
         case absent
-        /// Present, and helm could not read or decode it. The only case with no safe default:
-        /// there is something there, and helm does not know what.
-        case unreadable
+        /// Present and not text helm can show, or not readable at all — the words say which. The
+        /// only case with no safe default: helm does not know what is there.
+        case unreadable(String)
     }
 
-    /// Ask the file. The read is attempted first and `fileExists` only settles a failure, so the
-    /// ordinary case costs one open rather than two.
-    func diskContents() -> DiskContents {
-        if let text = try? String(contentsOf: url, encoding: .utf8) { return .bytes(text) }
-        return FileManager.default.fileExists(atPath: url.path) ? .unreadable : .absent
+    /// Ask benchd for the file.
+    func contents(through files: any CanvasFiles) -> DiskContents {
+        switch files.read(path.value, within: nil) {
+        case let .bytes(data):
+            guard let text = CanvasText.decode(data) else {
+                return .unreadable("it is not UTF-8 text")
+            }
+            return .bytes(text)
+        case .absent: return .absent
+        case .outside: return .unreadable("benchd answered for a folder nobody named")
+        case let .failed(why): return .unreadable(why)
+        }
     }
 }

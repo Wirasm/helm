@@ -88,8 +88,7 @@ final class WorkbenchModelTests: XCTestCase {
 
         XCTAssertNotIdentical(
             rig.model.canvas(for: pane), canvas,
-            "a retained CanvasModel keeps a FileWatcher, and that watcher an open file "
-                + "descriptor, on a file nothing shows")
+            "a retained CanvasModel keeps a canvas nothing shows, and its draft with it")
     }
 
     /// Closing a workspace takes its panes out of the document, and every canvas it held goes

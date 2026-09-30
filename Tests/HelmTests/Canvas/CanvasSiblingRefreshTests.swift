@@ -10,7 +10,7 @@ import XCTest
 ///
 /// - `CanvasModel.open` watches **one** url, the artifact. A sibling changing is not an event.
 /// - `WorkbenchModel.offer` returned the existing pane untouched, on the reasoning that
-///   *"`FileWatcher` has already re-rendered that pane"* — true of the artifact, false of
+///   *"the file watch has already re-rendered that pane"* — true of the artifact, false of
 ///   everything beside it. So for a sibling-only edit the one path left declined on the
 ///   strength of a refresh that never happened.
 ///
@@ -60,7 +60,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     /// **The regression test.** Edit only the sibling, push the same artifact again, and the
     /// bytes the page holds are the new ones.
     ///
-    /// The artifact is never touched, so the `FileWatcher` correctly fires nothing — that half
+    /// The artifact is never touched, so benchd's `file/changed` correctly names nothing — that half
     /// is not a bug and is not being worked around here. The push is the only signal helm gets.
     func testARePushAfterASiblingOnlyEditPutsTheNewBytesOnThePage() async throws {
         try #"{"version":"v1"}"#.write(to: sibling, atomically: true, encoding: .utf8)
@@ -95,7 +95,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
     }
 
     /// Editing the **artifact** must still reach the page, and by the route it always did — the
-    /// pane's own `FileWatcher`, with no push at all.
+    /// artifact's own change event (benchd's `file/changed` since M5c), with no push at all.
     ///
     /// **A control: it passes before and after the fix.** It is here because the fix is a second
     /// caller of `CanvasModel.refresh()`, and a change that made the push path work by breaking
@@ -115,16 +115,19 @@ final class CanvasSiblingRefreshTests: XCTestCase {
 
         try #"{"version":"v2"}"#.write(to: sibling, atomically: true, encoding: .utf8)
         // Touching the artifact is what the `?v=2` workaround was really doing (#228). Here it
-        // is done honestly — a rewrite of the file the watcher is on.
+        // is done honestly — a rewrite of the file benchd watches, and its report of it.
         try (Self.pageThatReportsItsSibling + "\n<!-- rewritten -->\n")
             .write(to: artifact, atomically: true, encoding: .utf8)
-        try await settle(untilGenerationRises: canvas)
+        let before = try document(of: canvas).generation
+        model.fileChanged(fileChangedFrame(artifact.path))
+        XCTAssertGreaterThan(try document(of: canvas).generation, before, "precondition")
         page.render(try document(of: canvas))
 
         let second = await page.nextReport()
         XCTAssertEqual(
             second, #"{"version":"v2"}"#,
-            "the artifact's own watcher is the route that always worked; the fix must not cost it")
+            "the artifact's own change event is the route that always worked; the fix must not cost it"
+        )
     }
 
     /// **The same bug, in a markdown canvas** — where it is much easier to miss.
@@ -175,7 +178,7 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         await page.mark()
 
         // ONLY the sibling. `report.md` is not rewritten, so its text is the same string in both
-        // reload keys and the `FileWatcher` on it fires nothing at all.
+        // reload keys and no change event names it.
         try Self.svg(width: 22).write(to: sibling, atomically: true, encoding: .utf8)
 
         try await push(markdownArtifact, from: terminal)
@@ -354,20 +357,6 @@ final class CanvasSiblingRefreshTests: XCTestCase {
         try XCTUnwrap(canvas.showing, "the canvas is not showing a file")
     }
 
-    /// The `FileWatcher` is a `DispatchSource` on the main queue, so its callback lands on a
-    /// later turn of the run loop than the write. Polls for the effect rather than sleeping a
-    /// guessed interval.
-    private func settle(untilGenerationRises canvas: CanvasModel) async throws {
-        let before = try document(of: canvas).generation
-        let deadline = ContinuousClock.now + .seconds(3)
-        while ContinuousClock.now < deadline {
-            if try document(of: canvas).generation > before { return }
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        XCTFail(
-            "the artifact's own watcher never fired — this test's precondition, not its subject")
-    }
-
     // MARK: - The page, and the pane that hosts it
 
     /// Reports what it got, whatever it got, on every load. A 404 is reported as such rather
@@ -407,7 +396,8 @@ final class CanvasSiblingRefreshTests: XCTestCase {
             path = StandardizedPath(artifact.path)
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: { _ in })
-            webView = MarkdownCanvasPage.makeWebView(for: path, coordinator: coordinator)
+            webView = MarkdownCanvasPage.makeWebView(
+                for: path, coordinator: coordinator, files: DiskCanvasFiles())
         }
 
         /// What SwiftUI's `updateNSView` does. The markdown is passed in rather than re-read so
@@ -514,7 +504,8 @@ final class CanvasSiblingRefreshTests: XCTestCase {
             path = StandardizedPath(artifact.path)
             coordinator = CanvasFileCoordinator(
                 host: CanvasAddress.host(for: path), onAnnotation: { _ in })
-            webView = HTMLCanvasPage.makeWebView(for: path, coordinator: coordinator)
+            webView = HTMLCanvasPage.makeWebView(
+                for: path, coordinator: coordinator, files: DiskCanvasFiles())
             super.init()
             webView.configuration.userContentController.add(self, name: "probe")
         }

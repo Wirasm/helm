@@ -34,7 +34,9 @@ enum CanvasNotes {
     /// notes"*. So the exclusion is not tidiness — it is that sentence enforced from the one
     /// place that could otherwise break it.
     static func isSidecar(_ url: URL) -> Bool {
-        url.lastPathComponent.hasSuffix(sidecarSuffix)
+        // Any case: `plan.NOTES.md` is the same file on a case-insensitive volume, and benchd
+        // refuses to write it whole whatever it is called (`bench_wire::is_notes_sidecar`).
+        url.lastPathComponent.lowercased().hasSuffix(sidecarSuffix)
     }
 
     /// One entry, in the shape an agent reads without being taught anything: the anchor as
@@ -98,17 +100,14 @@ enum CanvasNotes {
     /// Throws rather than swallowing: a directory that cannot be written to has to be
     /// surfaced in the pane. A note the operator believes they wrote and that went nowhere
     /// is worse than a note they were told they could not write.
-    static func append(_ annotation: CanvasAnnotation, for canvas: URL, at timestamp: Date) throws {
-        let url = sidecarURL(for: canvas)
-        let text = entry(annotation, at: timestamp)
-        guard let data = text.data(using: .utf8) else { return }
-        if let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-        } else {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-        }
+    ///
+    /// Written by benchd (`file/append`), which also refuses any whole-file write to a sidecar,
+    /// so "append, never rewrite" holds at the verb boundary and not only here.
+    static func append(
+        _ annotation: CanvasAnnotation, for canvas: URL, at timestamp: Date,
+        through files: any CanvasFiles
+    ) throws {
+        try files.append(entry(annotation, at: timestamp), to: sidecarURL(for: canvas).path)
     }
 
     /// Every entry's heading, for the pane's `Notes (n)` count. Takes the sidecar's text
@@ -138,9 +137,20 @@ enum CanvasNotes {
             .replacingOccurrences(of: "</sub>", with: "")
     }
 
-    /// The whole accumulation, or nil when the sidecar is missing or blank.
-    static func markdown(in sidecar: URL) -> String? {
-        guard let text = try? String(contentsOf: sidecar, encoding: .utf8),
+    /// The whole accumulation, or nil when the sidecar is missing or blank — or could not be
+    /// read, which is logged: the drawer has nothing true to show either way, and the notes
+    /// themselves are safe on benchd's side.
+    static func markdown(in sidecar: URL, through files: any CanvasFiles) -> String? {
+        let read = files.read(sidecar.path, within: nil)
+        if case let .failed(why) = read {
+            NSLog("helm: could not read \(sidecar.lastPathComponent) — \(why)")
+        }
+        return markdown(from: read)
+    }
+
+    /// The same, from a read already made.
+    static func markdown(from read: CanvasFileRead) -> String? {
+        guard case let .bytes(data) = read, let text = CanvasText.decode(data),
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return text

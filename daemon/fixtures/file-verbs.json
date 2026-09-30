@@ -1,0 +1,131 @@
+{
+  "append": {
+    "args": {
+      "path": "/Users/op/.prp/helm/plans/plan.notes.md",
+      "text": "## \"Mine.\"\n\nShorter.\n\n"
+    },
+    "id": "helm-files-5",
+    "verb": "file/append"
+  },
+  "changed": {
+    "event": {
+      "at": "2026-09-28T12:00:00.000000Z",
+      "data": {
+        "path": "/Users/op/.prp/helm/plans/plan.md"
+      },
+      "kind": "file/changed",
+      "seq": 57
+    }
+  },
+  "read": {
+    "args": {
+      "path": "/Users/op/.prp/helm/plans/plan.md"
+    },
+    "id": "helm-files-1",
+    "verb": "file/read"
+  },
+  "read_answers": [
+    {
+      "base64": "IyBQbGFuCg==",
+      "kind": "bytes"
+    },
+    {
+      "kind": "absent"
+    },
+    {
+      "kind": "outside"
+    }
+  ],
+  "read_sibling": {
+    "args": {
+      "path": "/Users/op/.prp/helm/canvas/board/vendor/board-core.js",
+      "within": "/Users/op/.prp/helm/canvas/board"
+    },
+    "id": "helm-files-2",
+    "verb": "file/read"
+  },
+  "sidecars": [
+    {
+      "canvas": "/a/plan.md",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/plan.notes.md"
+    },
+    {
+      "canvas": "/a/tasks.html",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/tasks.notes.md"
+    },
+    {
+      "canvas": "/a/README",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/README.notes.md"
+    },
+    {
+      "canvas": "/a/a.b.md",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/a.b.notes.md"
+    },
+    {
+      "canvas": "/a/.md",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/.md.notes.md"
+    },
+    {
+      "canvas": "/a/.hidden.md",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/.hidden.notes.md"
+    },
+    {
+      "canvas": "/a/x.",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/x..notes.md"
+    },
+    {
+      "canvas": "/a/My Plan.MD",
+      "canvas_is_sidecar": false,
+      "sidecar": "/a/My Plan.notes.md"
+    },
+    {
+      "canvas": "/a/plan.notes.md",
+      "canvas_is_sidecar": true,
+      "sidecar": "/a/plan.notes.notes.md"
+    },
+    {
+      "canvas": "/a/plan.NOTES.md",
+      "canvas_is_sidecar": true,
+      "sidecar": "/a/plan.NOTES.notes.md"
+    }
+  ],
+  "write": {
+    "args": {
+      "expect": {
+        "kind": "unchanged",
+        "text": "# Plan\n"
+      },
+      "path": "/Users/op/.prp/helm/plans/plan.md",
+      "text": "# Plan\n\nMine.\n"
+    },
+    "id": "helm-files-3",
+    "verb": "file/write"
+  },
+  "write_answers": [
+    {
+      "kind": "written"
+    },
+    {
+      "base64": "IyBUaGVpcnMK",
+      "kind": "changed"
+    }
+  ],
+  "write_latch": {
+    "args": {
+      "expect": {
+        "kind": "any"
+      },
+      "path": "/Users/op/.prp/helm/canvas/board.state.json",
+      "text": "{\n  \"format\" : \"helm.canvas-state\"\n}"
+    },
+    "id": "helm-files-4",
+    "verb": "file/write"
+  }
+}

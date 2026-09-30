@@ -29,6 +29,13 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod files;
+pub use files::{
+    Expect, FILE_CHANGED, FILE_READ_MAX_BYTES, FILE_REQUEST_MAX_BYTES, FileAppendArgs, FileChanged,
+    FileRead, FileReadArgs, FileWrite, FileWriteArgs, NOTES_SUFFIX, base64, is_notes_sidecar,
+    notes_sidecar,
+};
+
 mod just;
 pub use just::{
     JUST_FINISHED, JUST_STARTED, JustFinished, JustList, JustRunArgs, JustStarted, is_recipe_name,
@@ -175,6 +182,10 @@ pub const KNOWN_VERBS: &[&str] = &[
     // M5b: read and type into any terminal, through its session's VT engine.
     "screen/get",
     "screen/send",
+    // M5c: a canvas's files, read and written by benchd for a helm that may not share its disk.
+    "file/read",
+    "file/write",
+    "file/append",
     // The layout verbs (M4) — `LAYOUT_VERBS`, spelled again here so this one list stays the
     // whole surface; `every_layout_verb_is_known_and_routes_to_layout` keeps the two in step.
     "bench/get",
@@ -238,6 +249,12 @@ pub enum Verb {
     HelmAsk,
     /// helm's answer to one (`HelmAnswer`).
     HelmAnswer,
+    /// A canvas's file, its sibling or its sidecar, read for helm (`FileReadArgs`).
+    FileRead,
+    /// A canvas's file written for helm, against what it expects to replace (`FileWriteArgs`).
+    FileWrite,
+    /// A note appended to a canvas's sidecar (`FileAppendArgs`).
+    FileAppend,
 }
 
 impl Verb {
@@ -270,6 +287,9 @@ impl Verb {
             "restore" => Some(Verb::Restore),
             "screen/get" => Some(Verb::ScreenGet),
             "screen/send" => Some(Verb::ScreenSend),
+            "file/read" => Some(Verb::FileRead),
+            "file/write" => Some(Verb::FileWrite),
+            "file/append" => Some(Verb::FileAppend),
             layout if LAYOUT_VERBS.contains(&layout) => Some(Verb::Layout),
             _ => None,
         }
@@ -1111,7 +1131,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            41,
+            44,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

@@ -271,12 +271,19 @@ struct CanvasStateLatch: Equatable {
     /// writable, and a latch nobody can write is a capability that silently is not there.
     @discardableResult
     static func write(
-        _ body: CanvasStateBody, for canvas: URL, at timestamp: Date
+        _ body: CanvasStateBody, for canvas: URL, at timestamp: Date,
+        through files: any CanvasFiles
     ) throws
         -> CanvasStateLatch
     {
         let latch = CanvasStateLatch(artifact: canvas, body: body, writtenAt: timestamp)
-        try latch.fileContents().write(to: sidecarURL(for: canvas), options: [.atomic])
-        return latch
+        let text = String(decoding: try latch.fileContents(), as: UTF8.self)
+        // `.any`: helm is the latch's only writer, and the page's latest state replaces the last.
+        switch files.write(text, to: sidecarURL(for: canvas).path, expect: .any) {
+        case .written: return latch
+        case .changed:
+            throw CanvasFileFailure(reason: "benchd compared a write that expects nothing")
+        case let .failed(why): throw CanvasFileFailure(reason: why)
+        }
     }
 }

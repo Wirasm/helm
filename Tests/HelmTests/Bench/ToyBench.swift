@@ -295,9 +295,10 @@ struct ToyBench {
 
 extension FakeBenchd {
     /// Answer every verb from a `ToyBench` over the document this stand-in holds: apply it, push
-    /// the frame, then answer — the order benchd keeps.
+    /// the frame, then answer — the order benchd keeps. A canvas's `file/*` verbs are answered
+    /// from the test's own disk (`answeringFiles`).
     func playToyBench() {
-        answer = { [weak self] raw in
+        answer = answeringFiles { [weak self] raw in
             let id = raw["id"] ?? ""
             guard let self,
                 let data = try? JSONSerialization.data(withJSONObject: raw),
