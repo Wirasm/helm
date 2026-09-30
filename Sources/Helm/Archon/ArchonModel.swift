@@ -100,6 +100,8 @@ final class ArchonModel: ObservableObject {
     @Published private(set) var workflowNote: String?
     /// Whose list `workflows` is, so the note is dropped when the workspace changes.
     private var workflowsWorkspace: WorkspacePath?
+    /// Counts workflow loads, so a superseded one can tell it is no longer the latest.
+    private var workflowLoads = 0
     private let client: any ArchonClient
     private let defaults: UserDefaults
     private let opener: ArchonRunOpener
@@ -424,10 +426,16 @@ final class ArchonModel: ObservableObject {
             launchFailure = Self.noWorkspace
             return
         }
+        // Only the latest load writes anything. The drawer's task cancels a load when the
+        // workspace changes, and the replacement starts before the old one has unwound: its
+        // flag, list and note belong to the new workspace.
+        workflowLoads += 1
+        let load = workflowLoads
         isLoadingWorkflows = true
-        defer { isLoadingWorkflows = false }
+        defer { if load == workflowLoads { isLoadingWorkflows = false } }
         do {
             let response = try await client.workflows(in: workspacePath)
+            guard load == workflowLoads else { return }
             workflows = response.workflows
             workflowLoadErrors = response.errors
             // The note is about one workspace's list; another workspace's says nothing here.
@@ -436,7 +444,12 @@ final class ArchonModel: ObservableObject {
                 workflowsWorkspace = workspacePath
             }
             seedWorkflow()
+        } catch is CancellationError {
+            // The drawer's task was cancelled (workspace switched, drawer hidden): nobody asked
+            // for a launch, so nothing failed.
+            return
         } catch {
+            guard load == workflowLoads else { return }
             launchFailure = error.localizedDescription
         }
     }

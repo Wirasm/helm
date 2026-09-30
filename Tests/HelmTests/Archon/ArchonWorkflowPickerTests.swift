@@ -78,6 +78,43 @@ final class ArchonWorkflowPickerTests: XCTestCase {
         XCTAssertEqual(model.workflows(matching: "").count, 4, "an empty query is the whole list")
     }
 
+    /// The drawer's task loads the list and is cancelled when the workspace changes or the
+    /// drawer hides. A cancelled load is not a failed launch, and it must not clear the loading
+    /// flag of the load that replaced it. The fake's sleep is only a ceiling: cancellation ends
+    /// it, so nothing here depends on a sleep staying inside a deadline.
+    @MainActor
+    func testACancelledLoadIsSilentAndLeavesTheNextLoadRunning() async throws {
+        let client = FakeArchonClient(
+            workflowList: .init(
+                workflows: [
+                    ArchonWorkflow(name: "plan", description: "", provider: nil, model: nil)
+                ],
+                errors: []))
+        await client.setDelay(.seconds(60))
+        let model = ArchonModel(client: client, defaults: try isolatedDefaults("archon-cancel"))
+
+        let old = Task { await model.loadWorkflows(in: workspace) }
+        try await waitUntil { model.isLoadingWorkflows }
+        let replacement = Task { await model.loadWorkflows(in: WorkspacePath("/tmp/other")) }
+        await Task.yield()
+        old.cancel()
+        await old.value
+
+        XCTAssertNil(model.launchFailure, "a cancelled load is not a failed launch")
+        XCTAssertTrue(model.isLoadingWorkflows, "the replacement load is still running")
+
+        replacement.cancel()
+        await replacement.value
+        XCTAssertNil(model.launchFailure)
+        XCTAssertFalse(model.isLoadingWorkflows)
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<1000 where !condition() { await Task.yield() }
+        XCTAssertTrue(condition())
+    }
+
     /// Picking closes the list.
     @MainActor
     func testOpeningThePickerLoadsTheListAndPickingClosesIt() async throws {

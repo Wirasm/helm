@@ -67,11 +67,15 @@ struct ArchonDrawerView: View {
         // Keyed on the workspace: switching one restarts the poll about the new one, and hiding
         // the drawer ends it.
         .task(id: workspace) {
-            // The label beside the composer names what Send launches, so the list is read
-            // before the first poll rather than when somebody asks for it.
-            if workspace != nil { await model.loadWorkflows(in: workspace) }
+            // The label beside the composer names what Send launches, so the list is read as
+            // the drawer shows a workspace, beside the first poll rather than ahead of it.
+            guard workspace != nil else { return await model.poll(in: workspace) }
+            async let loaded: Void = model.loadWorkflows(in: workspace)
             await model.poll(in: workspace)
+            await loaded
         }
+        // A hidden drawer comes back to its runs, not to a half-typed search.
+        .onDisappear { model.isPickingWorkflow = false }
     }
 
     private var list: some View {
