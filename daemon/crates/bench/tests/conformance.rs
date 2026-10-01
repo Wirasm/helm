@@ -2370,6 +2370,81 @@ fn the_reply_fixture_is_what_a_live_daemon_answers() {
     serde_json::from_value::<bench_wire::DocumentAt>(get).expect("a DocumentAt");
 }
 
+/// A drop (#178) is `pane/move` with a place named by ids: `tab` into a slot before a pane, and
+/// `beside` a slot. Driven through the socket so the arm in benchd's `layout.rs` is the one
+/// tested, not only `bench-doc`'s rules.
+#[test]
+fn a_pane_dropped_as_a_tab_or_beside_a_slot_lands_there() {
+    let home = TestHome::claim("m4-drop");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, _, canvas) = working_bench(&daemon.socket);
+    let bench = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]["workspaces"][0]["bench"]
+            .clone()
+    };
+    let slot_of = |bench: &serde_json::Value, pane: &str| -> serde_json::Value {
+        bench["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|c| c["slots"].as_array().unwrap().iter())
+            .find(|s| {
+                s["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["id"] == pane)
+            })
+            .unwrap()
+            .clone()
+    };
+    let target = slot_of(&bench(&daemon.socket), &first)["id"].clone();
+
+    ok_data(layout(
+        &daemon.socket,
+        "pane/move",
+        serde_json::json!({ "pane": canvas, "to": { "tab": { "slot": target, "before": first } } }),
+        operator(),
+        false,
+    ));
+    let ids: Vec<_> = slot_of(&bench(&daemon.socket), &first)["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![canvas.clone(), first.clone()],
+        "a tab, before the pane named"
+    );
+
+    ok_data(layout(
+        &daemon.socket,
+        "pane/move",
+        serde_json::json!({ "pane": canvas, "to": { "beside": { "slot": target, "side": "down" } } }),
+        operator(),
+        false,
+    ));
+    let after = bench(&daemon.socket);
+    let column = after["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["slots"][0]["id"] == target)
+        .unwrap();
+    assert_eq!(
+        column["slots"][1]["panes"][0]["id"], canvas,
+        "a row of its own below"
+    );
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");
@@ -3554,26 +3629,7 @@ fn hook_verb(socket: &Path, args: serde_json::Value) -> serde_json::Value {
 
 /// `bench hook <harness>` exactly as a harness runs it: the payload on stdin.
 fn bench_hook(home: &Path, harness: &str, payload: serde_json::Value) -> CliRun {
-    let mut child = isolated(bench_bin())
-        .env("HOME", home)
-        .args(["hook", harness])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("run bench hook");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    CliRun {
-        code: out.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+    bench_stdin(home, &["hook", harness], &payload.to_string())
 }
 
 fn hosted_record(root: &Path) -> serde_json::Value {
@@ -6536,6 +6592,90 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
     assert_eq!(written["reply"], "on it", "the agent's change landed");
 }
 
+#[test]
+fn the_helm_orchestrate_skills_snippets_execute_against_a_real_daemon() {
+    // The orchestration skill's two snippets run here, in order, as an orchestrator would run
+    // them: spawn a workstream and append its launch to the run file, then read the fleet.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/helm-orchestrate/SKILL.md"),
+    )
+    .expect("helm-orchestrate SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(snippets.len(), 2, "spawn and record, then read the fleet");
+
+    let home = TestHome::claim("orch-skill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let brief = artifact(&home.dir, "ws1.md");
+    let run = home.dir.join("run.md");
+    fs::write(&run, "## Event log\n\n- 10:00 run started\n").unwrap();
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = isolated("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", home.dir.join(".bench"))
+            .env("BENCH", bench_bin())
+            .env("AGENT", "pi")
+            .env("MODEL", "openai-codex/gpt-6-luna")
+            .env("EFFORT", "low")
+            .env("WORKTREE", &ws)
+            .env("WS", "ws1")
+            .env("BRIEF", &brief)
+            .env("RUN", &run)
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let log = fs::read_to_string(&run).unwrap();
+    let launch = log.lines().last().unwrap();
+    assert!(
+        launch.contains("launched ws1: pi openai-codex/gpt-6-luna, session s"),
+        "the launch is the run file's last line: {log}"
+    );
+    assert!(
+        !launch.contains("runtime -,"),
+        "pi's conversation id is recorded for --resume: {launch}"
+    );
+    assert_eq!(
+        outputs[0].trim(),
+        launch,
+        "the snippet echoes what it recorded"
+    );
+    assert!(
+        outputs[1]
+            .lines()
+            .any(|l| l.starts_with("ws1 pi unknown ") && l.ends_with(" unread=0")),
+        "the fleet lists the workstream by handle: {}",
+        outputs[1]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M5b: every terminal pane is a benchd session (#359)
 // ---------------------------------------------------------------------------
@@ -8503,6 +8643,11 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
 // ---------------------------------------------------------------------------
 
 /// `bench` with `input` on its stdin.
+///
+/// A run that refuses before reading stdin (`file write` without `--expect`, `hook` for a
+/// harness it does not know) may exit before the write lands, and the write then fails with
+/// a broken pipe. That is the refusal itself, not a fault, so it is let through: the caller
+/// still asserts the exit code and what the run left behind.
 fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
     let mut child = isolated(bench_bin())
         .env("HOME", home)
@@ -8512,12 +8657,10 @@ fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
         .stderr(Stdio::piped())
         .spawn()
         .expect("run bench");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    match child.stdin.take().unwrap().write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("bench's stdin: {e}"),
+        _ => {}
+    }
     let out = child.wait_with_output().unwrap();
     CliRun {
         code: out.status.code().unwrap_or(-1),

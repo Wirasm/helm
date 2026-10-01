@@ -160,6 +160,12 @@ pub fn resolve_binary(
 /// `--remote-allow-origins=*` is kept on the operator's ruling. Neither consumer needs
 /// it today — helm's pane reaches the browser through benchd's relay (`cdp.rs`) and Playwright's is node's, and neither
 /// sends an `Origin` — but a page-based viewer would, and the spike's did.
+///
+/// `--force-device-scale-factor=2` makes the frames helm's pane draws retina-sharp:
+/// without it headless Chrome screencasts at 1x whatever device scale factor the pane
+/// emulates, and every page is upscaled (#548). The cost, accepted by the operator, is
+/// that agents' screenshots carry four times the pixels; Playwright's `scale: "css"`
+/// takes one at 1x.
 pub fn default_args(version_output: &str) -> Result<Vec<String>, String> {
     let major = version_output
         .split_whitespace()
@@ -188,6 +194,7 @@ pub fn default_args(version_output: &str) -> Result<Vec<String>, String> {
         ),
         "--remote-allow-origins=*".into(),
         "--window-size=1280,800".into(),
+        "--force-device-scale-factor=2".into(),
     ])
 }
 
@@ -629,6 +636,15 @@ mod tests {
             assert!(!ua.contains("Headless"), "{ua}");
             assert!(args.contains(&"--headless=new".to_string()));
         }
+    }
+
+    #[test]
+    fn the_browser_draws_at_retina_density_so_the_pane_is_sharp() {
+        let args = default_args("Google Chrome 154.0.8037.92").unwrap();
+        assert!(
+            args.contains(&"--force-device-scale-factor=2".to_string()),
+            "{args:?}"
+        );
     }
 
     #[test]

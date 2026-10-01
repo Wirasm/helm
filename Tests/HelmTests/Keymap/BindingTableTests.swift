@@ -136,6 +136,61 @@ final class BindingTableTests: XCTestCase {
         }
     }
 
+    /// #548: ⌘K, ⌘N, ⌘D and ⌘O are the page's in a browser pane — GitHub, Linear and Slack all
+    /// use ⌘K — and do what they did everywhere else.
+    func testThePageKeepsCommandKNDAndOInABrowserPane() {
+        let elsewhere: [(String, KeyBinding.Action)] = [
+            ("k", .local(.toggleCommandPalette)), ("n", .verb(.newTerminal)),
+            ("d", .verb(.split(.right))), ("o", .local(.openArtifactPanel)),
+        ]
+        for (key, action) in elsewhere {
+            XCTAssertNil(match(key, .command, focus: .browser), "⌘\(key) is the page's")
+            XCTAssertTrue(
+                KeyBindings.bindsElsewhere(
+                    characters: key, keyCode: 0, modifiers: .command, focus: .browser,
+                    in: KeyBindings.all),
+                "the page surface must take ⌘\(key) before the menu mirror of its row")
+            for focus in [KeyFocus.terminal, .other] {
+                XCTAssertEqual(match(key, .command, focus: focus), action, "⌘\(key) in \(focus)")
+            }
+        }
+    }
+
+    /// ⌘↑/⌘↓ jump between prompts in a terminal only, and their menu items used to take them
+    /// from a page too. They are the page's again: the top or bottom of the page or the field.
+    func testCommandUpAndDownAreThePagesInABrowserPane() {
+        for keyCode: UInt16 in [126, 125] {
+            XCTAssertTrue(
+                KeyBindings.bindsElsewhere(
+                    characters: nil, keyCode: keyCode, modifiers: .command, focus: .browser,
+                    in: KeyBindings.all))
+        }
+    }
+
+    /// The palette is still one key away in a browser pane: ⌘⇧P, which works everywhere.
+    func testShiftCommandPOpensThePaletteWhereverTheKeyboardIs() {
+        for focus in [KeyFocus.terminal, .browser, .other] {
+            XCTAssertEqual(
+                match("p", [.command, .shift], focus: focus), .local(.toggleCommandPalette))
+        }
+    }
+
+    /// What the page surface must leave alone: a chord helm binds for the browser (the monitor
+    /// fires it), one it binds everywhere, and one it never binds (the menu's, like ⌘Q).
+    func testOnlyAChordBoundElsewhereIsHandedToThePage() {
+        for (key, modifiers) in [
+            ("w", NSEvent.ModifierFlags.command), ("j", .command), ("b", [.command, .shift]),
+            ("q", .command), ("c", .command),
+            // The font-size chords zoom the page there (#544), so they are the monitor's.
+            ("=", .command), ("+", .command), ("-", .command), ("0", .command),
+        ] {
+            XCTAssertFalse(
+                KeyBindings.bindsElsewhere(
+                    characters: key, keyCode: 0, modifiers: modifiers, focus: .browser,
+                    in: KeyBindings.all), "\(modifiers) \(key)")
+        }
+    }
+
     /// ⌘⌥1–9 is already the workspace fallback, which is why focus movement is on arrows, and
     /// moving the pane is the same four arrows with shift (#287). The direction travels as
     /// itself — it once travelled as its raw value, and there is nothing left to flatten (#218).
@@ -317,7 +372,7 @@ final class BindingTableTests: XCTestCase {
         XCTAssertEqual(resolve(.closeFocused), .paneClose(second))
         XCTAssertEqual(resolve(.showTab(index: 0)), .paneShow(first))
         XCTAssertEqual(resolve(.stepFocus(.left)), .focusStep(direction: .left))
-        XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .up))
+        XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .step(.up)))
         XCTAssertEqual(
             resolve(.toggleDrawer(name: "browser", surface: .browser)),
             .drawerToggle(name: "browser", surface: .browser))

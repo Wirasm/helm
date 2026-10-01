@@ -205,12 +205,24 @@ impl From<PaneOpen> for EncodedPaneOpen {
     }
 }
 
-/// Where a moved pane goes. Tagged so drag and drop (#178) adds a destination rather than
-/// a second verb.
+/// Where a moved pane goes: one step (the keyboard), or a place named by ids (drag and drop,
+/// #178). Tagged, so a destination is added here rather than as a second verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MoveTo {
     Step(Direction),
+    /// Into `slot` as a tab, before `before` or last. Within its own slot, a reorder.
+    Tab {
+        slot: SlotId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<PaneId>,
+    },
+    /// A slot of its own beside `slot`: above or below it, or a column left or right of its
+    /// column.
+    Beside {
+        slot: SlotId,
+        side: Direction,
+    },
 }
 
 /// A divider: the member being dragged and the neighbour across it, either two columns or

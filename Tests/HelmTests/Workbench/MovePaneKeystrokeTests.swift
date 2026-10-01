@@ -61,7 +61,7 @@ final class MovePaneKeystrokeTests: XCTestCase {
         let verb = try XCTUnwrap(
             VerbTemplate.moveFocused(.left).resolve(
                 bench: rig.model.bench, workspaces: [], active: nil))
-        XCTAssertEqual(verb, .paneMove(moved, .left))
+        XCTAssertEqual(verb, .paneMove(moved, .step(.left)))
         rig.model.send(verb, by: .operatorGesture)
 
         let sent = try XCTUnwrap(rig.server.verbs.last)
