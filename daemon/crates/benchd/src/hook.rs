@@ -851,6 +851,7 @@ pub fn hooked(core: &Core) -> Vec<bench_sessions::HookedAgent> {
                 pid: a.pid,
                 activity: a.activity.clone().unwrap_or(Activity::Unknown),
                 handle: a.handle.clone(),
+                reported_ms: sessions::now_ms().saturating_sub(a.seen.elapsed().as_millis() as u64),
             })
         })
         .collect()

@@ -19,6 +19,7 @@
 //! worktrees ([`scope::Workspace`]).
 
 pub mod claude;
+pub mod codex;
 pub mod pi;
 pub mod process;
 pub mod scope;
@@ -89,6 +90,10 @@ pub struct HookedAgent {
     pub pid: u32,
     pub activity: Activity,
     pub handle: String,
+    /// When benchd last heard from it, in epoch ms: its last hook, or a reconcile that found it
+    /// still there. Picks which of two threads one process ran (codex's `/new` keeps the
+    /// spawn's handle) is the one running now.
+    pub reported_ms: u64,
 }
 
 /// Everything a build reads besides the harness files.
@@ -292,28 +297,40 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     // Hosted live Claude sessions: where subagents are looked for.
     let mut hosted_claude: Vec<&claude::Registered> = Vec::new();
 
-    // 1. benchd's own sessions.
+    // 1. benchd's own sessions. Claude's registry row says what one is doing; any other
+    //    harness says it through the hook of the agent benchd spawned there.
+    let codex_names = codex::names(inputs.home);
     for b in inputs.bench.iter().filter(|b| b.live) {
         let registered = by_pid.get(&b.pid).copied();
+        let reported = registered
+            .is_none()
+            .then(|| spawned_agent(inputs, b))
+            .flatten();
         let id = registered
             .map(|r| r.session.clone())
             .or_else(|| b.runtime_session.clone())
+            .or_else(|| reported.map(|h| h.session.clone()))
             .unwrap_or_else(|| b.session.clone());
         live.insert(key(b.harness, &id));
         if let Some(r) = registered {
             hosted_claude.push(r);
         }
+        let activity = match (registered, reported) {
+            (Some(r), _) => r.activity.clone(),
+            (None, Some(h)) => h.activity.clone(),
+            (None, None) => Activity::Unknown,
+        };
         out.push(
             &b.cwd,
             Draft {
                 harness: b.harness,
+                name: registered
+                    .and_then(|r| r.name.clone())
+                    .or_else(|| codex_name(&codex_names, b.harness, &id)),
                 id,
                 parent: None,
-                name: registered.and_then(|r| r.name.clone()),
                 cwd: b.cwd.clone(),
-                state: SessionState::Running {
-                    activity: registered.map_or(Activity::Unknown, |r| r.activity.clone()),
-                },
+                state: SessionState::Running { activity },
                 host: Host::Bench {
                     session: b.session.clone(),
                 },
@@ -408,7 +425,9 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 harness: h.harness,
                 id: h.session.clone(),
                 parent: None,
-                name: registered.and_then(|r| r.name.clone()),
+                name: registered
+                    .and_then(|r| r.name.clone())
+                    .or_else(|| codex_name(&codex_names, h.harness, &h.session)),
                 cwd: h.cwd.clone(),
                 state: SessionState::Running {
                     activity: h.activity.clone(),
@@ -538,9 +557,10 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                     continue;
                 }
             },
-            // benchd cannot mint a codex id and helm records none, so no codex id reaches
-            // the record; one that did would have no rollout lookup here.
-            Harness::Codex => None,
+            // codex names its thread after the spawn: the id reaches the record with the
+            // first hook's claim (`mail/claimed`).
+            // Only its day directory: a gone rollout must not walk the tree on every build.
+            Harness::Codex => codex::dated_rollout(inputs.home, &h.id),
         };
         let Some(transcript) = transcript else {
             continue;
@@ -597,6 +617,25 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         },
         newly_hosted,
     }
+}
+
+/// The agent benchd spawned in session `b`, as its hooks report it: it claimed the spawn's
+/// handle and runs in no pane (benchd's `waiting` joins them by the same rule). A process that
+/// started a second thread reports both under that handle; the one it reported last runs now.
+fn spawned_agent<'a>(inputs: &'a Inputs, b: &BenchSession) -> Option<&'a HookedAgent> {
+    inputs
+        .hooked
+        .iter()
+        .filter(|h| h.harness == b.harness && h.handle == b.handle && h.pane.is_none())
+        .filter(|h| (inputs.alive)(h.pid, None))
+        .max_by_key(|h| h.reported_ms)
+}
+
+/// A codex thread's name, as codex keeps it; other harnesses' names come from elsewhere.
+fn codex_name(names: &HashMap<String, String>, harness: Harness, id: &str) -> Option<String> {
+    (harness == Harness::Codex)
+        .then(|| names.get(id).cloned())
+        .flatten()
 }
 
 fn key(harness: Harness, id: &str) -> SessionKey {
