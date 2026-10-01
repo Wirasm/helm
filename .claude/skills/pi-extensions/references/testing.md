@@ -133,9 +133,11 @@ the model.
 
 The one thing RPC cannot show: that a real TUI still reaches a normal prompt.
 
-`script` provides the pty. Hold its stdin open with a bounded `sleep 30 |` rather than feeding
-`/dev/null`: since 0.99 pi draws its header only after the terminal answers a colour query (or
-100ms), and the EOF from `/dev/null` reaches pi as ctrl+d and quits it first. BSD and util-linux
+`script` provides the pty. Hold its stdin open with a pipe from a bounded `sleep 30` rather
+than feeding `/dev/null`: since 0.99 pi draws its header only after the terminal answers a colour
+query (or 100ms), and the EOF from `/dev/null` reaches pi as ctrl+d and quits it first (measured on
+pi 0.99.2, 2026-10-01). Kill the sleep with pi: give it the run's token as its `argv[0]`
+(`exec -a`), since macOS `script` refuses a fifo on stdin. BSD and util-linux
 `script` take different argument shapes; detect with `script --version | grep -qi util-linux`.
 
 Strip ANSI escapes from the capture, then assert both that pi rendered its banner, whose first

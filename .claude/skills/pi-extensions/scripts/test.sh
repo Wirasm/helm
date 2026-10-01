@@ -28,7 +28,7 @@
 # `sandbox` below points every root helm's conventions honour at a per-run temp directory, and
 # `assert_real_state_untouched` proves it worked. Read that block before adding a harness.
 #
-# Verified against pi 0.83.0 on 2026-08-02.
+# Verified against pi 0.83.0 on 2026-08-02; the pty harness re-measured on pi 0.99.2 on 2026-10-01.
 set -u
 
 # The project under test, derived from where this is RUN, never from where this file LIVES.
@@ -308,7 +308,8 @@ harness_rpc() {
 # The one thing rpc cannot show: that a real interactive pi reaches a normal prompt with
 # our extension loaded. `script` gives it a pty. stdin is a pipe held open by a bounded
 # `sleep`, not /dev/null: since 0.99 pi draws its header only after the terminal answers its
-# colour query (or 100ms), and /dev/null's EOF reached pi as ctrl+d and quit it before that.
+# colour query (or 100ms), and /dev/null's EOF reached pi as ctrl+d and quit it before that
+# (measured on pi 0.99.2, 2026-10-01).
 pty_one() {
 	local name=$1 cwd=$2 ext="$EXTENSIONS_DIR/$1/index.ts" raw="$2/$1.raw"
 	# The header's first line ends with the version (`v0.99.2`), the only stable text in it.
@@ -319,12 +320,16 @@ pty_one() {
 	# terminals. Matching the token keeps the kill inside this run.
 	local token="helm-pty-$$-$name"
 
+	# The sleep carries the token as its argv[0], so the pkill below ends it with pi. A fifo
+	# would give it a pid of its own, but macOS `script` refuses one ("tcgetattr/ioctl").
 	(
 		cd "$cwd" || exit 1
 		if script --version 2>/dev/null | grep -qi util-linux; then
-			sleep 30 | script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
+			(exec -a "$token-stdin" sleep 30) |
+				script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
 		else
-			sleep 30 | script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
+			(exec -a "$token-stdin" sleep 30) |
+				script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
 		fi
 	) >"$raw" 2>&1 </dev/null &
 	local runner=$!
