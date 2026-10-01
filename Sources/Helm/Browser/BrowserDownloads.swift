@@ -82,7 +82,8 @@ final class BrowserDownloads: ObservableObject {
     }
 
     nonisolated static let runnableExtensions: Set<String> = [
-        "app", "command", "sh", "pkg", "dmg", "terminal", "tool", "workflow",
+        "app", "command", "sh", "pkg", "mpkg", "dmg", "terminal", "tool", "workflow", "action",
+        "jar", "scpt", "applescript",
     ]
 
     nonisolated static func openAction(for file: URL) -> OpenAction {

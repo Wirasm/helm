@@ -93,7 +93,7 @@ final class BrowserDownloadsTests: XCTestCase {
         }
         for name in [
             "run.command", "install.sh", "Setup.PKG", "image.dmg", "shell.terminal", "x.tool",
-            "auto.workflow",
+            "auto.workflow", "lib.jar", "do.scpt", "do.applescript", "step.action", "Suite.mpkg",
         ] {
             XCTAssertEqual(BrowserDownloads.openAction(for: try file(name)), .reveal, name)
         }
