@@ -1,0 +1,40 @@
+
+ Let me write it out and count carefully:
+
+ 1. A blinking cursor, patient, asks for words
+ 2. and finds them waiting on the line.
+ 3. The screen — green or amber, black behind —
+ 4. holds nothing but the shape of thought.
+ 5. ...
+
+ Let me just write it. I'll aim for exactly 120 lines.
+
+ Let me draft:
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ A blinking cursor, patient, asks for words
+ and finds them waiting on the line.
+ The screen — green or amber, black behind —
+ holds nothing but the shape of thought.
+
+ I came here for the silence.
+ A terminal never interrupts.
+ It waits the way a river waits
+ for the next small thing to enter it.
+
+ There is no chrome, no menu bar,
+ no polite modal asking if I'm sure.
+ Just $, or >, or the dumb square
+ of a prompt that means proceed.
+
+ I type
+
+ ⠴ Working...
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Archon status unavailable
+/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/19281c67-097c-4aec-ae6d-8eab6a7b7915/scratchpad/ews/piws
+↑15k ↓103 $0.009 3.0%/512k (auto)                                                                                 (minimax) MiniMax-M3 • low

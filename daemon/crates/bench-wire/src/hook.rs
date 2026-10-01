@@ -258,6 +258,26 @@ pub fn unwired(harness: Harness, settings: &serde_json::Value, bench: &str) -> V
         .collect()
 }
 
+/// The events whose `bench hook codex` codex will not run until the operator trusts it, read
+/// from the answer to codex's own app-server `hooks/list`: its `trustStatus` is `untrusted` or
+/// `modified`, the two that put "Hooks need review" in front of him at startup (codex's
+/// `hook_needs_review`). Only this `bench`'s handlers count; his other hooks are his business.
+pub fn codex_needs_review(hooks_list: &serde_json::Value, bench: &str) -> Vec<String> {
+    let command = codex_command(bench);
+    let mut events: Vec<String> = hooks_list["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
+        .filter(|h| h["command"] == command.as_str())
+        .filter(|h| matches!(h["trustStatus"].as_str(), Some("untrusted" | "modified")))
+        .filter_map(|h| h["eventName"].as_str().map(str::to_string))
+        .collect();
+    events.sort();
+    events.dedup();
+    events
+}
+
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
 /// declared — helm's `HELM_PANE` or benchd's `BENCH_SESSION` — **and** that runs on a
 /// terminal.
@@ -501,6 +521,29 @@ mod tests {
             "'/it'\\''s/bench' hook codex"
         );
         assert!(unwired(Harness::Codex, &codex, "/it's/bench").is_empty());
+    }
+
+    /// The entry shape is codex 0.159.3's `hooks/list` answer, trimmed to the fields read.
+    #[test]
+    fn only_this_benchs_untrusted_or_changed_codex_hooks_need_review() {
+        let hook = |event: &str, command: &str, trust: &str| {
+            serde_json::json!({ "eventName": event, "command": command, "trustStatus": trust,
+                                "source": "user", "enabled": true })
+        };
+        let ours = "'/b/bench' hook codex";
+        let list = serde_json::json!({ "data": [{ "cwd": "/p", "warnings": [], "errors": [],
+            "hooks": [
+                hook("stop", ours, "trusted"),
+                hook("preToolUse", ours, "untrusted"),
+                hook("sessionStart", ours, "modified"),
+                hook("postToolUse", "~/.codex/notify.sh", "untrusted"),
+                hook("interrupt", "'/elsewhere/bench' hook codex", "untrusted"),
+            ] }] });
+        assert_eq!(
+            codex_needs_review(&list, "/b/bench"),
+            ["preToolUse", "sessionStart"]
+        );
+        assert!(codex_needs_review(&serde_json::json!({ "data": [] }), "/b/bench").is_empty());
     }
 
     #[test]

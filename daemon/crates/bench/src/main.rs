@@ -62,9 +62,10 @@ fn usage() -> &'static str {
      \x20     stop                                log the stop, kill sessions, exit\n\
      \x20     spawn --agent <a> --cwd <dir>       an agent in a bench pty, shown in a pane of\n\
      \x20           [--name <handle>]             <dir>'s workspace; --resume <id> re-enters a\n\
-     \x20           [--prompt-file <p>]           claude or pi conversation, --fork <id> copies a\n\
-     \x20           [--model <m>] [--effort <e>]  claude one to run read-only, --arg adds a flag\n\
+     \x20           [--prompt-file <p>]           conversation, --fork <id> copies one to run\n\
+     \x20           [--model <m>] [--effort <e>]  read-only (a harness that cannot says so),\n\
      \x20           [--resume <id> | --fork <id>] [--arg <flag>]... [--asked]\n\
+     \x20                                         --arg adds a flag\n\
      \x20     open <file|browser|terminal>        a pane in your workspace (a .md/.html file is\n\
      \x20           [--workspace <dir> | --drawer <name>] [--asked]      a canvas)\n\
      \x20     split <right|down> [--surface <s>]  a new column or row beside the focused slot\n\
@@ -566,10 +567,12 @@ fn parse_surface(raw: &str) -> Result<Surface, String> {
 /// `bench wiring`: what to add, once per machine, so an agent the operator starts himself
 /// reports to benchd — the settings and hooks files, and pi's extension. The command is always
 /// this `bench`, by absolute path, so the wiring never changes and codex trusts it once.
-/// benchd gives the sessions it spawns the same wiring on its own.
+/// benchd passes a Claude it spawns the same hooks itself (`--settings`); a codex or pi it
+/// spawns reports only through these files, the operator's own.
 ///
-/// `bench wiring --check` reads the files and says what is missing: exit 0 when all of it is
-/// there, 3 when something is not. It never writes them.
+/// `bench wiring --check` reads the files, and asks codex whether it trusts its hooks, and says
+/// what is missing: exit 0 when all of it is there, 3 when something is not. It never writes
+/// anything: trusting codex's hooks is the operator's step.
 fn wiring(mode: Option<&str>) -> i32 {
     let bench = match std::env::current_exe() {
         Ok(exe) => bench_wire::hook::sibling_bench(&exe).display().to_string(),
@@ -599,7 +602,7 @@ fn wiring(mode: Option<&str>) -> i32 {
                 "codex": {
                     "file": codex_file,
                     "merge": bench_wire::hook::codex_hooks(&bench),
-                    "then": "open codex once and trust the hook in /hooks",
+                    "then": CODEX_TRUST_STEP,
                 },
                 "pi": { "link": pi_link, "to": "<helm checkout>/pi/extensions/bench" },
                 // Claude's plan limits reach benchd only through its statusline (#143), so the
@@ -616,47 +619,136 @@ fn wiring(mode: Option<&str>) -> i32 {
             );
             0
         }
-        Some("--check") => {
-            let read = |path: &PathBuf| -> Value {
-                std::fs::read_to_string(path)
-                    .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok())
-                    .unwrap_or(Value::Null)
-            };
-            let claude = read(&claude_file);
-            let claude_missing = bench_wire::hook::unwired(Harness::Claude, &claude, &bench);
-            let codex_missing =
-                bench_wire::hook::unwired(Harness::Codex, &read(&codex_file), &bench);
-            let inbound = claude["crossSessionInbound"] == "accept";
-            // Optional (#143), so reported but never part of the exit status.
-            let statusline = claude["statusLine"]["command"]
-                .as_str()
-                .is_some_and(|c| c.starts_with(&format!("{bench} statusline")));
-            let pi = pi_link.join("index.ts").is_file();
-            let exists = PathBuf::from(&bench).is_file();
-            let report = json!({
-                "bench": bench,
-                "bench_exists": exists,
-                "claude": { "file": claude_file, "missing_events": claude_missing,
-                            "cross_session_inbound_accept": inbound,
-                            "statusline_reports_limits": statusline },
-                "codex": { "file": codex_file, "missing_events": codex_missing },
-                "pi": { "link": pi_link, "installed": pi },
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&report).unwrap_or_default()
-            );
-            let all = exists && claude_missing.is_empty() && codex_missing.is_empty();
-            if all && inbound && pi {
-                0
-            } else {
-                Status::Refused.exit_code()
-            }
-        }
+        Some("--check") => wiring_check(&bench, &claude_file, &codex_file, &pi_link),
         Some(other) => refuse(&format!(
             "bench wiring takes no argument or --check, not {other:?}"
         )),
+    }
+}
+
+/// What the operator does once so codex runs the bench's hooks, in the words its dialog uses.
+const CODEX_TRUST_STEP: &str = "open codex once and choose \"Trust all and continue\"";
+
+/// `bench wiring --check`: what is missing, and exit 3 if anything required is.
+fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_link: &Path) -> i32 {
+    let read = |path: &PathBuf| -> Value {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null)
+    };
+    let claude = read(claude_file);
+    let claude_missing = bench_wire::hook::unwired(Harness::Claude, &claude, bench);
+    let codex_missing = bench_wire::hook::unwired(Harness::Codex, &read(codex_file), bench);
+    let inbound = claude["crossSessionInbound"] == "accept";
+    // Optional (#143), so reported but never part of the exit status.
+    let statusline = claude["statusLine"]["command"]
+        .as_str()
+        .is_some_and(|c| c.starts_with(&format!("{bench} statusline")));
+    let pi = pi_link.join("index.ts").is_file();
+    let exists = PathBuf::from(bench).is_file();
+    // A hook in the file runs only once codex trusts it, and only codex can say whether it
+    // does: the trust record is a hash of codex's own normalized form of the hook.
+    let mut codex = json!({ "file": codex_file, "missing_events": codex_missing });
+    let trusted = match codex_hooks_list() {
+        Ok(list) => {
+            let review = bench_wire::hook::codex_needs_review(&list, bench);
+            let trusted = review.is_empty();
+            codex["needs_review"] = json!(review);
+            trusted
+        }
+        Err(why) => {
+            codex["trust_unverified"] = json!(why);
+            false
+        }
+    };
+    if !trusted {
+        codex["then"] = json!(CODEX_TRUST_STEP);
+    }
+    let report = json!({
+        "bench": bench,
+        "bench_exists": exists,
+        "claude": { "file": claude_file, "missing_events": claude_missing,
+                    "cross_session_inbound_accept": inbound,
+                    "statusline_reports_limits": statusline },
+        "codex": codex,
+        "pi": { "link": pi_link, "installed": pi },
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_default()
+    );
+    let all = exists && claude_missing.is_empty() && codex_missing.is_empty();
+    if all && trusted && inbound && pi {
+        0
+    } else {
+        Status::Refused.exit_code()
+    }
+}
+
+/// How long `wiring --check` waits for codex's answer. Measured: 60 ms on 0.159.3, 250 ms on
+/// 0.157.0, both from a cold start.
+const CODEX_ANSWER_WAIT: Duration = Duration::from_secs(10);
+
+/// codex's own `hooks/list` for this directory, from the `codex` on PATH (the one a shell
+/// starts), through a stdio app-server of its own that is killed once it answers. It reads the
+/// operator's codex config and writes nothing. stdin stays open until the answer: an
+/// app-server whose stdin closes exits before answering.
+fn codex_hooks_list() -> Result<Value, String> {
+    use std::io::BufRead;
+    let cwd = std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?;
+    let mut child = process::Command::new("codex")
+        .arg("app-server")
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot start `codex app-server`: {e}"))?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("`codex app-server` has no stdio".into());
+    };
+    let requests = [
+        json!({ "id": 1, "method": "initialize",
+                "params": { "clientInfo": { "name": "bench-wiring",
+                                            "version": env!("CARGO_PKG_VERSION") } } }),
+        json!({ "method": "initialized" }),
+        json!({ "id": 2, "method": "hooks/list", "params": { "cwds": [cwd] } }),
+    ];
+    let wrote = requests.iter().try_for_each(|r| writeln!(stdin, "{r}"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Ok(message) = serde_json::from_str::<Value>(&line)
+                && message["id"] == 2
+            {
+                let _ = tx.send(message);
+                return;
+            }
+        }
+    });
+    let answer = wrote
+        .map_err(|e| format!("cannot write to `codex app-server`: {e}"))
+        .and_then(|()| {
+            rx.recv_timeout(CODEX_ANSWER_WAIT).map_err(|_| {
+                format!(
+                    "`codex app-server` did not answer hooks/list within {}s",
+                    CODEX_ANSWER_WAIT.as_secs()
+                )
+            })
+        });
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let answer = answer?;
+    if answer["result"].is_object() {
+        Ok(answer["result"].clone())
+    } else {
+        Err(format!("codex refused hooks/list: {}", answer["error"]))
     }
 }
 
