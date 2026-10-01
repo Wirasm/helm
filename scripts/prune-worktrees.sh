@@ -41,7 +41,15 @@ base=$(git rev-parse origin/development) || exit 1
 first_parent=$(git rev-list --first-parent "$base")
 # The main checkout is the first entry, spelled the way git spells every other one.
 root="$(git worktree list --porcelain | sed -n '1s/^worktree //p')/.worktrees/"
-busy=$(timeout 30 lsof -nP -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -F "$root" || true)
+# Every process's working directory. lsof exits 1 when it could not read some processes, which
+# is normal; anything else, or no answer, means nobody can say which worktrees are in use, so
+# nothing is removed. This script runs unattended from the merge queue.
+cwds=$(timeout 30 lsof -nP -d cwd -Fn 2>/dev/null)
+case $? in
+    0 | 1) ;;
+    *) echo "prune: cannot list the processes working in worktrees (lsof failed); removing nothing" >&2; exit 1 ;;
+esac
+busy=$(sed -n 's/^n//p' <<<"$cwds" | grep -F "$root" || true)
 
 removed=0 kept=0
 path="" head="" branch="" locked=0

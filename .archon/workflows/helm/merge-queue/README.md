@@ -42,7 +42,10 @@ running `scripts/prune-worktrees.sh --branch <head branch>` for each one. That s
 worktree with a process working in it, a tracked change, untracked files that are not ignored, a
 lock, or a HEAD that has not reached `development` through a merge, and says which reason held
 it. A worktree on a PR that was held, landed through another PR, or merged unverified is left
-alone, and so is one whose PR merged in another run: `just prune-worktrees` judges those. Each
+alone, and so is one whose PR merged in another run: `just prune-worktrees` judges those. If
+`lsof` cannot list processes, nothing is removed. The script is the one in the queue's own
+checkout, so refresh that checkout (`checkout --detach origin/development`, as below) before a
+batch; an older script refuses `--branch`, and `pruned` then says so. Each
 worktree holds 3-4 GB of builds, and about sixty of them filled the disk on 2026-10-01.
 
 A held PR does not move `development`, so the next PR carries on. Each PR has 50 minutes

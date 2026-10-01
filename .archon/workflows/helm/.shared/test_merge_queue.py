@@ -377,6 +377,22 @@ class PruneMerged(unittest.TestCase):
         self.assertIn("keep   busy (a process is working in it)", said)
         self.assertNotIn("unnamed", said, "a branch the batch did not merge is not considered")
 
+    def test_a_process_list_that_fails_removes_nothing(self):
+        # Unattended, a failed `lsof` must not read as "nobody is working anywhere".
+        busy = self.worktree("busy", merge=True)
+        sleeper = subprocess.Popen(["sleep", "60"], cwd=busy)  # bounded by itself
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "lsof").write_text("#!/bin/sh\nexit 2\n")
+        (bin_dir / "lsof").chmod(0o755)
+        path = f"{bin_dir}:{os.environ['PATH']}"
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            said = merge_queue.prune_merged(["busy"], script=self.repo / "scripts" / "prune-worktrees.sh")
+        self.assertTrue(busy.exists(), said)
+        self.assertIn("cannot list", said)
+
     def test_nothing_merged_runs_nothing(self):
         self.assertEqual(merge_queue.prune_merged([], script=self.tmp / "absent.sh"), "")
 

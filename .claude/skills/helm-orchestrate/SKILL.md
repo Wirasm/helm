@@ -154,8 +154,8 @@ the operator has said the run may.
 
 After a workstream's PR merges, or a spike's verdict is read: `bench close <pane> --force` (it
 ends the agent's session), then remove its worktree, and add a terminal line to the run file. The
-merge queue already removed the worktrees of the PRs it merged (its report's `pruned` says which
-it kept and why); run `just prune-worktrees` after every batch for the rest, and
+merge queue removed the worktrees of the PRs it merged that nobody was still working in (its
+report's `pruned` says which it kept and why; an agent still in its pane keeps its worktree); run `just prune-worktrees` after every batch for the rest, and
 `git worktree remove --force .worktrees/<name>` for a spike's throwaway code. Fill the run file's
 outcome section, and send the operator one message with what shipped and what needs him.
 
@@ -172,7 +172,7 @@ recorded agent in its pane. Mail each resumed agent its state and next step.
   `BENCH_SUITE`. A worktree helm runs under `HELM_DEFAULTS_SUITE`.
 - **Builds fill the disk.** Every worktree holds 3-4 GB of `.build` and `daemon/target`, and
   about sixty of them filled it on 2026-10-01. Agents delete theirs when they report (the brief
-  says so), the queue prunes what it merged, and you prune after every batch. `just check`
+  says so), the queue prunes what it merged where nobody is working, and you prune after every batch. `just check`
   refuses to start below 20 GB free.
 - **Everything spawned is bounded.** `timeout` on every long command and every poll loop. Check
   `ps -Ao pcpu,etime,pid,command -r | head` before reporting, and say what is still running.

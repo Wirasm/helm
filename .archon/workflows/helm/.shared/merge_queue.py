@@ -179,14 +179,18 @@ def prune_merged(branches: list[str], script: Path = PRUNE_SCRIPT) -> str:
     if not script.is_file():
         return f"not pruned: {script} is missing in this checkout"
     argv = ["bash", str(script)] + [arg for b in branches for arg in ("--branch", b)]
+    # Its own process group, so a timeout stops the `git worktree remove` it is running too.
+    proc = subprocess.Popen(  # noqa: S603
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+    )
     try:
-        result = subprocess.run(  # noqa: S603
-            argv, capture_output=True, text=True, check=False, timeout=PRUNE_TIMEOUT_SECONDS
-        )
+        said, _ = proc.communicate(timeout=PRUNE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, 9)
+        proc.communicate()
         return f"not pruned: prune-worktrees did not finish in {PRUNE_TIMEOUT_SECONDS}s"
-    said = (result.stdout + result.stderr).strip()
-    return said if result.returncode == 0 else f"prune-worktrees exited {result.returncode}: {said}"
+    said = said.strip()
+    return said if proc.returncode == 0 else f"prune-worktrees exited {proc.returncode}: {said}"
 
 
 # --- I/O --------------------------------------------------------------------------------

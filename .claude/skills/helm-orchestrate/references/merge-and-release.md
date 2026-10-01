@@ -89,8 +89,10 @@ After a release, mail each resumed workstream where it stands.
 
 ## Clean up after a merge
 
-The queue removes the worktrees of the PRs it merged (`pruned` in its report). After every batch,
-prune the rest, and look at each one the script keeps:
+The queue removes the worktrees of the PRs it merged that nobody is working in (`pruned` in its
+report). A workstream whose agent is still in its pane keeps its worktree until you close the
+pane. After every batch, close the panes you are done with, prune the rest, and look at each one
+the script keeps:
 
 ```text
 just -f <repo>/justfile prune-worktrees --dry-run      # what would go, and why each other stays
