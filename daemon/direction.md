@@ -61,6 +61,12 @@ operator's focus, so an agent's toggle is refused without `asked`, and an agent'
 drawer instead of opening it. No drawer operation touches a workspace. `bench.json` is version 1
 from here, so an older benchd quarantines it rather than dropping drawers on its next save.
 
+**A drop names its place (#178).** `pane/move`'s `to` is a step (the keyboard) or a place named by
+ids, `{tab: {slot, before?}}` or `{beside: {slot, side}}` (a dragged tab); `pane/open` takes the
+same place as `at` (a file dropped from Finder). Like a drawer, a place is outright and the rules
+are not asked; a surface that bench already shows is moved there rather than opened twice. helm
+works out which place the pointer means, and benchd what a move or an open there does.
+
 **Placement is the operator's file (#356).** Where a new pane goes is a table, and the table is
 TOML: the built-in one is `crates/bench-doc/rules/placement.default.toml`, embedded at build
 time, and `<root>/rules/placement.toml` replaces it whole. benchd reads the file before each
@@ -111,7 +117,11 @@ over in argv as a pointer, so nothing waits for a TUI to draw. pi's channel is i
 (`pi/extensions/bench`), which reports through `bench hook pi`, watches the inbox benchd names
 and starts its own turn when benchd agrees. An agent the operator starts himself
 reports once its harness is wired to the one fixed command: `bench wiring` prints what to add
-to the three files and `bench wiring --check` says what is missing. A codex benchd spawns runs
+to the three files and `bench wiring --check` says what is missing. For codex that includes
+trust: codex runs a hook only once the operator has trusted it ("Hooks need review" at startup,
+"Trust all and continue"), so `--check` asks the `codex` on PATH (`hooks/list` on a stdio
+app-server of its own) and names each event codex will run no bench hook for: untrusted or
+changed since trusted, disabled, or not listed at all. A codex benchd spawns runs
 its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
 which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
 codex the operator starts himself embeds its app-server, so its mail waits for its next prompt

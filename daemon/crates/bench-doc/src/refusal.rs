@@ -15,6 +15,11 @@ pub enum Refusal {
     UnknownPane(PaneId),
     UnknownSlot(SlotId),
     UnknownColumn(ColumnId),
+    /// A move named a pane to land before, and the destination slot does not hold it.
+    NotInSlot {
+        pane: PaneId,
+        slot: SlotId,
+    },
     UnknownWorkspace(StandardPath),
     NoActiveWorkspace,
     /// The bench's last pane: a bench with nothing in it is not a state worth reaching.
@@ -46,6 +51,12 @@ impl fmt::Display for Refusal {
             Refusal::UnknownPane(id) => write!(f, "no pane {id} on the bench"),
             Refusal::UnknownSlot(id) => write!(f, "no slot {id} on the bench"),
             Refusal::UnknownColumn(id) => write!(f, "no column {id} on the bench"),
+            Refusal::NotInSlot { pane, slot } => {
+                write!(
+                    f,
+                    "slot {slot} does not hold pane {pane} to put a tab before"
+                )
+            }
             Refusal::UnknownWorkspace(path) => write!(f, "no workspace {path} is open"),
             Refusal::NoActiveWorkspace => write!(f, "no workspace is active"),
             Refusal::LastPane(id) => write!(

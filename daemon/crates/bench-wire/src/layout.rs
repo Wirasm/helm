@@ -3,8 +3,8 @@
 //! travel and where they are kept.
 
 use bench_doc::{
-    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, SlotId, Split, StandardPath,
-    Surface,
+    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split,
+    StandardPath, Surface,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -156,16 +156,22 @@ pub enum OpenInto {
     /// That drawer, outright: the rules are not asked. Created if it has none; an agent's pane
     /// badges it, only the operator's opens it.
     Drawer(DrawerName),
+    /// That place on the bench holding its slot, outright, as a drawer is (#178: a file dropped
+    /// from Finder). A surface that bench already shows is moved there.
+    At(Place),
 }
 
-/// The wire spelling: `workspace` and `drawer` are both optional keys, and naming both is
-/// refused rather than resolved — a drawer belongs to no workspace.
+/// The wire spelling: `workspace`, `drawer` and `at` are optional keys, and naming more than one
+/// is refused rather than resolved — a drawer belongs to no workspace, and a place's slot names
+/// its own.
 #[derive(Serialize, Deserialize)]
 struct EncodedPaneOpen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workspace: Option<StandardPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     drawer: Option<DrawerName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    at: Option<Place>,
     surface: Surface,
 }
 
@@ -173,13 +179,23 @@ impl TryFrom<EncodedPaneOpen> for PaneOpen {
     type Error = String;
 
     fn try_from(raw: EncodedPaneOpen) -> Result<Self, Self::Error> {
-        let into = match (raw.workspace, raw.drawer) {
-            (None, None) => OpenInto::Active,
-            (Some(path), None) => OpenInto::Workspace(path),
-            (None, Some(drawer)) => OpenInto::Drawer(drawer),
-            (Some(path), Some(drawer)) => {
+        let into = match (raw.workspace, raw.drawer, raw.at) {
+            (None, None, None) => OpenInto::Active,
+            (Some(path), None, None) => OpenInto::Workspace(path),
+            (None, Some(drawer), None) => OpenInto::Drawer(drawer),
+            (None, None, Some(place)) => OpenInto::At(place),
+            (workspace, drawer, at) => {
+                let named: Vec<&str> = [
+                    workspace.map(|_| "workspace"),
+                    drawer.map(|_| "drawer"),
+                    at.map(|_| "at"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 return Err(format!(
-                    "names both workspace {path} and drawer {drawer} — a drawer belongs to no workspace, so name one"
+                    "names {} — a drawer belongs to no workspace and a place's slot names its own, so name one",
+                    named.join(" and ")
                 ));
             }
         };
@@ -192,25 +208,30 @@ impl TryFrom<EncodedPaneOpen> for PaneOpen {
 
 impl From<PaneOpen> for EncodedPaneOpen {
     fn from(open: PaneOpen) -> Self {
-        let (workspace, drawer) = match open.into {
-            OpenInto::Active => (None, None),
-            OpenInto::Workspace(path) => (Some(path), None),
-            OpenInto::Drawer(drawer) => (None, Some(drawer)),
+        let (workspace, drawer, at) = match open.into {
+            OpenInto::Active => (None, None, None),
+            OpenInto::Workspace(path) => (Some(path), None, None),
+            OpenInto::Drawer(drawer) => (None, Some(drawer), None),
+            OpenInto::At(place) => (None, None, Some(place)),
         };
         EncodedPaneOpen {
             workspace,
             drawer,
+            at,
             surface: open.surface,
         }
     }
 }
 
-/// Where a moved pane goes. Tagged so drag and drop (#178) adds a destination rather than
-/// a second verb.
+/// Where a moved pane goes: one step (the keyboard), or a place named by ids (drag and drop,
+/// #178). On the wire `{"step": dir}`, `{"tab": {..}}` or `{"beside": {..}}`: the place's own
+/// tags, untagged here, so `pane/move` and `pane/open`'s `at` spell a place one way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MoveTo {
     Step(Direction),
+    #[serde(untagged)]
+    Place(Place),
 }
 
 /// A divider: the member being dragged and the neighbour across it, either two columns or
@@ -447,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_open_names_a_workspace_or_a_drawer_never_both() {
+    fn pane_open_names_one_of_a_workspace_a_drawer_or_a_place() {
         let surface = json!({"kind": "browser"});
         let open = |args: Value| {
             serde_json::from_value::<LayoutVerb>(json!({"verb": "pane/open", "args": args}))
@@ -465,10 +486,38 @@ mod tests {
             into(json!({"drawer": "notes", "surface": surface})),
             OpenInto::Drawer(_)
         ));
-        let err = open(json!({"workspace": "/tmp/w", "drawer": "notes", "surface": surface}))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("name one"), "{err}");
+        let slot = "00000002-0000-4000-8000-000000000002";
+        assert!(matches!(
+            into(json!({"at": {"beside": {"slot": slot, "side": "up"}}, "surface": surface})),
+            OpenInto::At(Place::Beside { .. })
+        ));
+        for both in [
+            json!({"workspace": "/tmp/w", "drawer": "notes", "surface": surface}),
+            json!({"workspace": "/tmp/w", "at": {"tab": {"slot": slot}}, "surface": surface}),
+            json!({"drawer": "notes", "at": {"tab": {"slot": slot}}, "surface": surface}),
+        ] {
+            let err = open(both.clone()).unwrap_err().to_string();
+            assert!(err.contains("name one"), "{both}: {err}");
+        }
+    }
+
+    /// `MoveTo`'s place is untagged so it shares `Place`'s spelling; a malformed one must
+    /// still be refused rather than read as something else.
+    #[test]
+    fn pane_move_reads_a_step_or_a_place_and_refuses_the_rest() {
+        let to = |to: Value| serde_json::from_value::<MoveTo>(to).map_err(|e| e.to_string());
+        let slot = "00000002-0000-4000-8000-000000000002";
+        assert_eq!(
+            to(json!({"step": "left"})),
+            Ok(MoveTo::Step(Direction::Left))
+        );
+        assert!(matches!(
+            to(json!({"tab": {"slot": slot}})),
+            Ok(MoveTo::Place(Place::Tab { before: None, .. }))
+        ));
+        assert!(to(json!({"tab": {}})).is_err());
+        assert!(to(json!({"beside": {"slot": slot}})).is_err());
+        assert!(to(json!({"anywhere": {}})).is_err());
     }
 
     #[test]

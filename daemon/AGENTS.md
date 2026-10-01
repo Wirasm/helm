@@ -56,7 +56,8 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `src/verbs.rs`
   is the pane verbs and spawn (M3); `src/attach.rs` is the relay a helm pane runs. Two verbs
   never open the socket: `bench log` reads a transcript file directly, and `bench wiring` prints
-  (or `--check`s) the one-time hook wiring for the operator's own agents.
+  (or `--check`s) the one-time hook wiring for the operator's own agents (the check also asks
+  codex itself whether it trusts those hooks).
 - **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To
   restart the live one, `launchctl kickstart -k gui/$(id -u)/com.wirasm.benchd`; starting a
   second benchd by hand beside it is refused at the socket and leaves launchd retrying. Tests and

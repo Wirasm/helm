@@ -148,7 +148,7 @@ enum VerbTemplate: Equatable {
             return .paneShow(slot.panes[index].id)
         case let .stepFocus(direction): return .focusStep(direction: direction)
         case let .moveFocused(direction):
-            return bench?.focusedPane.map { .paneMove($0.id, direction) }
+            return bench?.focusedPane.map { .paneMove($0.id, .step(direction)) }
         case let .activateWorkspace(index):
             guard workspaces.indices.contains(index) else { return nil }
             return .workspaceActivate(path: workspaces[index].value)
@@ -199,4 +199,6 @@ enum BrowserCommand: Equatable {
     case showTab(index: Int)
     /// ⌘+, ⌘− and ⌘0 on the page, as Chrome's own zoom (#544).
     case zoom(FontSizeStep)
+    /// ⌘F: the pane's find field (#549). Headless Chrome has no find bar of its own.
+    case find
 }

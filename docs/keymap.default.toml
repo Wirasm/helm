@@ -31,6 +31,7 @@ manage = "cmd+alt"
 
 [[bind]]
 key = "cmd+n"
+when = "away-from-browser"
 action = "new-terminal"
 hint = "new"
 menu = "New Terminal"
@@ -43,6 +44,7 @@ menu = "New Note"
 
 [[bind]]
 key = "cmd+d"
+when = "away-from-browser"
 action = "split"
 direction = "right"
 hint = "split"
@@ -159,6 +161,12 @@ key = "cmd+]"
 when = "browser"
 action = "browser-forward"
 hint = "back · forward"
+
+[[bind]]
+key = "cmd+f"
+when = "browser"
+action = "browser-find"
+hint = "find"
 
 [[bind]]
 key = "cmd+1"
@@ -329,6 +337,7 @@ hint = "move"
 
 [[bind]]
 key = "cmd+o"
+when = "away-from-browser"
 action = "open-artifact-panel"
 hint = "artifact"
 menu = "Open Artifact…"
@@ -482,9 +491,15 @@ hint = "cycle"
 
 [[bind]]
 key = "cmd+k"
+when = "away-from-browser"
 action = "command-palette"
 hint = "commands"
 menu = "Command Palette"
+
+[[bind]]
+key = "cmd+shift+p"
+action = "command-palette"
+hint = "commands"
 
 [[bind]]
 key = "cmd+shift+o"

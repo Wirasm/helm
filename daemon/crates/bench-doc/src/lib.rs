@@ -19,7 +19,9 @@ mod refusal;
 mod surface;
 mod tolerant;
 
-pub use bench::{Bench, Column, Direction, Focus, MINIMUM_FRACTION, Pane, Placement, Slot, Split};
+pub use bench::{
+    Bench, Column, Direction, Focus, MINIMUM_FRACTION, Pane, Place, Placement, Slot, Split,
+};
 pub use document::{Document, Target, Workspace};
 pub use drawer::{Drawer, DrawerName};
 pub use ids::{ColumnId, PaneId, SlotId, StandardPath};

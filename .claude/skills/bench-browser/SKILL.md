@@ -71,3 +71,13 @@ there; never try to open the drawer for him.
 - A login that needs his password or 2FA is his to do. He signs in through the pane, or through
   `bench browser setup` when it needs browser UI the pane can't show (an extension, a passkey
   prompt). Then continue in the same session.
+- It draws at device scale factor 2, so the operator's pane is sharp on a retina display. Your
+  screenshots come out at twice the page's CSS size, four times the pixels. For a 1x one, ask
+  Playwright for it: `page.screenshot({ scale: "css" })`.
+- Downloads land where Chrome puts them, `~/Downloads` on benchd's machine, and the operator's pane
+  lists them. The pane asks Chrome to report downloads when it connects, which replaces the
+  download setting your Playwright made at `attach`. If a Playwright download's file is missing,
+  `attach` again and retry.
+- For a file input, use Playwright's `setInputFiles` (or its `filechooser` event) with a path on
+  benchd's machine. A file input you click never asks the operator: the pane answers a file
+  chooser only after his own click.

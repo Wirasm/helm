@@ -9,13 +9,37 @@ struct BrowserPaneView: View {
     let holdsKeyboard: Bool
 
     @State private var address = ""
-    @FocusState private var addressFocused: Bool
+    @State private var findShown = false
+    @State private var findText = ""
+    /// The pane's own fields. One focus state for both, so which of them has the keyboard is one
+    /// value, and `BrowserKeyboard` is told once when the pane starts or stops editing.
+    @FocusState private var field: Field?
+
+    enum Field: Hashable {
+        case address
+        case find
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             BrowserTabStrip(model: model)
                 .disabled(model.status != .connected)
             bar
+            if findShown {
+                BrowserFindBar(model: model, text: $findText, field: $field) { closeFind() }
+            }
+            if let notice = model.notice {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(Color.textFaint)
+                    Text(notice).textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { model.dismissNotice() }.buttonStyle(.chrome)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(Color.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+            }
             Divider()
             ZStack {
                 BrowserSurface(model: model, holdsKeyboard: holdsKeyboard)
@@ -39,32 +63,46 @@ struct BrowserPaneView: View {
             // is refilled even while focused, since ⌘T focuses it before the tab exists.
             if url == "about:blank" {
                 address = ""
-            } else if !addressFocused {
+            } else if field != .address {
                 address = url ?? ""
             }
         }
-        .onChange(of: model.addressRequests) {
-            addressFocused = true
-            // ⌘L on a field that already has focus still selects what is in it.
-            // Only to the field editor: sent to the page, select-all would select the page.
-            DispatchQueue.main.async {
-                guard BrowserKeyboard.editingAddress === model,
-                    let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
-                    editor.isFieldEditor
-                else { return }
-                editor.selectAll(nil)
-            }
+        .onChange(of: model.addressRequests) { focus(.address) }
+        .onChange(of: model.findRequests) {
+            findShown = true
+            focus(.find)
         }
-        .onChange(of: addressFocused) { _, focused in
-            if focused {
-                BrowserKeyboard.editingAddress = model
-            } else if BrowserKeyboard.editingAddress === model {
-                BrowserKeyboard.editingAddress = nil
+        .onChange(of: field) { _, now in
+            if now != nil {
+                BrowserKeyboard.editingField = model
+            } else if BrowserKeyboard.editingField === model {
+                BrowserKeyboard.editingField = nil
             }
         }
         .onDisappear {
-            if BrowserKeyboard.editingAddress === model { BrowserKeyboard.editingAddress = nil }
+            if BrowserKeyboard.editingField === model { BrowserKeyboard.editingField = nil }
         }
+    }
+
+    /// Puts the keyboard in one of the pane's fields, with what is in it selected — ⌘L or ⌘F on
+    /// a field that already has focus still selects it, as in Chrome. Only to the field editor:
+    /// sent to the page, select-all would select the page.
+    private func focus(_ target: Field) {
+        field = target
+        DispatchQueue.main.async {
+            guard BrowserKeyboard.editingField === model,
+                let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+                editor.isFieldEditor
+            else { return }
+            editor.selectAll(nil)
+        }
+    }
+
+    /// Esc or the close button: the find row goes, and the page has the keyboard again. The last
+    /// match stays selected, as in Chrome.
+    private func closeFind() {
+        findShown = false
+        returnKeyboardToPage()
     }
 
     private var bar: some View {
@@ -92,7 +130,7 @@ struct BrowserPaneView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(Color.textPrimary)
-                .focused($addressFocused)
+                .focused($field, equals: .address)
                 .onSubmit {
                     model.navigate(to: address)
                     returnKeyboardToPage()
@@ -101,6 +139,7 @@ struct BrowserPaneView: View {
                     address = model.tabs.current?.url ?? ""
                     returnKeyboardToPage()
                 }
+            BrowserDownloadsButton(downloads: model.downloads)
             if let shown = model.tabs.showing, let zoom = model.zoom[shown] {
                 Button("\(Int((zoom * 100).rounded()))%") { model.perform(.zoom(.reset)) }
                     .font(.system(size: 11).monospacedDigit())
@@ -122,7 +161,7 @@ struct BrowserPaneView: View {
 
     /// Done with the address: the keyboard goes back to the page, as a browser's does.
     private func returnKeyboardToPage() {
-        addressFocused = false
+        field = nil
         if let surface = model.surface { surface.window?.makeFirstResponder(surface) }
     }
 
@@ -197,6 +236,10 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// The clipboard ⌘C/⌘V use. The general one in the app; a private one in a test, which
     /// must not touch the operator's clipboard.
     var pasteboard: NSPasteboard = .general
+
+    /// The key table in force, asked at each key equivalent. The operator's in the app; the
+    /// built-in one in a test, which must not read his keymap file.
+    var keyTable: @MainActor () -> [KeyBinding] = { Keymap.shared.table }
 
     private var currentFrame: BrowserFrame?
     private var markedText = ""
@@ -344,6 +387,23 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
             sendKey(event, type: "rawKeyDown", text: nil, commands: nil)
         }
         pendingKey = nil
+    }
+
+    /// A chord helm binds elsewhere but leaves to the page here (⌘K, ⌘N, ⌘D, ⌘O; #548) goes to
+    /// the page now. AppKit offers a key equivalent to the key window's views before the main
+    /// menu, and the menu mirrors those rows with their chords (`KeyBindingMenu`), so left to
+    /// the menu ⌘K would open the palette instead of reaching the page. Every other chord goes
+    /// on as before: helm's own rows were taken by the key monitor already, and one helm never
+    /// binds (⌘Q, ⌘C) is the menu's.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self,
+            KeyBindings.bindsElsewhere(
+                characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
+                modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+                focus: .browser, in: keyTable())
+        else { return super.performKeyEquivalent(with: event) }
+        keyDown(with: event)
+        return true
     }
 
     override func keyUp(with event: NSEvent) {

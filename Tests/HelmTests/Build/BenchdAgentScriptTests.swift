@@ -232,4 +232,26 @@ final class BenchdAgentScriptTests: XCTestCase {
         let liveEnv = try XCTUnwrap(live["EnvironmentVariables"] as? [String: String])
         XCTAssertNil(liveEnv["BENCH_SUITE"])
     }
+
+    /// The self-updating installs in ~/.local/bin beat a stale Homebrew codex (G4): a cask in
+    /// /opt/homebrew/bin ahead of it in the installer's PATH made every spawned codex 0.157.0.
+    func testThePlistPutsLocalBinFirstSoAgentsRunTheSelfUpdatingInstall() throws {
+        let local = scratch.appendingPathComponent(".local/bin").path
+        let path = scratch.appendingPathComponent("agent.plist")
+        let run = try bash(
+            [
+                "-c", "source \"$1\"; shift; write_plist \"$@\"", "test",
+                scripts.appendingPathComponent("benchd-agent.sh").path,
+                path.path, "com.wirasm.benchd.probe", "/opt/bench/benchd", "/tmp/benchd-probe.log",
+            ],
+            environment: ["PATH": "\(bin.path):/opt/homebrew/bin:\(local):/usr/bin:/bin"])
+        XCTAssertEqual(run.status, 0, run.stderr)
+        let agent = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: path), format: nil)
+                as? [String: Any])
+        let env = try XCTUnwrap(agent["EnvironmentVariables"] as? [String: String])
+        XCTAssertEqual(
+            env["PATH"], "\(local):\(bin.path):/opt/homebrew/bin:/usr/bin:/bin",
+            "~/.local/bin first, once, and the rest in the installer's order")
+    }
 }
