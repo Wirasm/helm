@@ -31,10 +31,24 @@ agent_loaded() { timeout 10 launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # The binaries the agent runs and release-resume refreshes, installed from daemon/crates.
 agent_crates=(bench benchd)
 
+# The PATH the agent runs with: the installer's own, with ~/.local/bin moved to the front.
+# benchd spawns claude, codex and pi by name, and launchd's default PATH
+# (/usr/bin:/bin:/usr/sbin:/sbin) finds none of them. ~/.local/bin is where Claude Code's and
+# codex's self-updating installers put their binaries, so it goes first: a stale Homebrew codex
+# cask in /opt/homebrew/bin otherwise wins, and every spawned codex ran 0.157.0 while the
+# standalone install had updated itself to 0.159.3. `bench status` names the binary and version
+# each agent resolves to. Everything else in ~/.local/bin moves ahead too: on the operator's
+# machine that includes node, npm and npx (Hermes's Node 22), which pi's `#!/usr/bin/env node`
+# then runs under.
+agent_path() {
+  local first="$HOME/.local/bin" dir out="$HOME/.local/bin" IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] && [ "$dir" != "$first" ] && out="$out:$dir"
+  done
+  printf '%s\n' "$out"
+}
+
 # write_plist <path> <label> <benchd> <log> [suite]
-#
-# PATH is the installer's own: benchd spawns claude, codex and pi by name, and launchd's default
-# PATH (/usr/bin:/bin:/usr/sbin:/sbin) finds none of them.
 write_plist() {
   local path="$1" label="$2" benchd="$3" logfile="$4" suite="${5:-}"
   rm -f "$path"
@@ -49,7 +63,7 @@ write_plist() {
     plutil -insert StandardOutPath -string "$logfile" "$path" &&
     plutil -insert StandardErrorPath -string "$logfile" "$path" &&
     plutil -insert EnvironmentVariables -dictionary "$path" &&
-    plutil -insert EnvironmentVariables.PATH -string "$PATH" "$path" || return 1
+    plutil -insert EnvironmentVariables.PATH -string "$(agent_path)" "$path" || return 1
   if [ -n "$suite" ]; then
     plutil -insert EnvironmentVariables.BENCH_SUITE -string "$suite" "$path" || return 1
   fi
