@@ -37,7 +37,7 @@ pub fn report() -> Value {
             json!({
                 "path": found,
                 "resolves_to": target,
-                "version": version(&target),
+                "version": version(&target, VERSION_TIMEOUT),
             })
         });
         out.insert(kind.name().to_string(), entry.unwrap_or(Value::Null));
@@ -57,7 +57,7 @@ fn resolve(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
         })
 }
 
-fn version(binary: &Path) -> Option<String> {
+fn version(binary: &Path, within: Duration) -> Option<String> {
     let meta = std::fs::metadata(binary).ok()?;
     let key = (binary.to_path_buf(), meta.len(), meta.modified().ok());
     if let Some(known) = VERSIONS
@@ -68,7 +68,7 @@ fn version(binary: &Path) -> Option<String> {
     {
         return Some(known.clone());
     }
-    let found = run_version(binary)?;
+    let found = run_version(binary, within)?;
     VERSIONS
         .lock()
         .unwrap()
@@ -77,8 +77,8 @@ fn version(binary: &Path) -> Option<String> {
     Some(found)
 }
 
-/// The first line `<binary> --version` prints, or `None` when it fails or overruns.
-fn run_version(binary: &Path) -> Option<String> {
+/// The first line `<binary> --version` prints, or `None` when it fails or overruns `within`.
+fn run_version(binary: &Path, within: Duration) -> Option<String> {
     let mut child = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())
@@ -86,7 +86,7 @@ fn run_version(binary: &Path) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + VERSION_TIMEOUT;
+    let deadline = Instant::now() + within;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -107,13 +107,30 @@ fn run_version(binary: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
 
+    /// Long enough for a stub's first run. A file written a moment ago can wait seconds on
+    /// macOS before it runs, while other new binaries are checked: past `VERSION_TIMEOUT` with a
+    /// few dozen being written beside it. benchd's agents were installed long before it asks.
+    const ANSWER: Duration = Duration::from_secs(60);
+
+    /// The stub is written by a child, so this process never holds it open for writing. A
+    /// child another test forks meanwhile would inherit that descriptor until it execs, and
+    /// Linux refuses to run a file anything has open for writing ("Text file busy").
     fn stub(dir: &Path, name: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();
-        let file = dir.join(name);
-        std::fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut writer = Command::new("/bin/sh")
+            .args(["-c", r#"cat > "$0" && chmod 755 "$0""#])
+            .arg(dir.join(name))
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = writer.stdin.take().unwrap();
+        stdin
+            .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .unwrap();
+        drop(stdin);
+        assert!(writer.wait().unwrap().success());
     }
 
     #[test]
@@ -127,7 +144,10 @@ mod tests {
 
         let found = resolve("codex", &path).unwrap();
         assert_eq!(found, local.join("codex"));
-        assert_eq!(version(&found).as_deref(), Some("codex-cli 0.159.3"));
+        assert_eq!(
+            version(&found, ANSWER).as_deref(),
+            Some("codex-cli 0.159.3")
+        );
         assert_eq!(
             resolve("pi", &path),
             None,
@@ -143,10 +163,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         stub(&root, "pi", "echo 0.84.4");
         let pi = root.join("pi");
-        assert_eq!(version(&pi).as_deref(), Some("0.84.4"));
+        assert_eq!(version(&pi, ANSWER).as_deref(), Some("0.84.4"));
         stub(&root, "pi", "echo 0.99.2   ");
         assert_eq!(
-            version(&pi).as_deref(),
+            version(&pi, ANSWER).as_deref(),
             Some("0.99.2"),
             "npm update -g rewrites the file"
         );
@@ -190,9 +210,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         stub(&root, "failing", "echo 'not a version'; exit 1");
         stub(&root, "hanging", "exec sleep 30");
-        assert_eq!(run_version(&root.join("failing")), None);
+        assert_eq!(run_version(&root.join("failing"), ANSWER), None);
         let start = Instant::now();
-        assert_eq!(run_version(&root.join("hanging")), None);
+        assert_eq!(run_version(&root.join("hanging"), VERSION_TIMEOUT), None);
         assert!(start.elapsed() < VERSION_TIMEOUT + Duration::from_secs(2));
         let _ = std::fs::remove_dir_all(&root);
     }

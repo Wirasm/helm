@@ -137,7 +137,8 @@ final class BenchClient: ObservableObject {
     /// A benchd reached over TCP names a path on its own machine, so helm runs its own `bench`
     /// instead (M5c), which reaches benchd through the `BENCH_URL` the pane inherits from helm.
     /// That one is another build, so its version is compared with benchd's first (`OtherBuild`),
-    /// and the verdict either way is kept for the connection.
+    /// and the verdict either way is kept for the connection. A `bench` that does not say its
+    /// version in time gives no verdict (`NoAnswer`), and is asked again at the next drawing.
     var benchExecutable: Result<String, BenchExecutable.Unusable> {
         if let known = benchBinaryCache { return known }
         if case .tcp = endpoint {
@@ -145,10 +146,14 @@ final class BenchClient: ObservableObject {
             case let .failure(missing): return .failure(.notFound(missing))
             case let .success(bench):
                 guard let benchd = benchdVersion() else { return .success(bench) }
+                let ours: String?
+                do { ours = try BenchExecutable.version(of: bench) } catch {
+                    // No verdict, so none is kept: the next drawing asks again.
+                    return .failure(.noAnswer(error))
+                }
                 let verdict: Result<String, BenchExecutable.Unusable> =
-                    BenchExecutable.OtherBuild(
-                        bench: bench, ours: BenchExecutable.version(of: bench), benchd: benchd
-                    ).map { .failure(.otherBuild($0)) } ?? .success(bench)
+                    BenchExecutable.OtherBuild(bench: bench, ours: ours, benchd: benchd)
+                    .map { .failure(.otherBuild($0)) } ?? .success(bench)
                 benchBinaryCache = verdict
                 return verdict
             }

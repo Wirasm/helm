@@ -63,6 +63,10 @@ final class BenchExecutableTests: XCTestCase {
     }
 
     /// `bench --version` read off a real process: a stub script, never a system binary.
+    ///
+    /// The stubs are written a moment before they run, and a new executable's first run can
+    /// wait seconds on macOS while it is checked: 0.15s alone, past 2s beside other new
+    /// binaries. That is `NoAnswer`'s case, so the answers here get 60 seconds.
     func testTheVersionIsWhatTheBenchPrintsAndNoneWhenItFails() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("helm-bench-version-\(UUID().uuidString)")
@@ -77,9 +81,33 @@ final class BenchExecutableTests: XCTestCase {
         }
         let current = try stub("current", #"[ "$1" = --version ] && echo 0.0.7"#)
         let old = try stub("old", #"echo "unknown argument \"$1\"" >&2; exit 3"#)
-        XCTAssertEqual(BenchExecutable.version(of: current), "0.0.7")
-        XCTAssertNil(BenchExecutable.version(of: old), "a bench from before the flag")
-        XCTAssertNil(BenchExecutable.version(of: dir.appendingPathComponent("absent").path))
+        XCTAssertEqual(try BenchExecutable.version(of: current, within: 60), "0.0.7")
+        XCTAssertNil(
+            try BenchExecutable.version(of: old, within: 60), "a bench from before the flag")
+        XCTAssertNil(try BenchExecutable.version(of: dir.appendingPathComponent("absent").path))
+    }
+
+    /// A `bench` still running at the deadline has said nothing about its version, which is
+    /// not the same as saying none: the pane is told to ask again, not that it is another
+    /// build. Its sleep outlasts the deadline sixty times over.
+    func testABenchThatOverrunsIsNoAnswerRatherThanNoVersion() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-bench-slow-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let slow = dir.appendingPathComponent("slow").path
+        try "#!/bin/sh\nexec sleep 30\n".write(toFile: slow, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: slow)
+
+        do {
+            let said = try BenchExecutable.version(of: slow, within: 0.5)
+            XCTFail("a bench still running answered \(said ?? "nil")")
+        } catch {
+            XCTAssertEqual(error, .init(bench: slow, seconds: 0.5))
+            let reason = BenchExecutable.Unusable.noAnswer(error).description
+            XCTAssertTrue(reason.contains(slow), reason)
+            XCTAssertTrue(reason.contains("ask again"), reason)
+        }
     }
 
     /// End to end through the client: a benchd that is not there never yields a bare `bench`.

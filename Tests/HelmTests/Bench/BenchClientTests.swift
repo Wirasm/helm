@@ -79,6 +79,7 @@ final class BenchClientTests: XCTestCase {
         case let .failure(.otherBuild(other)):
             XCTAssertNotEqual(other.bench, "/forge/only/bench")
             XCTAssertEqual(other.benchd, "unknown")
+        case let .failure(.noAnswer(slow)): XCTFail(slow.description)
         }
         _ = client.benchExecutable
         XCTAssertLessThanOrEqual(
