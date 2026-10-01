@@ -36,33 +36,13 @@ enum MermaidAnchor {
     /// family in a WKWebView against the vendored build.
     private static let families = ["flowchart", "classId", "state", "entity"]
 
-    /// Whether this id was minted by the renderer rather than written by the agent.
-    ///
-    /// The distinction matters because "cannot reduce" has two very different causes. An id
-    /// the agent authored (`phase-2`, `overview`) is already the greppable thing and must
-    /// pass through untouched. An id mermaid minted that carries no author identifier —
-    /// `mermaid-0-node_1` from a mindmap, an edge, a marker def — is renderer bookkeeping:
-    /// keeping it produces an anchor that survives a re-render and means nothing to an agent
-    /// grepping the source, which is the anchor #113 exists to abolish. Those degrade to a
-    /// quote instead.
-    ///
-    /// **A ceiling, stated rather than hidden:** `sequenceDiagram` emits `actor0` and
-    /// `root-0` with no `mermaid-` prefix at all, so they are indistinguishable from an id an
-    /// agent wrote by hand. helm cannot tell, and does not guess.
-    static func isRenderGenerated(_ id: String) -> Bool {
-        guard id.hasPrefix("mermaid-") else { return false }
-        let rest = id.dropFirst("mermaid-".count)
-        guard let end = rest.firstIndex(where: { !$0.isNumber }) else { return true }
-        guard end != rest.startIndex else { return false }
-        return rest[end] == "-" || rest[end] == "_"
-    }
-
     /// The fence identifier inside a rendered mermaid node id, or nil if `renderedID`
     /// is not one — an edge, a marker def, the `<svg>` itself, a family that encodes no
-    /// identifier, or an id the agent authored by hand. Nil means "leave it alone".
+    /// identifier, or an id the agent authored by hand. Nil means the diagram element
+    /// is not anchorable.
     ///
     /// Pure: no WebKit, no page, no I/O.
-    static func sourceIdentifier(in renderedID: String) -> String? {
+    static func sourceIdentifier(in renderedID: String, elementClass: String = "") -> String? {
         guard renderedID.hasPrefix("mermaid-") else { return nil }
         var rest = renderedID.dropFirst("mermaid-".count)
 
@@ -72,6 +52,12 @@ enum MermaidAnchor {
         let diagramIndex = rest[rest.startIndex..<indexEnd]
         guard !diagramIndex.isEmpty, diagramIndex.allSatisfy(\.isNumber) else { return nil }
         rest = rest[rest.index(after: indexEnd)...]
+
+        // Clusters omit the family and counter. Class is the evidence that the suffix
+        // is an authored subgraph id rather than an edge or filter's bookkeeping.
+        if elementClass.split(whereSeparator: \.isWhitespace).contains("cluster") {
+            return rest.isEmpty ? nil : String(rest)
+        }
 
         // <family>
         guard let family = families.first(where: { rest.hasPrefix("\($0)-") }) else { return nil }

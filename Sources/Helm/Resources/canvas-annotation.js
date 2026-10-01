@@ -40,48 +40,7 @@
   // `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind` fails: a
   // JavaScript file cannot compile against a Swift enum, so that test is the gate.
 
-  // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it.
-  //
-  // `CanvasHTML.documentPage` puts every rendered markdown artifact inside
-  // `<article id="content" data-helm-frame>`, so `#content` is an id helm wrote and no
-  // operator's `.md` file contains. An anchor naming it is a grep that finds nothing, printed
-  // in exactly the form that means "grep for this", which is #215's second half: a degradation
-  // that announced itself would be fine, and this one asserts.
-  //
-  // The same *kind* of judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side —
-  // an id minted rather than authored is not an anchor — but **not a second enforcement of
-  // this one, and Swift cannot be given one.** `isRenderGenerated` only knows ids shaped
-  // `mermaid-<digits>`; nothing in `CanvasAnnotation.decode` refuses `content`, and nothing
-  // should, because by the time the payload is a string the two cases are identical.
-  // `testAnIDTheAgentWroteIsAnAnchorEvenWhenItIsSpelledLikeHelmsOwn` pins that: an `.html`
-  // artifact's own `id="content"` is a real, greppable anchor and must decode as one. What
-  // separates them is which element carried `data-helm-frame`, and that fact lives only in
-  // the DOM — it does not cross the bridge. So this is the sole enforcement by necessity
-  // rather than by choice, and the far side could only refuse if the payload *told* it.
-  // #109's `kind` does not close that: it says which MESSAGE this is, not which element the
-  // anchor came off, and an anchor field saying "this id is helm's own" is still not built.
-  //
-  // `MermaidAnchor` states the same ceiling for its own case: `sequenceDiagram` emits
-  // `actor0` with no prefix, "helm cannot tell, and does not guess."
-  //
-  // **Why a marker and not a look at the wrapper itself.** The first cut recognised the frame
-  // by its id and its position directly under the body, which is true by construction of the
-  // page above — and equally true of an agent-authored wrapper using the same landmark id,
-  // which is among the commonest in hand-written HTML. **This script does not only meet helm's
-  // generated page**: an `.html` artifact is read straight from disk (`CanvasFileViews`, "the
-  // artifact IS the document here"), never passes through `documentPage`, and gets this same
-  // script — so that guess silently discarded an id the agent really did write and really
-  // could grep for, and did it indistinguishably from a block that has no id at all. An
-  // attribute helm itself writes cannot be wrong in either direction.
-  //
-  // Spelled out here rather than interpolated, exactly like the handler name and the tool
-  // global above, and held to `CanvasHTML.documentPage` by
-  // `CanvasAnchorTests.testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper`: JavaScript
-  // cannot compile against a Swift constant, so the gate is a test that reads both halves.
-  //
-  // An attribute and never `tagName` — a browser reports `ARTICLE` where the test stub reports
-  // `article`, and a comparison that holds in the harness and not in WebKit is the failure
-  // that suite exists to prevent.
+  // A marked wrapper distinguishes helm's shell from an authored id="content".
   function helmFrame(node) {
     return node.getAttribute("data-helm-frame") !== null;
   }
@@ -102,18 +61,35 @@
     return !!(node && node.closest && node.closest("[data-helm-surface]"));
   }
 
-  // What a mark can be NAMED by: the nearest id on the marked element or an ancestor, because
-  // a name can belong to a container and still name what is inside it (#215).
-  //
-  // **The walk is what lets a marked word inside `<h2 id="phase-2">` anchor to the heading**,
-  // and it is the whole of #113: a mark on a mermaid node lands on the `<text>` or `<p>` inside
-  // the `<g>` that carries the id, so reading only the marked element's own id would anchor no
-  // diagram at all.
-  function nameFor(node) {
-    for (var up = node; up && up !== document.body; up = up.parentNode) {
-      if (up.id && !helmFrame(up)) { return up.id; }
+  // Diagram provenance must be known before an id leaves the DOM. In particular,
+  // actor0 is renderer bookkeeping inside Mermaid and an authored name outside it.
+  function anchorFor(node, text) {
+    if (node && node.closest && node.closest(".mermaid")) {
+      for (var up = node; up && up !== document.body; up = up.parentNode) {
+        if (up.id) {
+          return { anchorKind: "mermaid", id: up.id,
+                   elementClass: up.getAttribute("class") || "" };
+        }
+      }
+      return { anchorKind: "mermaid", id: null };
     }
-    return null;
+    var source = null;
+    for (var up = node; up && up !== document.body; up = up.parentNode) {
+      if (up.id && !helmFrame(up)) { return { anchorKind: "element", id: up.id }; }
+      if (source === null) { source = up.getAttribute("data-helm-source"); }
+      if (helmFrame(up)) {
+        if (source !== null) {
+          try { return { anchorKind: "excerpt", source: JSON.parse(source), id: null }; }
+          catch (error) {
+            return { anchorKind: "unanchored", id: null, reason: "the source metadata is malformed" };
+          }
+        }
+        return { anchorKind: "unanchored", id: null,
+                 reason: "no literal source block covers this selection; select one Markdown block" };
+      }
+    }
+    return { anchorKind: "unanchored", id: null,
+             reason: "this HTML selection has no authored id; add an id to its block" };
   }
 
   // The element a gesture is really about. A Range's `commonAncestorContainer` is very often
@@ -131,7 +107,7 @@
   // looked marked.
   //
   // **A CSS Custom Highlight, not a rectangle over the page**, and the reason is anchoring.
-  // An anchor is resolved out of the DOM — `nameFor` walks ancestors for an id, and a range's
+  // An anchor is resolved out of the DOM — `anchorFor` reads source identity from ancestors, and a range's
   // `commonAncestorContainer` decides which element it is about — so a highlight that wrapped
   // the range in elements of its own, or split its text nodes, would change the thing the mark
   // is named by while claiming to change nothing. `CSS.highlights` mutates **no DOM at all**:
@@ -234,7 +210,7 @@
     // tool.
     if (inPageSurface(e.target)) { return; }
     // The text is the operator's own highlight rather than an element's contents; the NAME
-    // comes from `nameFor` (#215).
+    // comes from `anchorFor` (#195).
     var selection = document.getSelection();
     var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
     var text = empty ? "" : String(selection).trim();
@@ -244,16 +220,16 @@
     if (!text) { unpaintTextMark(); bridge.postMessage({ kind: "cleared" }); return; }
     var range = selection.getRangeAt(0);
     var node = elementFor(range.commonAncestorContainer);
-    var id = node ? nameFor(node) : null;
+    var anchor = anchorFor(node, text);
     var r = range.getBoundingClientRect();
     // One mark on screen: whatever was up before comes down first, even when this one cannot
     // be painted. The new mark then STAYS — from here it is the comment field's subject, and
     // only Swift closing that field may take it down.
     unpaintTextMark();
     paintTextMark(range);
-    bridge.postMessage({
-      kind: "selection", id: id, text: text,
+    bridge.postMessage(Object.assign({
+      kind: "selection", text: text,
       rect: { x: r.left, y: r.top, width: r.width, height: r.height }
-    });
+    }, anchor));
   }, true);
 })();

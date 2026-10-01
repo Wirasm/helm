@@ -102,7 +102,10 @@ final class CanvasOverTCPTests: XCTestCase {
 
         // Annotates: the sidecar grows on benchd's side, and the drawer reads it back.
         model.pageDidReport(
-            try CanvasPageSelection.decode(["kind": "selection", "text": "Mine, longer."]).get())
+            try CanvasPageSelection.decode([
+                "kind": "selection", "anchorKind": "excerpt", "source": "Mine, longer.",
+                "text": "Mine, longer.",
+            ]).get())
         model.annotate(comment: "Shorter.")
         XCTAssertNil(model.notesFailure)
         XCTAssertTrue(onBenchd("plan.notes.md")?.contains("Shorter.") == true)

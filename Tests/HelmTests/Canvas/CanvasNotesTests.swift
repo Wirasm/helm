@@ -56,11 +56,11 @@ final class CanvasNotesTests: XCTestCase {
             entry.contains("this ordering is wrong, the store move has to come first"), entry)
     }
 
-    func testAQuoteAnchorNamesTheTextAlone() throws {
+    func testASourceExcerptNamesLiteralSource() throws {
         let entry = CanvasNotes.entry(
             try annotation(selecting: "the store move", comment: "why?"), at: stamp)
 
-        XCTAssertTrue(entry.contains("## \"the store move\""), entry)
+        XCTAssertTrue(entry.contains("## source \"the store move\""), entry)
         XCTAssertFalse(entry.contains("#`"), "there was no id to name")
     }
 
@@ -70,7 +70,7 @@ final class CanvasNotesTests: XCTestCase {
 
         let heading = entry.split(separator: "\n").first { $0.hasPrefix("## ") }
         XCTAssertEqual(
-            heading, "## \"first line second line\"",
+            heading, "## source \"first line\\nsecond line\"",
             "a newline in a heading would break the markdown the agent is meant to read")
     }
 
@@ -124,7 +124,7 @@ final class CanvasNotesTests: XCTestCase {
 
         let sidecar = CanvasNotes.sidecarURL(for: canvas)
         let written = try XCTUnwrap(CanvasNotes.markdown(in: sidecar))
-        XCTAssertEqual(CanvasNotes.headings(in: written), ["`#a` — \"A\"", "\"B\""])
+        XCTAssertEqual(CanvasNotes.headings(in: written), ["`#a` — \"A\"", "source \"B\""])
         XCTAssertTrue(written.contains("two"))
         XCTAssertEqual(
             CanvasNotes.headings(in: ""), [],
@@ -156,7 +156,7 @@ final class CanvasNotesTests: XCTestCase {
             readable.split(separator: "\n").contains(Substring(time)),
             "the stamp itself survives, on its own line")
         XCTAssertTrue(
-            readable.contains("## \"a passage\""),
+            readable.contains("## source \"a passage\""),
             "and the heading is untouched — turning one back into a mark is #199's, and it "
                 + "cannot do that against a sidecar the drawer has rewritten")
     }
@@ -183,7 +183,7 @@ final class CanvasNotesMarkTests: XCTestCase {
             "## `#phase-2` — \"Phase 2\"")
         XCTAssertEqual(
             try heading(["kind": "selection", "text": "the store move"]),
-            "## \"the store move\"")
+            "## source \"the store move\"")
     }
 
     /// The geometry tools left in #385, and the sidecars they wrote did not. A heading is prose

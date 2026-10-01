@@ -1,25 +1,18 @@
 import Foundation
 
-/// One thing the operator marked on a canvas, and what they said about it.
-///
-/// The anchor is a DOM element id where the page has one, because the ASYMMETRY that
-/// decides this is that the agent AUTHORED the page (#33): it knows its own ids, so
-/// `#phase-2` is directly editable rather than merely descriptive. It degrades to quoted
-/// text for a `.md` canvas or any section without an authored id.
-///
-/// **The anchor carries no image**, and there is deliberately no field here that could
-/// carry one: an anchor made of pixels is not something the agent can edit, which is the
-/// same reason the anchor is an id rather than a rect.
-///
-/// That is a fact about this payload and nothing wider. #39 asks only for "no screenshots
-/// in the payload", as one acceptance checkbox — helm has no rule against screenshots as
-/// such, and could not: a canvas is *validated* by screenshotting the rendered page, which
-/// is exactly why #39's own load-bearing constraint is that canvases stay self-contained
-/// rather than render as "a blank page in playwright".
+/// One selection and the operator's comment. An anchor carries source identity, never pixels.
 struct CanvasAnnotation: Equatable {
     enum Anchor: Equatable {
         case element(id: String, text: String)
+        /// Historical sidecar headings (#199); shipped capture never constructs this case.
         case quote(String)
+        case excerpt(source: String, text: String)
+        case unanchored(reason: String, text: String)
+
+        /// Provenance reported by the page, before renderer context is lost.
+        enum Kind: String, CaseIterable {
+            case element, excerpt, mermaid, unanchored
+        }
     }
 
     /// What the operator marked, and what it names.
@@ -101,6 +94,7 @@ extension CanvasAnnotation {
     static func decode(_ selection: CanvasSelection, comment: String) -> CanvasAnnotation? {
         let comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !comment.isEmpty, let mark = selection.mark else { return nil }
+        if case .selection(.unanchored) = mark { return nil }
         return CanvasAnnotation(mark: mark, comment: comment)
     }
 }
@@ -109,7 +103,9 @@ extension CanvasAnnotation.Anchor {
     /// The words the anchor covers, with or without an id.
     var text: String {
         switch self {
-        case let .element(_, text), let .quote(text): text
+        case let .element(_, text), let .quote(text), let .excerpt(_, text),
+            let .unanchored(_, text):
+            text
         }
     }
 }
@@ -125,8 +121,8 @@ extension CanvasAnnotation.Mark {
     /// anchor to. The comment field still opens for it and says so, and `CanvasAnnotation`
     /// refuses the note.
     ///
-    /// The page is agent-authored, not helm-authored, so this treats the body as
-    /// untrusted: every field is type-checked and bounded, and a malformed body is nil —
+    /// The bridge reports on an agent-authored DOM. Every field is type-checked and bounded,
+    /// and a malformed body is nil —
     /// never a crash, never a half-written note: a hostile value in, a validated one or nothing
     /// out, because a note that resolves to nothing is better refused than guessed at.
     ///
@@ -150,28 +146,47 @@ extension CanvasAnnotation.Mark {
 }
 
 extension CanvasAnnotation {
-    /// One target — an element with an id, or the text it covers.
-    ///
-    /// **The one place a DOM id becomes an anchor.**
+    /// The page declares provenance; an authored HTML id is never guessed to be Mermaid.
     fileprivate static func decodedAnchor(_ raw: Any?) -> Anchor? {
-        guard let payload = raw as? [String: Any] else { return nil }
-        guard let text = sanitizedText(payload["text"]) else { return nil }
-        guard let id = payload["id"] as? String, let valid = validID(id) else {
-            return .quote(text)
+        guard let payload = raw as? [String: Any],
+            let text = sanitizedText(payload["text"]),
+            let rawKind = payload["anchorKind"] as? String,
+            let kind = Anchor.Kind(rawValue: rawKind)
+        else { return nil }
+        switch kind {
+        case .element:
+            guard let id = payload["id"] as? String, let valid = validID(id) else { return nil }
+            return .element(id: valid, text: text)
+        case .excerpt:
+            guard let source = payload["source"] as? String,
+                !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            guard source.count <= maximumTextLength else {
+                return .unanchored(
+                    reason: "the source block is too long; select a smaller block", text: text)
+            }
+            // Source must remain literal. Refuse controls instead of silently editing it.
+            guard
+                source.unicodeScalars.allSatisfy({
+                    !CharacterSet.controlCharacters.contains($0) || $0 == "\n" || $0 == "\r"
+                        || $0 == "\t"
+                })
+            else { return nil }
+            return .excerpt(source: source, text: text)
+        case .mermaid:
+            if let id = payload["id"] as? String,
+                let identifier = MermaidAnchor.sourceIdentifier(
+                    in: id, elementClass: payload["elementClass"] as? String ?? ""),
+                let valid = validID(identifier)
+            {
+                return .element(id: valid, text: text)
+            }
+            return .unanchored(
+                reason: "this diagram element has no recoverable source identifier", text: text)
+        case .unanchored:
+            guard let reason = sanitizedText(payload["reason"]) else { return nil }
+            return .unanchored(reason: reason, text: text)
         }
-        if let identifier = MermaidAnchor.sourceIdentifier(in: valid) {
-            // The fence identifier — greppable in the file the agent will edit (#113).
-            return .element(id: identifier, text: text)
-        }
-        if MermaidAnchor.isRenderGenerated(valid) {
-            // A rendered id carrying no author identifier: a mindmap's `node_1`, an edge, a
-            // marker def. Keeping it would hand the agent an anchor that survives a
-            // re-render and matches nothing in the source — precisely the anchor #113
-            // abolished, reintroduced by the back door. Degrade to the quote instead.
-            return .quote(text)
-        }
-        // An id the agent authored. Already the greppable thing.
-        return .element(id: valid, text: text)
     }
 
     private static func validID(_ id: String) -> String? {

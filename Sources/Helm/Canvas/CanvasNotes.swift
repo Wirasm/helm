@@ -69,6 +69,8 @@ enum CanvasNotes {
         switch anchor {
         case let .element(id, text): "`#\(id)` — \"\(singleLine(text))\""
         case let .quote(text): "\"\(singleLine(text))\""
+        case let .excerpt(source, _): "source \(CanvasHTML.jsString(source))"
+        case let .unanchored(reason, _): "Not anchorable: \(singleLine(reason))"
         }
     }
 
