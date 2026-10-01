@@ -25,7 +25,8 @@ class HostedWorkbench {
     private let client: BenchClient
 
     /// `rootView` is what the hosting view draws around `WorkbenchView`; `beforeAttach` runs on
-    /// the hosting view after it is laid out and before it is put into the window.
+    /// the hosting view after its frame is set and before it is put into the window. Nothing
+    /// here lays it out: a suite that needs layout outside the window does it in the hook.
     init<Root: View>(
         bench: BenchDocument.Bench, workspacePath: String,
         rootView: (WorkbenchModel, String) -> Root,
