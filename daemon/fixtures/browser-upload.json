@@ -1,0 +1,20 @@
+{
+  "request": {
+    "id": "helm-upload-1",
+    "verb": "browser/upload",
+    "by": {
+      "kind": "helm"
+    },
+    "args": {
+      "name": "report.pdf",
+      "base64": "dXBsb2FkLW1lCg=="
+    }
+  },
+  "uploaded": {
+    "id": "helm-upload-1",
+    "status": "ok",
+    "data": {
+      "path": "/Users/op/.bench/browser/uploads/1-1759300000/report.pdf"
+    }
+  }
+}

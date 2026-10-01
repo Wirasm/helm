@@ -108,6 +108,7 @@ extension BrowserCommand {
         case .forward: ("browser-forward", .none)
         case let .showTab(index): ("browser-tab", .init(index: index + 1))
         case let .zoom(step): ("browser-zoom", .init(step: step.spelled))
+        case .find: ("browser-find", .none)
         }
     }
 
@@ -121,6 +122,7 @@ extension BrowserCommand {
         case "browser-forward": try a.none(name); self = .forward
         case "browser-tab": self = .showTab(index: try a.index(name))
         case "browser-zoom": self = .zoom(try a.step(name))
+        case "browser-find": try a.none(name); self = .find
         default: return nil
         }
     }

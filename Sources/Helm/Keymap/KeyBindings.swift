@@ -88,6 +88,9 @@ enum KeyBindings {
             KeyBinding(
                 .character("]"), .command, .local(.browser(.forward)), when: .browserFocused,
                 hint: "back · forward"),
+            KeyBinding(
+                .character("f"), .command, .local(.browser(.find)), when: .browserFocused,
+                hint: "find"),
         ]
         + (1...9).map { index in
             KeyBinding(
