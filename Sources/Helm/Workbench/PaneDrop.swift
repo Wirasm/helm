@@ -239,7 +239,7 @@ final class BenchDrag: ObservableObject {
     /// The space every frame and every pointer location here is measured in: helm's window
     /// content, named once over the workspace bar and the bench so both report into it, and which
     /// a drag cannot move (`SplitStack`'s gesture says what a moving one cost).
-    static let space = "helm.drag"
+    nonisolated static let space = "helm.drag"
 
     var slots: [Slot.ID: SlotFrames] = [:]
     var bar = BarFrames()

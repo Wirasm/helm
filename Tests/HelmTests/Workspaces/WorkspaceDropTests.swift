@@ -104,6 +104,13 @@ final class WorkspaceDropTests: XCTestCase {
             "c does not")
     }
 
+    /// Files open on a bench (`FileDrop`), never on the bar: over a tab or a gap they resolve
+    /// to nothing, so a file can never become a workspace or pane move.
+    func testNoZoneForFilesOverTheBar() {
+        XCTAssertNil(resolve(.files, 160), "a workspace's tab")
+        XCTAssertNil(resolve(.files, 20), "a gap")
+    }
+
     // MARK: - The drop
 
     private func rig() throws -> ToyRig {
