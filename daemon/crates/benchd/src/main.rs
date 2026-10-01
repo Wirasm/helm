@@ -30,6 +30,7 @@ mod agents;
 mod ask;
 mod cdp;
 mod codex;
+mod codex_trust;
 mod commands;
 mod files;
 mod hook;

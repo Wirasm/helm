@@ -248,6 +248,7 @@ fn resume(
         settings: None,
         codex_server: None,
         codex_hook_trust: hook_trust,
+        codex_trust_folder: false,
     };
     spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(

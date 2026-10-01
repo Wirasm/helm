@@ -181,6 +181,10 @@ pub struct SpawnSpec {
     /// (`bench_wire::hook::codex_session_trust`), on a served resume, the one start codex
     /// reviews hooks on despite `--dangerously-bypass-hook-trust`.
     pub codex_hook_trust: Option<String>,
+    /// codex: its app-server trusts `cwd` as a project ([`codex_folder_trust`]). benchd sets it
+    /// when the operator trusts the git repository `cwd` belongs to, which is what a plain
+    /// `codex` goes by; a served one checks the exact `-C` folder only, and would ask.
+    pub codex_trust_folder: bool,
 }
 
 impl SpawnSpec {
@@ -194,6 +198,7 @@ impl SpawnSpec {
             settings: None,
             codex_server: None,
             codex_hook_trust: None,
+            codex_trust_folder: false,
             ..self.clone()
         }
     }
@@ -225,7 +230,8 @@ impl SpawnSpec {
 
 /// How a served codex session starts, as a script: `$0` is the socket, `$1` the app-server's
 /// sandbox ([`codex_sandbox`]), `$2` its hook trust ([`SpawnSpec::codex_hook_trust`], empty for
-/// none), the rest the TUI's flags. Measured on codex 0.157.0:
+/// none), `$3` its folder trust ([`codex_folder_trust`], empty for none), the rest the TUI's
+/// flags. Measured on codex 0.157.0:
 /// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
 ///   parent. So it runs in the session's environment (`BENCH_SESSION`), one per session, and
 ///   benchd knows which session a hook is from without matching threads.
@@ -238,15 +244,27 @@ impl SpawnSpec {
 /// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
 ///   watcher is its leash: it outlives a hangup and stops the server within a second of the
 ///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
-pub const CODEX_SERVED: &str = r#"s="$0" m="$1" t="$2"
-shift 2
-codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' ${t:+-c "$t"} --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
+pub const CODEX_SERVED: &str = r#"s="$0" m="$1" t="$2" f="$3"
+shift 3
+codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' ${t:+-c "$t"} ${f:+-c "$f"} --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
 p=$!
 ( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 i=0
 while [ ! -S "$s" ] && [ $i -lt 100 ] && kill -0 $p 2>/dev/null; do sleep 0.1; i=$((i+1)); done
 exec codex --remote "unix://$s" "$@"
 "#;
+
+/// The `-c` override that makes a served codex's app-server trust `cwd` as a project, so the
+/// TUI's check of its `-C` folder passes without the dialog, and nothing is written to the
+/// operator's config. One inline table, not a dotted path: codex splits a `-c` path at every
+/// dot, and helm's worktrees live under `.worktrees`. A JSON string is a TOML basic string: the
+/// same quotes and escapes. Measured on codex 0.159.3: no trust screen, config untouched.
+pub fn codex_folder_trust(cwd: &str) -> String {
+    format!(
+        "projects={{{}={{trust_level=\"trusted\"}}}}",
+        serde_json::Value::from(cwd)
+    )
+}
 
 /// codex's sandbox for a posture: every command runs unsandboxed, or none may write. Either way
 /// with approvals `never`, since nobody is at an unattended pane to approve anything, and a write
@@ -406,17 +424,28 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
         args.push(prompt_pointer(path));
     }
     if let (AgentKind::Codex, Some(socket)) = (spec.agent, &spec.codex_server) {
-        let mut served = vec![
-            "-c".to_string(),
-            CODEX_SERVED.to_string(),
-            socket.clone(),
-            codex_sandbox(spec.posture).to_string(),
-            spec.codex_hook_trust.clone().unwrap_or_default(),
-        ];
-        served.extend(args);
-        return Ok(("/bin/sh".to_string(), served));
+        return Ok(("/bin/sh".to_string(), codex_served(spec, socket, args)));
     }
     Ok((program.to_string(), args))
+}
+
+/// A served codex's argv under `/bin/sh`: [`CODEX_SERVED`], its positional slots, then the
+/// TUI's own `args`.
+fn codex_served(spec: &SpawnSpec, socket: &str, args: Vec<String>) -> Vec<String> {
+    let mut served = vec![
+        "-c".to_string(),
+        CODEX_SERVED.to_string(),
+        socket.to_string(),
+        codex_sandbox(spec.posture).to_string(),
+        spec.codex_hook_trust.clone().unwrap_or_default(),
+        if spec.codex_trust_folder {
+            codex_folder_trust(&spec.cwd)
+        } else {
+            String::new()
+        },
+    ];
+    served.extend(args);
+    served
 }
 
 /// claude's half of [`argv`]: posture, settings, model and effort, then the conversation.
@@ -798,6 +827,7 @@ mod tests {
             extra_args: Vec::new(),
             codex_server: None,
             codex_hook_trust: None,
+            codex_trust_folder: false,
         }
     }
 
@@ -883,19 +913,48 @@ mod tests {
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "/bin/sh");
         assert_eq!(
-            a[..5],
+            a[..6],
             [
                 "-c",
                 CODEX_SERVED,
                 "/r/codex/s1.sock",
                 "danger-full-access",
+                "",
                 ""
             ]
         );
         assert_eq!(
-            a[5..],
+            a[6..],
             embedded[..],
             "the TUI keeps every flag and the prompt"
+        );
+    }
+
+    /// A worktree's path has dots in it, which a dotted `-c` key would split on, and a path can
+    /// hold a quote: the folder goes in as one quoted TOML key, the same string as `-C`.
+    #[test]
+    fn a_served_codex_trusts_its_folder_only_when_benchd_says_so() {
+        let mut s = spec(AgentKind::Codex);
+        s.cwd = "/r/helm/.worktrees/issue-195".into();
+        s.codex_server = Some("/r/codex/s1.sock".into());
+        assert_eq!(
+            argv(&s).unwrap().1[5],
+            "",
+            "no trust unless benchd decided it"
+        );
+        s.codex_trust_folder = true;
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(
+            a[5],
+            r#"projects={"/r/helm/.worktrees/issue-195"={trust_level="trusted"}}"#
+        );
+        assert!(
+            a.windows(2)
+                .any(|w| w == ["-C", "/r/helm/.worktrees/issue-195"])
+        );
+        assert_eq!(
+            codex_folder_trust(r#"/r/a "b"\c"#),
+            r#"projects={"/r/a \"b\"\\c"={trust_level="trusted"}}"#
         );
     }
 
@@ -907,7 +966,10 @@ mod tests {
         assert!(embedded.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
         s.codex_server = Some("/r/codex/s1.sock".into());
         let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..7], ["danger-full-access", "", "resume", "019a-thread"]);
+        assert_eq!(
+            a[3..8],
+            ["danger-full-access", "", "", "resume", "019a-thread"]
+        );
         assert!(
             !a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
             "codex exits on a permission flag in a remote resume: {a:?}"
@@ -960,6 +1022,7 @@ mod tests {
                     socket.to_str().unwrap(),
                     "danger-full-access",
                     "",
+                    "",
                 ])
                 .env("PATH", path)
                 .spawn()
@@ -994,10 +1057,10 @@ mod tests {
         }
     }
 
-    /// The trust is one `-c` value to the app-server, however many spaces and quotes it holds,
+    /// Each trust is one `-c` value to the app-server, however many spaces and quotes it holds,
     /// and with none the server gets no `-c` for it at all.
     #[test]
-    fn a_served_codexs_hook_trust_reaches_its_app_server_as_one_argument() {
+    fn a_served_codexs_hook_and_folder_trust_reach_its_app_server_as_one_argument_each() {
         let dir = std::env::temp_dir().join(format!("bcxt{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1013,21 +1076,25 @@ mod tests {
         std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         let trust = r#"hooks.state={ "/h/x.json:stop:0:0" = { trusted_hash = "sha256:a b" } }"#;
-        let server_args = |trust: &str| {
+        let folder = codex_folder_trust("/r/helm/.worktrees/a b");
+        let server_args = |trust: &str, folder: &str| {
             let _ = std::fs::remove_file(dir.join("server.args"));
             let status = std::process::Command::new("/bin/sh")
                 .args(["-c", CODEX_SERVED, dir.join("s.sock").to_str().unwrap()])
-                .args(["danger-full-access", trust, "resume", "019a"])
+                .args(["danger-full-access", trust, folder, "resume", "019a"])
                 .env("PATH", format!("{}:/bin:/usr/bin", dir.display()))
                 .status()
                 .unwrap();
             assert!(status.success());
             std::fs::read_to_string(dir.join("server.args")).unwrap()
         };
-        let with = server_args(trust);
-        let without = server_args("");
+        let with = server_args(trust, &folder);
+        let without = server_args("", "");
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(with.contains(&format!("-c\n{trust}\n--listen\n")), "{with}");
+        assert!(
+            with.contains(&format!("-c\n{trust}\n-c\n{folder}\n--listen\n")),
+            "{with}"
+        );
         assert!(
             without.contains("approval_policy=\"never\"\n--listen\n"),
             "{without}"
@@ -1164,12 +1231,13 @@ mod tests {
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "/bin/sh");
         assert_eq!(
-            a[..7],
+            a[..8],
             [
                 "-c",
                 CODEX_SERVED,
                 "/r/codex/s2.sock",
                 "read-only",
+                "",
                 "",
                 "fork",
                 "019a-author"
@@ -1183,7 +1251,7 @@ mod tests {
         s.conversation = Conversation::Resume("019b-fork".into());
         s.prompt_file = None;
         let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..7], ["read-only", "", "resume", "019b-fork"]);
+        assert_eq!(a[3..8], ["read-only", "", "", "resume", "019b-fork"]);
     }
 
     /// Unserved, the TUI carries the posture itself.

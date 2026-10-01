@@ -86,10 +86,12 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   the operator asked.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
-- codex must already trust `--cwd` itself, or it stops at "Trust this folder?". A trusted parent
-  does not count, and `--arg` cannot skip it. `bench sessions` shows the stop as `waiting_for:
-  "trust prompt"`. Trusting a folder is the operator's call: ask him to run `cd <dir> && codex`
-  once, or to choose "Trust and continue" in the spawned pane.
+- codex must already trust `--cwd`, or it stops at "Trust this folder?". As for a `codex` he
+  starts himself, a subfolder or linked worktree of a git repository he trusts counts (benchd
+  passes that trust to the spawn); any other trusted parent does not, and `--arg` cannot skip it.
+  `bench sessions` shows the stop as `waiting_for: "trust prompt"`. Trusting a folder is the
+  operator's call: ask him to run `cd <dir> && codex` once, or to choose "Trust and continue" in
+  the spawned pane.
 - `bench status` shows which `claude`, `codex` and `pi` a spawn runs (`agents`: path, the file it
   links to, version). That is benchd's `PATH`, not yours, so it can differ from `codex --version`
   in your shell.

@@ -10217,6 +10217,85 @@ fn a_codex_fork_runs_on_a_read_only_app_server_and_comes_back_on_one() {
     assert!(tui.contains(&format!(" resume {fork_thread} ")), "{tui}");
 }
 
+/// `<home>/<name>`, a git repository with one commit and a linked worktree at
+/// `.worktrees/wt`, made by git itself; answers the worktree.
+fn git_repo_with_worktree(home: &Path, name: &str) -> PathBuf {
+    let repo = home.join(name);
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.canonicalize().unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["commit", "-q", "--allow-empty", "-m", "x"],
+        &["worktree", "add", "-q", ".worktrees/wt"],
+    ] {
+        let out = isolated("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    repo.join(".worktrees/wt")
+}
+
+#[test]
+fn a_codex_in_a_worktree_of_a_repo_the_operator_trusts_is_served_that_trust() {
+    // A served codex checks only its exact `-C` folder, so without this a worktree of a trusted
+    // repository stops at "Trust this folder?". A plain codex follows the worktree to its main
+    // repository; benchd does the same, and only for a repository the operator trusts.
+    let home = TestHome::claim("cxtrust");
+    let trusted = git_repo_with_worktree(&home.dir, "t");
+    let untrusted = git_repo_with_worktree(&home.dir, "u");
+    fs::create_dir_all(home.dir.join(".codex")).unwrap();
+    let config = format!(
+        "[projects.{:?}]\ntrust_level = \"trusted\"\n",
+        home.dir
+            .join("t")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    fs::write(home.dir.join(".codex/config.toml"), &config).unwrap();
+    let (bin, runs) = write_fake_codex(&home.dir);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let server_of = |cwd: &Path, n: usize| {
+        let run = bench(
+            &home.dir,
+            &["spawn", "--agent", "codex", "--cwd", cwd.to_str().unwrap()],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+        let socket = home.dir.join(format!(".bench/codex/{sid}.sock"));
+        recorded_runs(&runs, n)
+            .into_iter()
+            .find(|r| {
+                r.starts_with("app-server ")
+                    && r.ends_with(&format!(" --listen unix://{}", socket.display()))
+            })
+            .unwrap_or_else(|| panic!("{sid} runs its own app-server"))
+    };
+    let server = server_of(&trusted, 2);
+    assert!(
+        server.contains(&format!(
+            r#" -c projects={{"{}"={{trust_level="trusted"}}}} "#,
+            trusted.display()
+        )),
+        "{server}"
+    );
+    let server = server_of(&untrusted, 4);
+    assert!(!server.contains("projects="), "{server}");
+    assert_eq!(
+        fs::read_to_string(home.dir.join(".codex/config.toml")).unwrap(),
+        config,
+        "benchd never writes the operator's codex config"
+    );
+}
+
 #[test]
 fn a_canvas_names_the_conversation_that_opened_it_after_its_pane_moves_on() {
     // helm #535: a fork asked about a canvas must reach the conversation that wrote it. The

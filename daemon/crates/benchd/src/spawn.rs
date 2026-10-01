@@ -153,9 +153,11 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 }
 
 /// What an agent's session `id` needs from this root to report to benchd and be woken by it:
-/// claude's settings (its hooks), and codex's own app-server socket (#454). Every route that
-/// starts an agent, `spawn`, `restore` and `resume`, goes through here, so none starts one
-/// benchd cannot reach.
+/// claude's settings (its hooks), and codex's own app-server socket (#454), plus the folder
+/// trust a plain `codex` would have there ([`crate::codex_trust`]), which a served one does not
+/// work out for itself. Every route that starts an agent, `spawn`, `restore` and `resume`, goes
+/// through here, so none starts one benchd cannot reach or one that stops at "Trust this folder?"
+/// in a worktree of a repository the operator trusts.
 ///
 /// It also gives a resumed conversation its first message when the caller sent none: the
 /// [`resume_notice`], so the agent starts a turn rather than sitting at its prompt after its
@@ -165,7 +167,15 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
     match spec.agent {
         AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
-        AgentKind::Codex => spec.codex_server = Some(codex_server_socket(root, id)?),
+        AgentKind::Codex => {
+            spec.codex_server = Some(codex_server_socket(root, id)?);
+            spec.codex_trust_folder = std::env::var_os("HOME").is_some_and(|home| {
+                crate::codex_trust::operator_trusts(
+                    std::path::Path::new(&spec.cwd),
+                    std::path::Path::new(&home),
+                )
+            });
+        }
         _ => {}
     }
     if matches!(spec.conversation, Conversation::Resume(_)) && spec.prompt_file.is_none() {
@@ -341,6 +351,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         extra_args: args.args,
         codex_server: None,
         codex_hook_trust: None,
+        codex_trust_folder: false,
     };
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
     // runtime cannot run (a fork of the test agent, say) is refused here, before anything is
