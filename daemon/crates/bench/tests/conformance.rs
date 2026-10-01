@@ -7470,7 +7470,6 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
         &root.join("codex").join(format!("{session}.sock")),
         vec![true],
     );
-    *server.status.lock().unwrap() = "idle";
     let handle = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
         .as_array()
         .unwrap()
@@ -7483,6 +7482,9 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
         &["mail", "send", "--to", &handle, "--body", "wake up"],
     ));
     assert_eq!(sent["wake"], "queued", "{sent}");
+    // Not before its server says the thread is idle: the TUI may not have loaded it yet.
+    assert!(server.started.recv_timeout(Duration::from_secs(7)).is_err());
+    *server.status.lock().unwrap() = "idle";
     let params = server
         .started
         .recv_timeout(Duration::from_secs(15))
@@ -7514,6 +7516,35 @@ fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_r
     let first = spawned["session"].as_str().unwrap().to_string();
     let root = home.dir.join(".bench");
     assert_served_resume(&root, &codex_runs(&runs, 2), &first, thread);
+    // Mail wakes it through its own session's server, before any hook has reported.
+    let wakes = |session: &str| {
+        let server = FakeAppServer::bind(
+            &root.join("codex").join(format!("{session}.sock")),
+            vec![true],
+        );
+        *server.status.lock().unwrap() = "idle";
+        let sent = json_of(&bench(
+            &home.dir,
+            &["mail", "send", "--to", &first, "--body", "wake up"],
+        ));
+        assert_eq!(sent["wake"], "queued", "{session}: {sent}");
+        let params = server
+            .started
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap_or_else(|_| panic!("{session}: a turn is started on its thread"));
+        assert_eq!(params["threadId"], thread);
+    };
+    wakes(&first);
+
+    // A conversation a live session holds is not resumed a second time: that forks it.
+    let again = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+        ],
+    );
+    assert_eq!(again.code, 3, "{}", again.stderr);
+    assert!(again.stderr.contains("already live"), "{}", again.stderr);
 
     let pid = spawned["pid"].as_i64().unwrap() as i32;
     libc_kill(pid);
@@ -7531,6 +7562,7 @@ fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_r
     let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
     assert_ne!(second, first);
     assert_served_resume(&root, &codex_runs(&runs, 2), &second, thread);
+    wakes(&second);
 }
 
 #[test]

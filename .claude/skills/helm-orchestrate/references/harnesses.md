@@ -33,14 +33,15 @@ or a mail), not replaced.
 | models (2026-10-01) | `opus` → claude-opus-5-5, `sonnet` → claude-sonnet-5-5, `haiku` → claude-haiku-4-5, `fable` → claude-fable-5-1 | `gpt-6-astra` (frontier), `gpt-6-sol` (workhorse), `gpt-6-luna` (fast); not `gpt-6.1-sol` on this account | `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `minimax/MiniMax-M3`, `pi --list-models` for the rest |
 | default with no `--model` | the operator's Claude Code setting | `~/.codex/config.toml` (`gpt-6-astra`, medium) | `~/.pi/agent/settings.json` (`openai-codex/gpt-5.6-sol`) |
 | `--effort` | `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh`, plus `max` and `ultra` on some models; sent as `-c model_reasoning_effort=` | `off` `minimal` `low` `medium` `high` `xhigh` `max`; appended to the model as `:<level>` |
-| `--resume <id>` | yes | no, benchd refuses: codex names its session after the fact | yes |
+| `--resume <id>` | yes | yes, by its thread id, which its hook records | yes |
 | `--fork <id>` | yes, read-only (plan mode), its own new id | no | no |
 | posture | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approve` |
 | mail wake when idle | yes (inbox socket) | yes when benchd spawned it (its app-server) | yes (`bench` extension) |
 | activity in `bench sessions` | busy, shell, idle, waiting with its own words | unknown | unknown |
 | `bench log` | yes | no | yes |
 
-`runtime_session` in the spawn answer is the id `--resume` and `--fork` take. It is null for codex.
+`runtime_session` in the spawn answer is the id `--resume` and `--fork` take. It is null for a new
+codex, which names its thread after the fact: its hook records the id.
 
 Effort is a judgment, not a table: `high` for delivery, `xhigh` or `max` for a hard design or a
 diagnosis that has already failed once, `medium` or `low` for mechanical work.

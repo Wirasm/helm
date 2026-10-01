@@ -177,6 +177,19 @@ pub struct SpawnSpec {
     pub codex_server: Option<String>,
 }
 
+impl SpawnSpec {
+    /// The thread a served codex re-enters: a resume against its own app-server, which takes
+    /// its permissions from that server ([`CODEX_SERVED`]) and fires no hook until a turn runs.
+    pub fn served_resume(&self) -> Option<&str> {
+        match (&self.codex_server, &self.conversation) {
+            (Some(_), Conversation::Resume(thread)) if self.agent == AgentKind::Codex => {
+                Some(thread)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// How a served codex session starts, as a script: `$0` is the socket, `"$@"` the TUI's
 /// flags. Measured on codex 0.157.0:
 /// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
@@ -251,15 +264,15 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
                         .into(),
                 ),
             }
+            // A codex read-only posture would also have to reach the app-server, which holds the
+            // unattended one for every served session ([`CODEX_SERVED`]).
             if spec.posture == Posture::ReadOnly {
                 return Err("codex has no read-only posture on the bench".into());
             }
             // A served resume takes its permissions from the app-server ([`CODEX_SERVED`]): the
             // TUI exits on a permission flag there ("Permission overrides are not supported when
             // resuming a remote task", measured on 0.157.0).
-            let served_resume =
-                spec.codex_server.is_some() && matches!(spec.conversation, Conversation::Resume(_));
-            if !served_resume {
+            if spec.served_resume().is_none() {
                 args.push("--dangerously-bypass-approvals-and-sandbox".into());
             }
             // The hooks report to benchd, and hooks run only once trusted, which is a choice

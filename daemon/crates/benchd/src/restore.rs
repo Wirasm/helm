@@ -145,7 +145,7 @@ fn has_transcript(id: &str) -> bool {
 }
 
 /// Whether a live session already holds conversation `runtime`.
-fn held(core: &Core, runtime: &str) -> bool {
+pub fn held(core: &Core, runtime: &str) -> bool {
     core.sessions
         .values()
         .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
@@ -209,7 +209,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_resumed(core, &session)?;
+    hook::serve_resumed(core, &session);
     let _ = core.append(
         "session/spawned",
         json!({

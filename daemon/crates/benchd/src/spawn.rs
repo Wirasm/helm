@@ -16,7 +16,7 @@
 //! session it would have shown.
 
 use crate::layout::{self, Change, Committed};
-use crate::{Core, claude_settings, hook, sessions};
+use crate::{Core, claude_settings, hook, restore, sessions};
 use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
@@ -182,7 +182,7 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
-    hook::serve_resumed(core, session).map_err(|why| (Status::Error, why))?;
+    hook::serve_resumed(core, session);
     core.append(
         "session/spawned",
         json!({
@@ -253,6 +253,12 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         // (#531), whoever resumes it and by whichever route.
         (Some(id), None) => {
             let c = core.lock().unwrap();
+            // Two processes on one conversation fork it, as `restore` says too.
+            if restore::held(&c, id) {
+                return Err(format!(
+                    "conversation {id} is already live in another session — attach to that one"
+                ));
+            }
             let forked_from =
                 sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.as_deref());
             (

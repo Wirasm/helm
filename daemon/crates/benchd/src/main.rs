@@ -1069,7 +1069,7 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
     let mut c = core.lock().unwrap();
     c.sessions.remove(sid);
     c.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_resumed(&mut c, &session).map_err(errored)?;
+    hook::serve_resumed(&mut c, &session);
     c.append(
         "session/resumed",
         json!({ "session": id, "from": sid, "runtime_session": session.runtime_session }),
