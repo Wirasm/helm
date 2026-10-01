@@ -3854,6 +3854,150 @@ fn a_hook_never_fails_its_agent() {
     assert_eq!(unknown, 1);
 }
 
+/// `bench statusline <command>` exactly as Claude Code runs it: the payload on stdin.
+fn bench_statusline(home: &Path, command: &[&str], payload: &serde_json::Value) -> CliRun {
+    let mut child = isolated(bench_bin())
+        .env("HOME", home)
+        .arg("statusline")
+        .args(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bench statusline");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// `sessions`' `usage` for one harness, with each window's `at_ms` set aside: Claude's is the
+/// moment `bench statusline` ran.
+fn usage_of(home: &Path, harness: &str) -> Option<serde_json::Value> {
+    let run = bench(home, &["sessions"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let mut usage = json_of(&run)["usage"]
+        .as_array()?
+        .iter()
+        .find(|u| u["harness"] == harness)?
+        .clone();
+    for w in usage["windows"].as_array_mut().unwrap() {
+        w.as_object_mut().unwrap().remove("at_ms");
+    }
+    Some(usage)
+}
+
+/// #143: Claude's plan limits reach `sessions` through `bench statusline`, which runs the
+/// operator's own statusline on the same input whether or not benchd is there; codex's reach it
+/// through its hook, from the rollout the payload names. A lower reading of the same window
+/// never replaces a higher one.
+#[test]
+fn plan_limits_reach_sessions_from_claudes_statusline_and_codexs_hook() {
+    let home = TestHome::claim("usage");
+    let h = &home.dir;
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/usage.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // The fixture's windows, moved to reset an hour and a day from now: a window that has
+    // already reset is replaced by any later report, which is not what this test is about.
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut payload = fixture["claude_statusline"].clone();
+    payload["rate_limits"]["five_hour"]["resets_at"] = serde_json::json!(now_s + 3600);
+    payload["rate_limits"]["seven_day"]["resets_at"] = serde_json::json!(now_s + 86400);
+    let payload = &payload;
+    let mine = write_agent_script(h, "statusline", "printf 'mine:'; wc -c | tr -d ' '; exit 3")
+        .join("statusline");
+    let mine = mine.to_str().unwrap();
+    let expected_out = format!("mine:{}\n", payload.to_string().len());
+
+    let alone = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (alone.code, alone.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        alone.stderr
+    );
+
+    let daemon = DaemonGuard::start(h, None);
+    assert_eq!(usage_of(h, "claude"), None, "nothing reported yet");
+    let (pi, _) = raw_request(
+        &daemon.socket,
+        "usage/report",
+        serde_json::json!({"harness": "pi", "windows": []}),
+    );
+    assert_eq!(pi["status"], "refused", "pi publishes no plan limits: {pi}");
+    let run = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        run.stderr
+    );
+    let mut want = fixture["claude_usage"].clone();
+    for (w, resets) in want["windows"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip([now_s + 3600, now_s + 86400])
+    {
+        w.as_object_mut().unwrap().remove("at_ms");
+        w["resets_at_ms"] = serde_json::json!(resets * 1000);
+    }
+    assert_eq!(usage_of(h, "claude"), Some(want.clone()));
+
+    let mut lower = payload.clone();
+    lower["rate_limits"]["five_hour"]["used_percentage"] = serde_json::json!(10);
+    assert_eq!(
+        bench_statusline(h, &[], &lower).code,
+        0,
+        "no command is an empty statusline"
+    );
+    assert_eq!(usage_of(h, "claude"), Some(want), "an older, lower reading");
+
+    let rollout = h.join("rollout.jsonl");
+    let lines: Vec<String> = fixture["codex_rollout"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    fs::write(&rollout, lines.join("\n") + "\n").unwrap();
+    let hook = bench_hook(
+        h,
+        "codex",
+        serde_json::json!({"session_id": "c1", "hook_event_name": "Stop", "cwd": "/tmp",
+                           "transcript_path": rollout}),
+    );
+    assert_eq!(hook.code, 0);
+    let run = bench(h, &["sessions"]);
+    let codex = json_of(&run)["usage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["harness"] == "codex")
+        .cloned();
+    assert_eq!(
+        codex,
+        Some(fixture["codex_usage"].clone()),
+        "the line's own time, the plan's limit"
+    );
+}
+
 #[test]
 fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     // codex runs its hook command as a shell string. bash and macOS's sh exec a single
@@ -4615,6 +4759,11 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     assert_eq!(plan.code, 0, "stderr: {}", plan.stderr);
     let plan = json_of(&plan);
     assert_eq!(plan["bench"], bench_path.as_str());
+    assert_eq!(
+        plan["claude_statusline"]["statusLine"]["command"],
+        format!("{bench_path} statusline <your current statusLine command>"),
+        "the operator's own statusline goes after `statusline`, never away"
+    );
 
     let unwired = bench(h, &["wiring", "--check"]);
     assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
@@ -4659,6 +4808,19 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     write(".claude/settings.json", &claude);
     let wired = bench(h, &["wiring", "--check"]);
     assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
+    assert_eq!(
+        json_of(&wired)["claude"]["statusline_reports_limits"],
+        false,
+        "the statusline is optional: reported, not required"
+    );
+    claude["statusLine"] = serde_json::json!({"type": "command",
+        "command": format!("{bench_path} statusline ~/.claude/statusline.py")});
+    write(".claude/settings.json", &claude);
+    let limits = json_of(&bench(h, &["wiring", "--check"]));
+    assert_eq!(
+        limits["claude"]["statusline_reports_limits"], true,
+        "{limits}"
+    );
     assert!(
         !h.join(".bench").exists(),
         "wiring needs no daemon and writes nothing"

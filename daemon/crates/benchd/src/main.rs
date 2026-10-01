@@ -44,6 +44,7 @@ mod sessions;
 mod shell_env;
 mod shells;
 mod spawn;
+mod usage;
 mod waiting;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
@@ -327,6 +328,8 @@ struct Core {
     /// (Claude's `SessionEnd` on the hangup), and that must not erase the pane records `bench
     /// restore` needs after the restart.
     stopping: bool,
+    /// Each harness's plan limits as last reported (#143, `usage`).
+    usage: std::collections::BTreeMap<bench_wire::Harness, bench_wire::Usage>,
 }
 
 /// How many frames a follower may fall behind before it is dropped.
@@ -589,6 +592,7 @@ fn boot(
         asks: ask::Waiting::default(),
         unflushed: Arc::new(AtomicBool::new(false)),
         stopping: false,
+        usage: Default::default(),
     }));
 
     let listener = {
@@ -1126,7 +1130,7 @@ fn dispatch(
             // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
             // `waiting` is read here too: it takes no session lock, only benchd's own records
             // and each reporting agent's liveness from the kernel.
-            let (home, shown): (_, Vec<_>) = {
+            let (home, shown, usage): (_, Vec<_>, _) = {
                 let c = core.lock().unwrap();
                 let shown = c
                     .sessions
@@ -1137,7 +1141,7 @@ fn dispatch(
                         (Arc::clone(s), pane, waiting::of_session(&c, &s.id), hooked)
                     })
                     .collect();
-                (c.home.clone(), shown)
+                (c.home.clone(), shown, usage::held(&c))
             };
             let sessions = shown
                 .into_iter()
@@ -1159,7 +1163,7 @@ fn dispatch(
                 })
                 .collect();
             (
-                ok(json!(bench_wire::LiveSessions { sessions })),
+                ok(json!(bench_wire::LiveSessions { sessions, usage })),
                 AfterResponse::Done,
             )
         }
@@ -1168,6 +1172,11 @@ fn dispatch(
             Ok(data) => (ok(data), AfterResponse::Done),
             Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
             Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
+        },
+
+        Some(Verb::UsageReport) => match usage::answer(&mut core.lock().unwrap(), &req.args) {
+            Ok(data) => (ok(data), AfterResponse::Done),
+            Err(why) => (refused(why), AfterResponse::Done),
         },
 
         Some(Verb::Hook) => match hook::answer(core, &req.args) {
