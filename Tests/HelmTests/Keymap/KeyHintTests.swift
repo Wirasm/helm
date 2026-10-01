@@ -116,6 +116,14 @@ final class KeyHintTests: XCTestCase {
             "⇧⌘G")
     }
 
+    /// The status bar names the palette's key for where the keyboard is: ⌘K, except in a browser
+    /// pane, where ⌘K is the page's and ⌘⇧P opens it (#548).
+    func testThePalettesKeyIsOneThatFiresWhereTheKeyboardIs() {
+        let palette = KeyBinding.Action.local(.toggleCommandPalette)
+        XCTAssertEqual(KeyGlyph.binding(for: palette, in: KeyBindings.all, focus: .terminal), "⌘K")
+        XCTAssertEqual(KeyGlyph.binding(for: palette, in: KeyBindings.all, focus: .browser), "⇧⌘P")
+    }
+
     /// An action nothing binds gets nil rather than a plausible-looking string, so a caller
     /// can decline to advertise a key instead of naming one that does not fire.
     func testAnUnboundActionHasNoGlyphs() {

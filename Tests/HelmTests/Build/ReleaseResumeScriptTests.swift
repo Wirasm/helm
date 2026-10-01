@@ -366,60 +366,124 @@ final class ReleaseResumeScriptTests: XCTestCase {
         XCTAssertFalse(result.stdout.contains("detached"), "it detached after refusing")
         XCTAssertTrue(spawned[0].isRunning, "the refused pid was touched")
     }
+}
 
-    // MARK: - Only a session inside that helm is resumed
+// MARK: - Only a session the run ends is resumed
 
-    /// A session running somewhere other than the helm being quit would survive the quit, so the
-    /// recipe would close every pane for nothing and then resume a second copy of it. Refused
-    /// before anything detaches. The registry row lives under a scratch `HOME`.
-    func testRefusesASessionThatIsNotInsideTheHelm() throws {
-        let bundle = try makeBundle(named: "Target.helm-test")
-        _ = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
-        let elsewhere = try run(try compiled.sleeper)
+extension ReleaseResumeScriptTests {
+    /// A `--cargo-root` whose `bench status` names `benchd` as the daemon, but only when asked
+    /// under the bench suite `trial` with no `BENCH_DIR`: the benchd `restart_benchd` restarts. A
+    /// shell script of our own, so no test here ever asks the operator's benchd.
+    private func cargoRoot(benchd: pid_t) throws -> URL {
+        let root = scratch.appendingPathComponent("cargo")
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try writeExecutable(
+            bin.appendingPathComponent("bench"),
+            """
+            #!/bin/sh
+            [ "$1" = status ] && [ "$BENCH_SUITE" = trial ] && [ -z "$BENCH_DIR" ] &&
+              printf '{"pid":\(benchd)}\\n'
+            """)
+        // The script bounds every call with GNU `timeout`, which a CI runner lacks.
+        try writeExecutable(
+            bin.appendingPathComponent("timeout"), "#!/bin/sh\nshift\nexec \"$@\"\n")
+        return root
+    }
+
+    private func writeExecutable(_ url: URL, _ body: String) throws {
+        try Data(body.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    /// The forker's child: the process a session runs in.
+    private func child(of parent: pid_t) throws -> pid_t {
+        for _ in 0..<50 {
+            let out = try bash(["-c", "pgrep -P \(parent)"]).stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let child = pid_t(out) { return child }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        throw NoChild(parent: parent)
+    }
+
+    private struct NoChild: Error {
+        let parent: pid_t
+    }
+
+    /// The whole script, foreground half, on a session `holder` holds, with its registry row under
+    /// a scratch `HOME`. The cwd never exists, so a guard that passes stops at the next check
+    /// ("no directory") and never detaches into a real build. The caller's own `BENCH_DIR` is set,
+    /// as it is in every pane, and must not decide which benchd counts.
+    private func releaseResume(
+        holder: pid_t, bundle: URL, helm: pid_t, benchd: pid_t
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
         let session = "11111111-2222-3333-4444-555555555555"
         let home = scratch.appendingPathComponent("home")
         let sessions = home.appendingPathComponent(".claude/sessions")
         try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try Data(#"{"pid":\#(elsewhere),"sessionId":"\#(session)"}"#.utf8)
-            .write(to: sessions.appendingPathComponent("\(elsewhere).json"))
+        try Data(#"{"pid":\#(holder),"sessionId":"\#(session)"}"#.utf8)
+            .write(to: sessions.appendingPathComponent("\(holder).json"))
+        let root = try cargoRoot(benchd: benchd)
+        return try bash(
+            [
+                script.path, session, scratch.appendingPathComponent("absent").path,
+                "--bundle", bundle.path, "--pid", String(helm),
+                "--bench-suite", "trial", "--cargo-root", root.path,
+            ],
+            environment: [
+                "HOME": home.path, "BENCH_DIR": scratch.appendingPathComponent("caller").path,
+                "PATH": root.appendingPathComponent("bin").path + ":"
+                    + (ProcessInfo.processInfo.environment["PATH"] ?? ""),
+            ])
+    }
 
-        let result = try bash(
-            [script.path, session, scratch.path, "--bundle", bundle.path],
-            environment: ["HOME": home.path])
+    /// A session inside neither the helm being quit nor the benchd being restarted survives the
+    /// run, so the recipe would close every pane for nothing and then resume a second copy of the
+    /// conversation. Refused before anything detaches, naming both pids it looked under.
+    func testRefusesASessionInsideNeitherTheHelmNorTheBenchd() throws {
+        let bundle = try makeBundle(named: "Target.helm-test")
+        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
+        let benchd = try run(try compiled.forker)
+        let elsewhere = try run(try compiled.sleeper)
+
+        let result = try releaseResume(
+            holder: elsewhere, bundle: bundle, helm: helm, benchd: benchd)
 
         XCTAssertEqual(result.status, 3, result.stderr)
-        XCTAssertTrue(result.stderr.contains("is not running inside helm"), result.stderr)
+        XCTAssertTrue(
+            result.stderr.contains("not running inside helm pid \(helm) or benchd pid \(benchd)"),
+            result.stderr)
         XCTAssertFalse(result.stdout.contains("detached"), "it detached after refusing")
     }
 
-    /// The control for the refusal above, through the same `check()`: a session in a child of
-    /// the bundle's process passes the guard and is stopped only by the next check, a missing
-    /// `cwd`. A guard that refused every session, or compared the pids the wrong way round,
-    /// fails here.
+    /// The control for the refusal above, through the same `check()`: a session in a child of the
+    /// bundle's process passes the guard and is stopped only by the next check, the missing cwd. A
+    /// guard that refused every session, or compared the pids the wrong way round, fails here.
     func testASessionInsideTheHelmPassesTheGuard() throws {
         let bundle = try makeBundle(named: "Target.helm-test", executable: try compiled.forker)
         let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
-        var child = ""
-        for _ in 0..<50 where child.isEmpty {
-            child = try bash(["-c", "pgrep -P \(helm)"]).stdout
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if child.isEmpty { Thread.sleep(forTimeInterval: 0.1) }
-        }
-        XCTAssertFalse(child.isEmpty, "the child never started")
-        let session = "11111111-2222-3333-4444-555555555555"
-        let home = scratch.appendingPathComponent("home")
-        let sessions = home.appendingPathComponent(".claude/sessions")
-        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try Data(#"{"pid":\#(child),"sessionId":"\#(session)"}"#.utf8)
-            .write(to: sessions.appendingPathComponent("\(child).json"))
+        let benchd = try run(try compiled.sleeper)
 
-        let result = try bash(
-            [
-                script.path, session, scratch.appendingPathComponent("absent").path,
-                // The child runs the same executable, so the parent is named.
-                "--bundle", bundle.path, "--pid", String(helm),
-            ],
-            environment: ["HOME": home.path])
+        // The child runs the same executable, so the parent is named with --pid.
+        let result = try releaseResume(
+            holder: try child(of: helm), bundle: bundle, helm: helm, benchd: benchd)
+
+        XCTAssertEqual(result.status, 3, result.stderr)
+        XCTAssertTrue(result.stderr.contains("no directory"), result.stderr)
+    }
+
+    /// Since M5b every terminal pane is a benchd session, so an agent in a helm pane descends from
+    /// benchd, not from helm (#557). Step 3's benchd restart ends it as surely as the quit would,
+    /// so it passes the guard. The stub answers only under the bench suite and without the
+    /// caller's `BENCH_DIR`, so this also holds that the benchd asked is the one restarted.
+    func testASessionInsideTheBenchdPassesTheGuard() throws {
+        let bundle = try makeBundle(named: "Target.helm-test")
+        let helm = try run(bundle.appendingPathComponent("Contents/MacOS/Helm"))
+        let benchd = try run(try compiled.forker)
+
+        let result = try releaseResume(
+            holder: try child(of: benchd), bundle: bundle, helm: helm, benchd: benchd)
 
         XCTAssertEqual(result.status, 3, result.stderr)
         XCTAssertTrue(result.stderr.contains("no directory"), result.stderr)

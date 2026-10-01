@@ -26,6 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod agents;
 mod ask;
 mod cdp;
 mod codex;
@@ -1108,6 +1109,8 @@ fn dispatch(
 
     match Verb::parse(&req.verb) {
         Some(Verb::Status) => {
+            // Outside the lock: a binary's first `--version` runs here.
+            let agents = agents::report();
             let mut c = core.lock().unwrap();
             layout::refresh_rules(&mut c);
             let live = c.sessions.values().filter(|s| s.is_live()).count();
@@ -1123,6 +1126,9 @@ fn dispatch(
                     "events": c.next_seq,
                     "sessions": { "total": c.sessions.len(), "live": live },
                     "rules": { "placement": c.placement.status() },
+                    // The claude, codex and pi a spawn would run: benchd's PATH, not the
+                    // caller's (helm parity G4).
+                    "agents": agents,
                     // The attach client beside this daemon: what helm runs in a pane that
                     // shows a session, so viewer and daemon are always the same build.
                     "bench": std::env::current_exe()

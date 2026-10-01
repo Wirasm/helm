@@ -29,6 +29,7 @@ pub const TAIL: usize = 20;
 
 pub const PERMISSION: &str = bench_wire::hook::PERMISSION;
 pub const TRUST: &str = "trust prompt";
+pub const HOOK_REVIEW: &str = "hook review";
 
 pub static RULES: &[Rule] = &[
     // The stem varies by tool ("Do you want to make this edit to main.go?"), so it is the stem,
@@ -57,6 +58,14 @@ pub static RULES: &[Rule] = &[
         harness: "codex",
         waiting_for: TRUST,
         all: &["Trust this folder?", "1. Trust and continue"],
+    },
+    // At startup, when the hooks codex reads (the bench's own among them) are new or changed
+    // since he last trusted them. None of them runs until he does, so no hook reports this
+    // wait. Measured on 0.159.3.
+    Rule {
+        harness: "codex",
+        waiting_for: HOOK_REVIEW,
+        all: &["Hooks need review", "Trust all and continue"],
     },
     // pi asks no permission for a tool; its one prompt is whether to load a project's `.pi`.
     Rule {
@@ -119,6 +128,11 @@ mod tests {
             Some(TRUST),
         ),
         (
+            "codex-hook-review",
+            include_str!("../screens/codex-hook-review.txt"),
+            Some(HOOK_REVIEW),
+        ),
+        (
             "codex-idle",
             include_str!("../screens/codex-idle.txt"),
             None,
@@ -134,6 +148,11 @@ mod tests {
             Some(TRUST),
         ),
         ("pi-idle", include_str!("../screens/pi-idle.txt"), None),
+        (
+            "pi-working",
+            include_str!("../screens/pi-working.txt"),
+            None,
+        ),
     ];
 
     fn lines(text: &str) -> Vec<String> {

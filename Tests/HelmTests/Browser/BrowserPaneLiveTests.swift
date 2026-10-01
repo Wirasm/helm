@@ -164,4 +164,66 @@ final class BrowserPaneLiveTests: XCTestCase {
         }
         pane.close(tab: target)
     }
+
+    /// F3 (#548): on a retina pane the frames are retina — twice the page's CSS size — and a
+    /// click through the surface lands on the CSS pixel under it, at 100% and zoomed. Red on a
+    /// browser started without `--force-device-scale-factor=2`: Chrome screencasts at 1x
+    /// whatever scale the pane emulates.
+    func testFramesAreRetinaAndAClickLandsWhereItWasAimed() async throws {
+        // In a window, so the click goes in as a real `NSEvent` through the surface's own
+        // mapping. The window's display may be 1x; the pane is told 2x either way.
+        let window = NSWindow(
+            contentRect: surface.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = surface
+        surface.model = pane
+        pane.viewportChanged(size: CGSize(width: 800, height: 500), scale: 2)
+
+        let target = try await show(
+            "<title>ready</title><body style='margin:0;height:100vh' onmousedown=\""
+                + "document.title = 'at:' + event.clientX + ',' + event.clientY"
+                + " + ' in:' + innerWidth\">")
+        var frameWidth = 0
+        try await eventually("a 2x frame (last \(frameWidth) px wide)") {
+            frameWidth = (self.surface.layer?.contents as! CGImage?)?.width ?? 0
+            return frameWidth == 1600
+        }
+
+        func click(atView point: CGPoint) {
+            // The surface is flipped and fills the window; the window counts up from the bottom.
+            let location = CGPoint(x: point.x, y: 500 - point.y)
+            let down = NSEvent.mouseEvent(
+                with: .leftMouseDown, location: location, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: 1)!
+            let up = NSEvent.mouseEvent(
+                with: .leftMouseUp, location: location, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: 0)!
+            surface.mouseDown(with: down)
+            surface.mouseUp(with: up)
+        }
+        // Clicked until it lands, since the first frame may predate the pane's fit; the page
+        // says how wide it was laid out, so a click mapped through a stale frame cannot pass.
+        try await eventually("the click at 100% (\(pane.tabs.current?.title ?? ""))") {
+            click(atView: CGPoint(x: 200, y: 100))
+            try? await Task.sleep(for: .milliseconds(100))
+            return self.pane.tabs.current?.title == "at:200,100 in:800"
+        }
+
+        // At 125% the page is 640×400 CSS pixels drawn over the same 800×500 points.
+        pane.perform(.zoom(.increase))
+        pane.perform(.zoom(.increase))
+        XCTAssertEqual(pane.zoom[target], 1.25)
+        try await eventually("the click at 125% (\(pane.tabs.current?.title ?? ""))") {
+            click(atView: CGPoint(x: 200, y: 100))
+            try? await Task.sleep(for: .milliseconds(100))
+            return self.pane.tabs.current?.title == "at:160,80 in:640"
+        }
+        // Still 2x CSS pixels: Chrome draws at its forced scale, not the zoom-raised one the pane
+        // emulates, so a zoomed page is 1280 px over 800 points. Sharper than before, not perfect.
+        XCTAssertEqual((surface.layer?.contents as! CGImage?)?.width, 1280)
+        pane.close(tab: target)
+    }
 }
