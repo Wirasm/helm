@@ -146,6 +146,10 @@ part_pi() {
 #
 # Under /tmp, not $TMPDIR: the conformance suite binds sockets inside it, and a unix socket path
 # caps near 104 bytes.
+#
+# Node keeps its compile cache under TMPDIR by default, so any node a part runs would leave
+# node-compile-cache behind. A gate never wants that cache, so it is switched off rather than
+# allowed through the leak check.
 check_tmp=""
 trap '[ -z "$check_tmp" ] || rm -rf "$check_tmp"' EXIT
 
@@ -153,7 +157,7 @@ run_contained() {
     local part=$1 status left holders
     require lsof "$part" || return 1
     check_tmp=$(mktemp -d /tmp/helm-check.XXXXXX) || return 1
-    TMPDIR="$check_tmp/" "part_$part"
+    TMPDIR="$check_tmp/" NODE_DISABLE_COMPILE_CACHE=1 "part_$part"
     status=$?
     holders=$(lsof -nP -t +D "$check_tmp" 2>/dev/null | sort -u)
     if [ -n "$holders" ]; then
