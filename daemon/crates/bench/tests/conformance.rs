@@ -3091,7 +3091,6 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
         document["workspaces"], workspaces,
         "opening a drawer re-lays-out nothing"
     );
-
     drop(daemon);
 
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -3143,6 +3142,11 @@ fn only_the_operator_moves_a_drawer_and_it_stays_where_he_put_it() {
         before,
         "a refused placement changes nothing"
     );
+
+    // The refusal's way through works from the CLI: an agent the operator asked.
+    let asked = bench(&home.dir, &["drawer", "place", "notes", "left", "--asked"]);
+    assert_eq!(asked.code, 0, "{}", asked.stderr);
+    assert_eq!(get(&daemon.socket)["drawer_edges"]["notes"], "left");
 
     let placed = ok_data(layout(
         &daemon.socket,
