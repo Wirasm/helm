@@ -1022,6 +1022,7 @@ mod tests {
                     socket.to_str().unwrap(),
                     "danger-full-access",
                     "",
+                    "",
                 ])
                 .env("PATH", path)
                 .spawn()
