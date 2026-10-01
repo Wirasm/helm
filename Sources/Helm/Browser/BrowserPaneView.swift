@@ -198,6 +198,10 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// must not touch the operator's clipboard.
     var pasteboard: NSPasteboard = .general
 
+    /// The key table in force, asked at each key equivalent. The operator's in the app; the
+    /// built-in one in a test, which must not read his keymap file.
+    var keyTable: @MainActor () -> [KeyBinding] = { Keymap.shared.table }
+
     private var currentFrame: BrowserFrame?
     private var markedText = ""
     /// The key being interpreted, while `interpretKeyEvents` runs.
@@ -344,6 +348,23 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
             sendKey(event, type: "rawKeyDown", text: nil, commands: nil)
         }
         pendingKey = nil
+    }
+
+    /// A chord helm binds elsewhere but leaves to the page here (⌘K, ⌘N, ⌘D, ⌘O; #548) goes to
+    /// the page now. AppKit offers a key equivalent to the key window's views before the main
+    /// menu, and the menu mirrors those rows with their chords (`KeyBindingMenu`), so left to
+    /// the menu ⌘K would open the palette instead of reaching the page. Every other chord goes
+    /// on as before: helm's own rows were taken by the key monitor already, and one helm never
+    /// binds (⌘Q, ⌘C) is the menu's.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self,
+            KeyBindings.bindsElsewhere(
+                characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
+                modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+                focus: .browser, in: keyTable())
+        else { return super.performKeyEquivalent(with: event) }
+        keyDown(with: event)
+        return true
     }
 
     override func keyUp(with event: NSEvent) {

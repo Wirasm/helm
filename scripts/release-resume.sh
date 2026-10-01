@@ -19,9 +19,10 @@
 # `cwd` is where the session runs, because `claude --resume` finds a session by project
 # directory. Left out, it is read from the session's own row in ~/.claude/sessions.
 #
-# WHY IT DETACHES. Quitting helm closes every pane, and the caller is normally an agent in one of
-# them. So this checks everything it can in the foreground, then re-runs itself in a new session
-# (double fork, nohup, setsid) and returns. The detached run waits until its parent is init
+# WHY IT DETACHES. The caller is normally an agent in a helm pane, which since M5b is a benchd
+# session: restarting benchd ends it, and quitting helm closes the pane. So this checks
+# everything it can in the foreground, then re-runs itself in a new session (double fork,
+# nohup, setsid) and returns. The detached run waits until its parent is init
 # before it touches anything; a skill gate's detached runner is where that race was learned.
 # Every step runs under `timeout`, so nothing outlives its deadline.
 #
@@ -143,6 +144,16 @@ descends_from() {
   return 1
 }
 
+# Where bench and benchd are installed: --cargo-root, else cargo's own.
+bench_bin() { printf '%s/bin\n' "${cargo_root:-${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}}"; }
+
+# The pid of the benchd that step 3 restarts: the one answering under the bench suite. A subshell,
+# as in restart_benchd, so BENCH_SUITE reaches bench and nothing else.
+benchd_pid() (
+  [ -n "$bench_suite" ] && export BENCH_SUITE="$bench_suite"
+  bench_pid "$1/bench"
+)
+
 # ---- arguments ----------------------------------------------------------------------------------
 
 session="" cwd="" bundle="/Applications/Helm.app" pid="" suite="" bench_suite=""
@@ -207,13 +218,19 @@ check() {
   [ -n "$(swap_script)" ] || refuse "cannot read BundleSwap.script out of $repo/Sources/Helm/Build/BundleSwap.swift"
   pid="$(resolve_helm_pid "$bundle" "$pid")" || exit 3
 
-  # The session must be inside the helm being quit. One that is not keeps running, and resuming
-  # it would start a second copy of the same conversation.
-  local holders holder inside=0
+  # The run must end the session: it is inside the helm being quit, or, since M5b made every
+  # terminal pane a benchd session, inside the benchd being restarted. One inside neither keeps
+  # running, and resuming it would start a second copy of the same conversation.
+  local holders holder benchd inside=0
   holders="$(session_pids "$session")"
-  for holder in $holders; do descends_from "$holder" "$pid" && inside=1; done
+  benchd="$(benchd_pid "$(bench_bin)")"
+  for holder in $holders; do
+    descends_from "$holder" "$pid" && inside=1
+    [ -n "$benchd" ] && descends_from "$holder" "$benchd" && inside=1
+  done
   [ -n "$holders" ] || refuse "no live process holds session $session"
-  [ "$inside" -eq 1 ] || refuse "session $session (pid $holders) is not running inside helm pid $pid"
+  [ "$inside" -eq 1 ] ||
+    refuse "session $session (pid $holders) is not running inside helm pid $pid or benchd pid ${benchd:-(none answering for bench suite '$bench_suite')}"
 
   if [ -z "$cwd" ]; then
     cwd="$(session_field "$session" cwd)" || refuse "cannot read the cwd of $session; pass it"
@@ -289,8 +306,6 @@ detached_run() {
   done
   log "detached: pid $$, ppid 1, session leader $(ps -o sess= -p $$ | tr -d ' ')"
 
-  scrub_caller_env
-
   log "checkout $(git -C "$repo" rev-parse --short HEAD) on $(git -C "$repo" rev-parse --abbrev-ref HEAD)$(git -C "$repo" diff --quiet HEAD || echo ', dirty')"
 
   # 1. Build. Nothing has been touched yet, so a failure here just stops. The compiler's output
@@ -304,7 +319,7 @@ detached_run() {
   log "built $sha at $product"
 
   local bin crate
-  bin="${cargo_root:-${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}}/bin"
+  bin="$(bench_bin)"
   for crate in "${agent_crates[@]}"; do
     log "step 1: cargo install $crate into $bin"
     timeout 1200 cargo install --locked --force --path "$repo/daemon/crates/$crate" \
@@ -368,7 +383,8 @@ detached_run() {
   done
   log "step 5: new helm pid $new_pid, snapshot written $written"
 
-  # The old agent dies with its pane. Resuming while it lives would fork the conversation.
+  # The old agent died with its pane or with the benchd restart. Resuming while it lives would
+  # fork the conversation.
   local held
   deadline=$(($(date +%s) + 30))
   while held="$(session_pids "$session")" && [ -n "$held" ]; do
@@ -409,7 +425,9 @@ warn() { log "WARNING: $*"; }
 # and a claude can claim its address. So whole namespaces go, not a list of names that misses
 # the next one. Suites come only from the flags. HELM_BUILD_DIR is a location, not identity, and
 # stays: it is where `make release` announces the build. CLAUDE_CONFIG_DIR goes with the rest:
-# every claude runs the operator's default profile under HOME (#491).
+# every claude runs the operator's default profile under HOME (#491). `main` scrubs before
+# either half runs, so the foreground guard asks the benchd step 3 restarts, not the caller's
+# BENCH_DIR.
 scrub_caller_env() {
   local v
   for v in $(compgen -e); do
@@ -461,7 +479,10 @@ restart_benchd() (
     before="$(bench_pid "$bin/bench")"
     log "step 3: restarting benchd through launchd ($label, pid ${before:-none})"
     timeout 30 launchctl kickstart -k "gui/$(id -u)/$label" || { warn "launchctl kickstart failed"; return; }
-    deadline=$(($(date +%s) + 30))
+    # A benchd binary cargo has just replaced is refused once by macOS's launch constraint, and
+    # launchd tries again about ten seconds later. Measured: ten seconds with a new binary, under
+    # one without.
+    deadline=$(($(date +%s) + 60))
     local now
     until now="$(bench_pid "$bin/bench")" && [ -n "$now" ] && [ "$now" != "$before" ]; do
       [ "$(date +%s)" -ge "$deadline" ] && { warn "benchd did not come back under launchd; see $logfile"; return; }
@@ -564,6 +585,7 @@ fallback() {
 
 main() {
   parse "$@"
+  scrub_caller_env
   if [ -n "$detached_log" ]; then
     detached_run
   else

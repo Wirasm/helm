@@ -3740,26 +3740,7 @@ fn hook_verb(socket: &Path, args: serde_json::Value) -> serde_json::Value {
 
 /// `bench hook <harness>` exactly as a harness runs it: the payload on stdin.
 fn bench_hook(home: &Path, harness: &str, payload: serde_json::Value) -> CliRun {
-    let mut child = isolated(bench_bin())
-        .env("HOME", home)
-        .args(["hook", harness])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("run bench hook");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    CliRun {
-        code: out.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+    bench_stdin(home, &["hook", harness], &payload.to_string())
 }
 
 fn hosted_record(root: &Path) -> serde_json::Value {
@@ -4936,6 +4917,105 @@ fn a_pi_agent_wakes_itself_only_when_idle_and_under_the_cap() {
     assert_eq!(inbox_count(h, &handle), 1, "capped mail waits unread");
 }
 
+/// `codex app-server` on stdio, as much of it as `bench wiring --check` asks: it answers
+/// `hooks/list` with `$HOME/codex-hooks-list.json`, and only while its stdin is open, as the
+/// real one does.
+const STUB_CODEX_APP_SERVER: &str = r#"[ "$1" = app-server ] || exit 2
+while IFS= read -r line; do
+  case "$line" in *'"hooks/list"'*)
+    printf '{"id":2,"result":%s}\n' "$(cat "$HOME/codex-hooks-list.json")" ;;
+  esac
+done"#;
+
+/// A stub `codex` (on the PATH this returns) whose `hooks/list` reports every hook in `merge`,
+/// the codex half of `bench wiring`'s plan, at `trust`.
+fn codex_trusting(h: &Path, merge: &serde_json::Value, trust: &str) -> String {
+    let hooks: Vec<serde_json::Value> = merge["hooks"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(event, groups)| {
+            serde_json::json!({ "eventName": event, "trustStatus": trust,
+                "command": groups[0]["hooks"][0]["command"], "source": "user" })
+        })
+        .collect();
+    let list = serde_json::json!({ "data": [{ "hooks": hooks }] });
+    fs::write(h.join("codex-hooks-list.json"), list.to_string()).unwrap();
+    let bin = write_agent_script(h, "codex", STUB_CODEX_APP_SERVER);
+    format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+/// Every file right and codex not trusting its hooks is the state the operator's own codex was
+/// in: it opened on "Hooks need review", ran no bench hook, and the check said all was well.
+#[test]
+fn wiring_check_fails_until_codex_trusts_its_hooks() {
+    let home = TestHome::claim("trust");
+    let h = &home.dir;
+    let plan = json_of(&bench(h, &["wiring"]));
+    let write = |rel: &str, value: &serde_json::Value| {
+        let path = h.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value.to_string()).unwrap();
+    };
+    write(".claude/settings.json", &plan["claude"]["merge"]);
+    write(".codex/hooks.json", &plan["codex"]["merge"]);
+    write(
+        ".pi/agent/extensions/bench/index.ts",
+        &serde_json::json!(""),
+    );
+    let check = |trust: &str| {
+        let path = codex_trusting(h, &plan["codex"]["merge"], trust);
+        bench_as(h, &["wiring", "--check"], &[("PATH", &path)])
+    };
+
+    for trust in ["untrusted", "modified"] {
+        let run = check(trust);
+        assert_eq!(
+            run.code, 3,
+            "{trust}: codex runs none of them: {}",
+            run.stdout
+        );
+        let codex = &json_of(&run)["codex"];
+        assert_eq!(codex["missing_events"], serde_json::json!([]), "{codex}");
+        assert_eq!(
+            codex["needs_review"].as_array().unwrap().len(),
+            8,
+            "{codex}"
+        );
+        assert!(
+            codex["then"].as_str().unwrap().contains("Trust all"),
+            "{codex}"
+        );
+    }
+    let trusted = check("trusted");
+    assert_eq!(trusted.code, 0, "{}", trusted.stdout);
+    // A codex that lists none of them (another CODEX_HOME, hooks off) runs none of them.
+    fs::write(h.join("codex-hooks-list.json"), r#"{"data": []}"#).unwrap();
+    let path = format!(
+        "{}:{}",
+        h.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let unlisted = bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
+    assert_eq!(unlisted.code, 3, "{}", unlisted.stdout);
+    assert_eq!(
+        json_of(&unlisted)["codex"]["needs_review"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert!(
+        json_of(&trusted)["codex"].get("then").is_none(),
+        "{}",
+        trusted.stdout
+    );
+}
+
 #[test]
 fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     let home = TestHome::claim("wiring");
@@ -4951,7 +5031,10 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
         "the operator's own statusline goes after `statusline`, never away"
     );
 
-    let unwired = bench(h, &["wiring", "--check"]);
+    // codex itself is a stub that trusts every hook: this test is about the files.
+    let path = codex_trusting(h, &plan["codex"]["merge"], "trusted");
+    let check = || bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
+    let unwired = check();
     assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
     let report = json_of(&unwired);
     assert_eq!(
@@ -4983,7 +5066,7 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     write(".codex/hooks.json", &plan["codex"]["merge"]);
     fs::create_dir_all(h.join(".pi/agent/extensions/bench")).unwrap();
     fs::write(h.join(".pi/agent/extensions/bench/index.ts"), "").unwrap();
-    let half = json_of(&bench(h, &["wiring", "--check"]));
+    let half = json_of(&check());
     assert_eq!(half["claude"]["missing_events"], serde_json::json!([]));
     assert_eq!(
         half["claude"]["cross_session_inbound_accept"], false,
@@ -4992,7 +5075,7 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
 
     claude["crossSessionInbound"] = serde_json::json!("accept");
     write(".claude/settings.json", &claude);
-    let wired = bench(h, &["wiring", "--check"]);
+    let wired = check();
     assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
     assert_eq!(
         json_of(&wired)["claude"]["statusline_reports_limits"],
@@ -5002,7 +5085,7 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     claude["statusLine"] = serde_json::json!({"type": "command",
         "command": format!("{bench_path} statusline ~/.claude/statusline.py")});
     write(".claude/settings.json", &claude);
-    let limits = json_of(&bench(h, &["wiring", "--check"]));
+    let limits = json_of(&check());
     assert_eq!(
         limits["claude"]["statusline_reports_limits"], true,
         "{limits}"
@@ -8773,6 +8856,11 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
 // ---------------------------------------------------------------------------
 
 /// `bench` with `input` on its stdin.
+///
+/// A run that refuses before reading stdin (`file write` without `--expect`, `hook` for a
+/// harness it does not know) may exit before the write lands, and the write then fails with
+/// a broken pipe. That is the refusal itself, not a fault, so it is let through: the caller
+/// still asserts the exit code and what the run left behind.
 fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
     let mut child = isolated(bench_bin())
         .env("HOME", home)
@@ -8782,12 +8870,10 @@ fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
         .stderr(Stdio::piped())
         .spawn()
         .expect("run bench");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    match child.stdin.take().unwrap().write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("bench's stdin: {e}"),
+        _ => {}
+    }
     let out = child.wait_with_output().unwrap();
     CliRun {
         code: out.status.code().unwrap_or(-1),
