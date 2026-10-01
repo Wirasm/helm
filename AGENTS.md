@@ -241,6 +241,7 @@ Conventional commits, written as a human, with no AI attribution.
 - `.claude/skills/`: the seven listed in `skills-lock.json` are vendored from
   `mattpocock/skills` and pinned by hash, so do not hand-edit them. helm's own are `helm-canvas`
   (what a canvas can do), `helm-board` (the drawable board), `post-canvas`, `pi-extensions` and
-  `helm-orchestrate` (running a fleet of agents on the bench); benchd's are `bench-panes`, `bench-mail`, `bench-browser` and `bench-sessions`.
+  `helm-orchestrate` (running a fleet of agents on the bench); benchd's are `bench-panes`,
+  `bench-mail`, `bench-browser` and `bench-sessions`.
 - `.claude/agents/`: `house-rules-auditor` checks a change against this project's written rules,
   quoting each one; `seam-analyzer` hunts a missing type at a seam.
