@@ -226,4 +226,127 @@ final class BrowserPaneLiveTests: XCTestCase {
         XCTAssertEqual((surface.layer?.contents as! CGImage?)?.width, 1280)
         pane.close(tab: target)
     }
+
+    // MARK: - Links, the menu and the cursor (#610)
+
+    /// The surface in a window, so clicks go in as real `NSEvent`s, with a frame on it.
+    private func windowed() async throws -> NSWindow {
+        let window = NSWindow(
+            contentRect: surface.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = surface
+        surface.model = pane
+        return window
+    }
+
+    /// The page's document is in and drawn. A gesture's listener armed in the blank document a
+    /// new tab starts with would never hear the click that lands in the page after it.
+    private func loaded() async throws {
+        try await eventually("the page is loaded (\(pane.tabs.current?.title ?? ""))") {
+            self.pane.tabs.current?.title == "ready" && self.surface.layer?.contents != nil
+        }
+    }
+
+    private func click(
+        _ window: NSWindow, _ down: NSEvent.EventType, _ up: NSEvent.EventType,
+        _ flags: NSEvent.ModifierFlags
+    ) {
+        for type in [down, up] {
+            let event = NSEvent.mouseEvent(
+                with: type, location: CGPoint(x: 100, y: 400), modifierFlags: flags, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: type == down ? 1 : 0)!
+            switch type {
+            case .leftMouseDown: surface.mouseDown(with: event)
+            case .leftMouseUp: surface.mouseUp(with: event)
+            case .rightMouseDown: surface.rightMouseDown(with: event)
+            default: surface.rightMouseUp(with: event)
+            }
+        }
+    }
+
+    /// AC1: ⌘-click on a link opens it as the operator's tab, shown and not marked as an
+    /// agent's — and only once: Chrome's own background tab is stopped by the listener.
+    func testACommandClickedLinkOpensAsTheOperatorsTab() async throws {
+        let window = try await windowed()
+        defer { window.close() }
+        let link = "http://127.0.0.1:9/helm-610-\(UUID().uuidString)"
+        let page = try await show(
+            "<title>ready</title><a href='\(link)' style='display:block;height:100vh'>go</a>")
+        try await loaded()
+        let before = pane.tabs.tabs.count
+        click(window, .leftMouseDown, .leftMouseUp, .command)
+        try await eventually("the link is the tab on show (\(pane.tabs.current?.url ?? ""))") {
+            self.pane.tabs.current?.url == link
+        }
+        let opened = try XCTUnwrap(pane.tabs.showing)
+        XCTAssertFalse(pane.tabs.fromOutside.contains(opened), "the operator's, not an agent's")
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(pane.tabs.tabs.count, before + 1, "one tab: Chrome opened none of its own")
+        pane.close(tab: opened)
+        pane.close(tab: page)
+    }
+
+    /// AC2: a page that handles ⌘-click itself keeps it, and right-click on a page with its own
+    /// menu shows none of ours.
+    func testAPageThatClaimsTheGestureKeepsIt() async throws {
+        let window = try await windowed()
+        defer { window.close() }
+        var menus = 0
+        surface.presentMenu = { _, _, _ in menus += 1 }
+        let page = try await show(
+            "<title>ready</title><a href='http://127.0.0.1:9/x' style='display:block;height:100vh'"
+                + " onclick=\"event.preventDefault(); document.title = 'page:' + event.metaKey\""
+                + " oncontextmenu=\"event.preventDefault(); document.title = 'menu'\">x</a>")
+        try await loaded()
+        let before = pane.tabs.tabs.count
+        click(window, .leftMouseDown, .leftMouseUp, .command)
+        try await eventually("the page handled it (\(pane.tabs.current?.title ?? ""))") {
+            self.pane.tabs.current?.title == "page:true"
+        }
+        click(window, .rightMouseDown, .rightMouseUp, [])
+        try await eventually("the page drew its menu (\(pane.tabs.current?.title ?? ""))") {
+            self.pane.tabs.current?.title == "menu"
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(pane.tabs.tabs.count, before, "no tab opened")
+        XCTAssertEqual(menus, 0, "no native menu over the page's")
+        pane.close(tab: page)
+    }
+
+    /// AC3: right-click on a link, on a page with no menu of its own, gets the native one.
+    func testARightClickOnALinkGetsTheNativeMenu() async throws {
+        let window = try await windowed()
+        defer { window.close() }
+        var shown: [String] = []
+        surface.presentMenu = { menu, _, _ in shown = menu.items.map(\.title) }
+        let page = try await show(
+            "<title>ready</title><a href='http://127.0.0.1:9/menu'"
+                + " style='display:block;height:100vh'>x</a>")
+        try await loaded()
+        click(window, .rightMouseDown, .rightMouseUp, [])
+        try await eventually("the menu (\(shown))") {
+            shown == ["Open Link in New Tab", "Copy Link"]
+        }
+        pane.close(tab: page)
+    }
+
+    /// AC4: the page says which cursor is under a point: a link's, text's, a field's, its CSS.
+    func testThePageSaysWhichCursorIsUnderThePointer() async throws {
+        let page = try await show(
+            "<body style='margin:0;font:20px sans-serif'>"
+                + "<a href='http://127.0.0.1:9/' style='display:block;height:40px'>link</a>"
+                + "<p style='margin:0;height:40px'>plain text</p>"
+                + "<input style='display:block;height:40px;width:200px'>"
+                + "<div style='cursor:col-resize;height:40px'></div>")
+        try await eventually("the link's cursor") {
+            await self.pane.cursor(at: CGPoint(x: 10, y: 20)) == "pointer"
+        }
+        let text = await pane.cursor(at: CGPoint(x: 10, y: 50))
+        let field = await pane.cursor(at: CGPoint(x: 10, y: 100))
+        let resize = await pane.cursor(at: CGPoint(x: 10, y: 140))
+        let empty = await pane.cursor(at: CGPoint(x: 700, y: 60))
+        XCTAssertEqual([text, field, resize, empty], ["text", "text", "col-resize", "default"])
+        pane.close(tab: page)
+    }
 }

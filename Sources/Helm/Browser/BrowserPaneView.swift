@@ -241,6 +241,21 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// built-in one in a test, which must not read his keymap file.
     var keyTable: @MainActor () -> [KeyBinding] = { Keymap.shared.table }
 
+    /// Shows the right-click menu (`BrowserPointer.swift`); a test records it instead, since a
+    /// real one tracks the mouse until it closes.
+    var presentMenu: @MainActor (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in
+        menu.popUp(positioning: nil, at: point, in: view)
+    }
+
+    /// The page's cursor under the pointer (`BrowserCursor`).
+    private(set) var pageCursor = NSCursor.arrow
+    /// One cursor ask at a time; a move made while one is out is kept, the latest only.
+    private var cursorAsking = false
+    private var nextCursorPoint: CGPoint?
+    /// Mouse events that arrived while a gesture's press waits for its listener
+    /// (`BrowserGesture`), sent after the press in order; nil when no press waits.
+    private var held: [BrowserPaneModel.MouseEvent]?
+
     private var currentFrame: BrowserFrame?
     private var markedText = ""
     private var markedSelection = NSRange(location: NSNotFound, length: 0)
@@ -294,7 +309,8 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(
             NSTrackingArea(
-                rect: bounds, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                rect: bounds,
+                options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
                 owner: self))
     }
 
@@ -316,14 +332,14 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        send(event, type: "mousePressed", button: "left")
+        press(event, button: "left")
     }
     override func mouseUp(with event: NSEvent) {
         send(event, type: "mouseReleased", button: "left")
     }
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        send(event, type: "mousePressed", button: "right")
+        press(event, button: "right")
     }
     override func rightMouseUp(with event: NSEvent) {
         send(event, type: "mouseReleased", button: "right")
@@ -333,6 +349,74 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     }
     override func mouseMoved(with event: NSEvent) {
         send(event, type: "mouseMoved", button: "none")
+        askCursor(at: pagePoint(event))
+    }
+    /// The middle button; AppKit numbers it 2. Other buttons (back, forward) are not sent.
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return super.otherMouseDown(with: event) }
+        window?.makeFirstResponder(self)
+        press(event, button: "middle")
+    }
+    override func otherMouseUp(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return super.otherMouseUp(with: event) }
+        send(event, type: "mouseReleased", button: "middle")
+    }
+    override func otherMouseDragged(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return super.otherMouseDragged(with: event) }
+        send(event, type: "mouseMoved", button: "middle")
+    }
+
+    override func cursorUpdate(with _: NSEvent) { pageCursor.set() }
+
+    /// A press that is a gesture (`BrowserGesture`) waits for its listener on the page before
+    /// it is sent; every other press goes at once.
+    private func press(_ event: NSEvent, button: String) {
+        guard held == nil, let model,
+            let gesture = BrowserGesture(button: button, modifiers: event.modifierFlags),
+            let pressed = mouseEvent(event, type: "mousePressed", button: button)
+        else { return send(event, type: "mousePressed", button: button) }
+        held = []
+        let point = convert(event.locationInWindow, from: nil)
+        Task { [weak self] in
+            let report = await model.gesture(gesture) {
+                model.mouse(pressed)
+                for later in self?.held ?? [] { model.mouse(later) }
+                self?.held = nil
+            }
+            guard let self, let report else { return }
+            act(on: report, of: gesture, at: point)
+        }
+    }
+
+    /// Asks the page for its cursor at `point`, the pane's edge outside the page being the
+    /// arrow, and shows it while the pointer is over the pane.
+    private func askCursor(at point: CGPoint?) {
+        guard let point else {
+            nextCursorPoint = nil
+            return showCursor(.arrow)
+        }
+        guard !cursorAsking else {
+            nextCursorPoint = point
+            return
+        }
+        cursorAsking = true
+        Task { [weak self] in
+            var point = point
+            while let self {
+                showCursor(BrowserCursor.cursor(css: await model?.cursor(at: point)))
+                guard let next = nextCursorPoint else { return cursorAsking = false }
+                nextCursorPoint = nil
+                point = next
+            }
+        }
+    }
+
+    private func showCursor(_ cursor: NSCursor) {
+        pageCursor = cursor
+        guard let window,
+            bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        else { return }
+        cursor.set()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -352,14 +436,25 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     private static let pixelsPerWheelNotch: CGFloat = 40
 
     private func send(_ event: NSEvent, type: String, button: String) {
-        guard let point = pagePoint(event) else { return }
+        guard let params = mouseEvent(event, type: type, button: button) else { return }
+        if held != nil {
+            held?.append(params)
+        } else {
+            model?.mouse(params)
+        }
+    }
+
+    private func mouseEvent(
+        _ event: NSEvent, type: String, button: String
+    ) -> BrowserPaneModel.MouseEvent? {
+        guard let point = pagePoint(event) else { return nil }
         // Which buttons are down *after* this event, as a DOM `buttons` bitmask.
-        let held = type == "mouseReleased" ? 0 : (button == "left" ? 1 : button == "right" ? 2 : 0)
-        model?.mouse(
-            .init(
-                type: type, x: point.x, y: point.y, button: button, buttons: held,
-                clickCount: type == "mouseMoved" ? 0 : event.clickCount,
-                modifiers: Self.modifiers(event.modifierFlags).rawValue))
+        let down = ["left": 1, "right": 2, "middle": 4][button] ?? 0
+        return .init(
+            type: type, x: point.x, y: point.y, button: button,
+            buttons: type == "mouseReleased" ? 0 : down,
+            clickCount: type == "mouseMoved" ? 0 : event.clickCount,
+            modifiers: Self.modifiers(event.modifierFlags).rawValue)
     }
 
     private func pagePoint(_ event: NSEvent) -> CGPoint? {
@@ -572,6 +667,11 @@ protocol BrowserInputSink: AnyObject {
     func textCaretRect() async -> CGRect?
     func selectedText() async -> String?
     func viewportChanged(size: CGSize, scale: CGFloat)
+    /// What a gesture landed on (`BrowserPointer.swift`); `dispatch` sends its mouse events.
+    func gesture(_ gesture: BrowserGesture, dispatch: () -> Void) async -> BrowserPointerReport?
+    func cursor(at point: CGPoint) async -> String?
+    func open(_ url: URL)
+    func perform(_ command: BrowserCommand)
 }
 
 /// Where a point in the pane lands on the page.

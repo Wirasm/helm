@@ -567,6 +567,15 @@ extension BrowserPaneModel: BrowserInputSink {
         return CGRect(x: caret.x, y: caret.y, width: caret.width, height: caret.height)
     }
 
+    /// A CDP call to the page the operator's input goes to: nil under a dialog, with no browser,
+    /// or when the call fails. How `BrowserPointer.swift` asks the page about the pointer.
+    func inputCall<Result: Decodable>(
+        _ method: String, _ params: some Encodable, returning _: Result.Type
+    ) async -> Result? {
+        guard let connection, let session = inputSession else { return nil }
+        return try? await connection.call(method, params, session: session, returning: Result.self)
+    }
+
     /// The page's selection as text: a text field's selected range, else the document's. None
     /// under a dialog: the evaluate would wait for the answer and then overwrite the clipboard,
     /// maybe after the operator had copied something else.
@@ -648,11 +657,11 @@ private struct TextCaret: Decodable {
 }
 private struct InsertText: Encodable { let text: String }
 private struct Navigate: Encodable { let url: String }
-private struct Evaluate: Encodable {
+struct Evaluate: Encodable {
     let expression: String
     let returnByValue: Bool
 }
-private struct Evaluated<Value: Decodable>: Decodable {
+struct Evaluated<Value: Decodable>: Decodable {
     struct Remote: Decodable { let value: Value? }
     let result: Remote
 }
