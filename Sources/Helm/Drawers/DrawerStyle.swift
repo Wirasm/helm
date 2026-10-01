@@ -1,12 +1,13 @@
+import HelmWire
+
 /// Where a drawer sits over the bench and how much of the window it takes (#356).
 ///
-/// helm's presentation, so it lives in helm's file (`[drawer.<name>]` in `keymap.toml`) rather
-/// than in benchd's document: the document says which drawer is open and what it holds, and
-/// nothing about how it is drawn.
+/// The size is helm's presentation, from `[drawer.<name>]` in `keymap.toml`. The edge is the
+/// operator's: where he dragged the drawer, kept in benchd's document (#178), and the keymap's
+/// edge is only the default for a drawer he has not placed (`placed(by:)`).
 struct DrawerStyle: Equatable {
-    enum Edge: String {
-        case left, right, bottom
-    }
+    /// The wire's spelling, so the keymap file and the document name an edge one way.
+    typealias Edge = BenchDocument.DrawerEdge
 
     var edge: Edge
     /// A fraction of the window: of its height for a drawer on the bottom edge, of its width
@@ -14,6 +15,14 @@ struct DrawerStyle: Equatable {
     var size: Double
 
     static let sizes = 0.1...0.9
+
+    /// This style with the edge the operator put drawer `name` against, when the document has
+    /// one.
+    func placed(_ name: String, by document: BenchDocument?) -> DrawerStyle {
+        var style = self
+        if let edge = document?.drawerEdges[name] { style.edge = edge }
+        return style
+    }
 
     /// benchd's `DrawerName::new` (`daemon/crates/bench-doc/src/drawer.rs`): 1 to 32 of
     /// `[a-z0-9-]`. Spelled again so the keymap file is refused when it loads, with the line,

@@ -32,8 +32,9 @@ enum WorkspaceDrop {
                 !over.workspace.bench.panes.contains(where: { $0.surface.alreadyShows(surface) })
             else { return nil }
             return DropTarget(to: .workspace(over.workspace.path), preview: over.frame)
-        case .files:
-            // Files open on a bench, at a place on it (`FileDrop`); the bar is not one.
+        case .files, .drawer:
+            // Files open on a bench, at a place on it (`FileDrop`), and a drawer goes to a
+            // window edge (`DrawerDrop`); the bar is neither.
             return nil
         }
     }

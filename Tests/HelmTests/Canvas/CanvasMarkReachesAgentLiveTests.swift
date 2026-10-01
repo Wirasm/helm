@@ -257,7 +257,7 @@ final class CanvasMarkReachesAgentLiveTests: XCTestCase {
             self.model = model
             let courier = CanvasNoteCourier(mail: mail)
             model.onAnnotation = { annotation, canvas in
-                courier.send(annotation, on: canvas, along: route)
+                courier.send(annotation, on: canvas, liveFile: nil, along: route)
             }
             // The clipboard this suite is allowed to write to. A `.clipboard` route copies, and
             // the default sink is the operator's own `NSPasteboard.general` — see

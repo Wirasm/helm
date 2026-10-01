@@ -120,7 +120,7 @@ spec:
                 bench/get workspace/open workspace/close workspace/activate workspace/move \
                 pane/open pane/split pane/close pane/show \
                 pane/move pane/name focus/slot focus/step focus/waiting \
-                layout/resize drawer/toggle just/run just/list restore screen/get screen/send \
+                layout/resize drawer/toggle drawer/place just/run just/list restore screen/get screen/send \
                 file/read file/write file/append \
                 command/run path/exists git/repositories \
                 prp/note prp/stores prp/artifacts path/resolve; do

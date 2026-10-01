@@ -480,12 +480,12 @@ pub fn apply(
                 })
                 .map(|()| Outcome::default()),
         },
-        LayoutVerb::DrawerToggle { drawer, surface } => {
-            match doc.toggle_drawer(drawer, surface.clone(), focus)? {
-                Some(id) => Ok(created(id)),
-                None => Ok(Outcome::default()),
-            }
-        }
+        LayoutVerb::DrawerToggle { drawer, surface } => Ok(doc
+            .toggle_drawer(drawer, surface.clone(), focus)?
+            .map_or_else(Outcome::default, created)),
+        LayoutVerb::DrawerPlace { drawer, edge } => doc
+            .place_drawer(drawer, *edge, focus)
+            .map(|()| Outcome::default()),
     }
 }
 

@@ -37,6 +37,8 @@ pub enum Refusal {
     NotATerminal(PaneId),
     /// Opening a drawer that holds nothing, with nothing named to put in it.
     EmptyDrawer(DrawerName),
+    /// Where a drawer sits is the operator's: an agent moves one only when he asked (#178).
+    DrawerPlacement(DrawerName),
     /// Drawer names are one namespace across the document.
     DuplicateDrawer(DrawerName),
     /// A bench verb (a move, a resize, a focus) named a pane that lives in a drawer.
@@ -89,6 +91,10 @@ impl fmt::Display for Refusal {
                 "drawer {name} holds nothing — name a surface to open it with"
             ),
             Refusal::DuplicateDrawer(name) => write!(f, "drawer {name} appears twice"),
+            Refusal::DrawerPlacement(name) => write!(
+                f,
+                "where drawer {name} sits is the operator's, and the operator did not ask — pass --asked when they did"
+            ),
             Refusal::PaneInDrawer { pane, drawer } => write!(
                 f,
                 "pane {pane} is in drawer {drawer}, and this verb acts on the bench"
