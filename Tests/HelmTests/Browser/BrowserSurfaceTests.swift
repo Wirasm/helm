@@ -11,9 +11,11 @@ final class BrowserSurfaceTests: XCTestCase {
         var keys: [BrowserPaneModel.KeyEvent] = []
         var mice: [BrowserPaneModel.MouseEvent] = []
         var inserted: [String] = []
+        var pasted: [BrowserPaste] = []
         func mouse(_ params: BrowserPaneModel.MouseEvent) { mice.append(params) }
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
+        func paste(_ payload: BrowserPaste) { pasted.append(payload) }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
 
@@ -158,14 +160,19 @@ final class BrowserSurfaceTests: XCTestCase {
         XCTAssertTrue(recorder.keys.isEmpty)
     }
 
-    func testPasteInsertsTheClipboardAsText() {
+    func testPasteCarriesClipboardFormatsInsteadOfTypingThem() {
         let board = NSPasteboard(name: .init("helm-browser-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
         surface.pasteboard = board
         board.clearContents()
         board.setString("päste ✓", forType: .string)
+        board.setString("<b>päste ✓</b>", forType: .html)
+        board.setData(Data([1, 2, 3]), forType: .png)
         surface.paste(nil)
-        XCTAssertEqual(recorder.inserted, ["päste ✓"])
+        XCTAssertEqual(
+            recorder.pasted,
+            [BrowserPaste(text: "päste ✓", html: "<b>päste ✓</b>", png: Data([1, 2, 3]))])
+        XCTAssertTrue(recorder.inserted.isEmpty)
     }
 
     func testAClickLandsOnThePagePointUnderIt() throws {

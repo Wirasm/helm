@@ -43,6 +43,8 @@ struct BrowserPaneView: View {
             Divider()
             ZStack {
                 BrowserSurface(model: model, holdsKeyboard: holdsKeyboard)
+                BrowserFormPickerView(picker: model.pageInput.forms, page: { model.surface })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 if let shown = model.tabs.showing, let dialog = model.dialogs[shown] {
                     BrowserDialogStrip(dialog: dialog, takesKeyboard: pageHasKeyboard) {
                         accept, text, hadKeyboard in
@@ -552,8 +554,8 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     }
 
     @objc func paste(_: Any?) {
-        guard let text = pasteboard.string(forType: .string), !text.isEmpty else { return }
-        model?.insertText(text)
+        guard let payload = BrowserPaste(pasteboard: pasteboard) else { return }
+        model?.paste(payload)
     }
 
     @objc override func selectAll(_: Any?) {
@@ -627,6 +629,7 @@ protocol BrowserInputSink: AnyObject {
     func mouse(_ params: BrowserPaneModel.MouseEvent)
     func key(_ params: BrowserPaneModel.KeyEvent)
     func insertText(_ text: String)
+    func paste(_ payload: BrowserPaste)
     func selectedText() async -> String?
     func viewportChanged(size: CGSize, scale: CGFloat)
     /// What a gesture landed on (`BrowserPointer.swift`); `dispatch` sends its mouse events.
