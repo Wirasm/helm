@@ -97,7 +97,9 @@ impl Usage {
     /// Take in a newer report of the same harness. Per window, the one that resets later wins;
     /// in the same window the higher reading wins, because usage inside a window only rises.
     /// So an idle session repeating an older figure, or a resumed codex session's old record,
-    /// never replaces a busier one's. An equal reading only moves `at_ms` forward.
+    /// never replaces a busier one's. An equal reading only moves `at_ms` forward. A held window
+    /// that had already reset when the report was taken says nothing true any more, so a later
+    /// report replaces it whatever it says, one with no reset time included.
     pub fn merge(&mut self, newer: Usage) {
         for window in newer.windows {
             match self
@@ -106,13 +108,19 @@ impl Usage {
                 .find(|w| w.minutes == window.minutes)
             {
                 None => self.windows.push(window),
-                Some(held) => match (window.resets_at_ms, window.used_percent)
-                    .partial_cmp(&(held.resets_at_ms, held.used_percent))
-                {
-                    Some(std::cmp::Ordering::Greater) => *held = window,
-                    Some(std::cmp::Ordering::Equal) => held.at_ms = held.at_ms.max(window.at_ms),
-                    _ => {}
-                },
+                Some(held) => {
+                    let expired = held.resets_at_ms.is_some_and(|r| r <= window.at_ms);
+                    match (window.resets_at_ms, window.used_percent)
+                        .partial_cmp(&(held.resets_at_ms, held.used_percent))
+                    {
+                        Some(std::cmp::Ordering::Greater) => *held = window,
+                        _ if expired => *held = window,
+                        Some(std::cmp::Ordering::Equal) => {
+                            held.at_ms = held.at_ms.max(window.at_ms);
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         self.windows.sort_by_key(|w| w.minutes);
@@ -229,5 +237,16 @@ mod tests {
             held.windows.iter().map(|w| w.minutes).collect::<Vec<_>>(),
             [300, 10080]
         );
+        let no_reset = UsageWindow {
+            minutes: 300,
+            used_percent: 1.0,
+            resets_at_ms: None,
+            at_ms: 2_500,
+        };
+        held.merge(Usage {
+            harness: Harness::Claude,
+            windows: vec![no_reset.clone()],
+        });
+        assert_eq!(held.windows[0], no_reset, "the held window had reset");
     }
 }

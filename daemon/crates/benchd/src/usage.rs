@@ -4,23 +4,28 @@
 //! next report, which a working agent sends within a turn.
 
 use crate::Core;
-use bench_wire::Usage;
+use bench_wire::{Harness, Usage};
 use serde_json::Value;
 
-/// Take in one report: merged into what is held for its harness (`Usage::merge`).
+/// Take in one report: merged into what is held for its harness (`Usage::merge`), the first
+/// one included, so a held figure always has one window per length, in order.
 pub fn record(c: &mut Core, usage: Usage) {
-    match c.usage.get_mut(&usage.harness) {
-        Some(held) => held.merge(usage),
-        None => {
-            c.usage.insert(usage.harness, usage);
-        }
-    }
+    c.usage
+        .entry(usage.harness)
+        .or_insert_with(|| Usage {
+            harness: usage.harness,
+            windows: Vec::new(),
+        })
+        .merge(usage);
 }
 
-/// `usage/report`.
+/// `usage/report`. Only Claude and codex publish plan limits; pi has none to report.
 pub fn answer(c: &mut Core, args: &Value) -> Result<Value, String> {
     let usage: Usage =
         serde_json::from_value(args.clone()).map_err(|e| format!("usage/report args: {e}"))?;
+    if usage.harness == Harness::Pi {
+        return Err("usage/report: pi publishes no plan limits".into());
+    }
     record(c, usage);
     Ok(Value::Object(Default::default()))
 }

@@ -602,11 +602,12 @@ fn wiring(mode: Option<&str>) -> i32 {
                     "then": "open codex once and trust the hook in /hooks",
                 },
                 "pi": { "link": pi_link, "to": "<helm checkout>/pi/extensions/bench" },
-                // Claude's plan limits reach benchd only through its statusline (#143). Its
-                // own statusline command, if any, goes after `statusline`.
+                // Claude's plan limits reach benchd only through its statusline (#143), so the
+                // operator's own statusline command moves behind `statusline`, which runs it.
                 "claude_statusline": {
                     "file": claude_file,
-                    "statusLine": { "type": "command", "command": format!("{bench} statusline") },
+                    "statusLine": { "type": "command",
+                        "command": format!("{bench} statusline <your current statusLine command>") },
                 },
             });
             println!(
@@ -627,13 +628,18 @@ fn wiring(mode: Option<&str>) -> i32 {
             let codex_missing =
                 bench_wire::hook::unwired(Harness::Codex, &read(&codex_file), &bench);
             let inbound = claude["crossSessionInbound"] == "accept";
+            // Optional (#143), so reported but never part of the exit status.
+            let statusline = claude["statusLine"]["command"]
+                .as_str()
+                .is_some_and(|c| c.starts_with(&format!("{bench} statusline")));
             let pi = pi_link.join("index.ts").is_file();
             let exists = PathBuf::from(&bench).is_file();
             let report = json!({
                 "bench": bench,
                 "bench_exists": exists,
                 "claude": { "file": claude_file, "missing_events": claude_missing,
-                            "cross_session_inbound_accept": inbound },
+                            "cross_session_inbound_accept": inbound,
+                            "statusline_reports_limits": statusline },
                 "codex": { "file": codex_file, "missing_events": codex_missing },
                 "pi": { "link": pi_link, "installed": pi },
             });
