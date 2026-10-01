@@ -6536,6 +6536,90 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
     assert_eq!(written["reply"], "on it", "the agent's change landed");
 }
 
+#[test]
+fn the_helm_orchestrate_skills_snippets_execute_against_a_real_daemon() {
+    // The orchestration skill's two snippets run here, in order, as an orchestrator would run
+    // them: spawn a workstream and append its launch to the run file, then read the fleet.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/helm-orchestrate/SKILL.md"),
+    )
+    .expect("helm-orchestrate SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(snippets.len(), 2, "spawn and record, then read the fleet");
+
+    let home = TestHome::claim("orch-skill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let brief = artifact(&home.dir, "ws1.md");
+    let run = home.dir.join("run.md");
+    fs::write(&run, "## Event log\n\n- 10:00 run started\n").unwrap();
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = isolated("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", home.dir.join(".bench"))
+            .env("BENCH", bench_bin())
+            .env("AGENT", "pi")
+            .env("MODEL", "openai-codex/gpt-6-luna")
+            .env("EFFORT", "low")
+            .env("WORKTREE", &ws)
+            .env("WS", "ws1")
+            .env("BRIEF", &brief)
+            .env("RUN", &run)
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let log = fs::read_to_string(&run).unwrap();
+    let launch = log.lines().last().unwrap();
+    assert!(
+        launch.contains("launched ws1: pi openai-codex/gpt-6-luna, session s"),
+        "the launch is the run file's last line: {log}"
+    );
+    assert!(
+        !launch.contains("runtime -,"),
+        "pi's conversation id is recorded for --resume: {launch}"
+    );
+    assert_eq!(
+        outputs[0].trim(),
+        launch,
+        "the snippet echoes what it recorded"
+    );
+    assert!(
+        outputs[1]
+            .lines()
+            .any(|l| l.starts_with("ws1 pi unknown ") && l.ends_with(" unread=0")),
+        "the fleet lists the workstream by handle: {}",
+        outputs[1]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M5b: every terminal pane is a benchd session (#359)
 // ---------------------------------------------------------------------------
