@@ -362,6 +362,8 @@ pub struct Cache {
     /// what was appended since the last one — the regression check for a scan that starts
     /// over each time (the spike's naive search once read 193 MB per build).
     pub bytes_scanned: u64,
+    /// pi session names, scanned the same way: only what was appended since the last build.
+    pi_names: HashMap<PathBuf, crate::pi::NameScan>,
 }
 
 /// A running subagent's verdict.
@@ -423,9 +425,17 @@ impl Cache {
     }
 
     /// Drop every entry this build did not ask about.
+    /// A pi session's name ([`crate::pi::name`]), kept between builds like a transcript's tail.
+    pub fn pi_name(&mut self, session: &Path) -> Option<String> {
+        self.touched.push(session.to_path_buf());
+        let scan = self.pi_names.entry(session.to_path_buf()).or_default();
+        crate::pi::name(session, scan)
+    }
+
     pub fn end_build(&mut self) {
         let touched: std::collections::HashSet<PathBuf> = self.touched.drain(..).collect();
         self.entries.retain(|p, _| touched.contains(p));
+        self.pi_names.retain(|p, _| touched.contains(p));
     }
 }
 

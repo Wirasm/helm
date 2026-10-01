@@ -4657,6 +4657,59 @@ fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
 
 /// A benchd-spawned codex is listed by its thread, as its hooks report it, and once it ends by
 /// its rollout; `bench log` reads that rollout. The rollout's lines are real codex 0.157 shapes.
+/// `bench sessions`, `bench sessions --all` and `mail who` name a spawned codex by the thread it
+/// runs now, never benchd's `sN`, and after `/new` by the new one.
+#[test]
+fn a_spawned_codex_is_named_by_the_thread_it_runs_now_in_every_answer() {
+    let home = TestHome::claim("cxname");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start_with_fake(h, "codex");
+    let ws = workspace(h).display().to_string();
+    let run = bench(h, &["spawn", "--agent", "codex", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let v = json_of(&run);
+    let (session, pane) = (
+        v["session"].clone(),
+        v["pane"].as_str().unwrap().to_string(),
+    );
+    let pid = v["pid"].as_u64().unwrap() as u32;
+    wait_until("the stand-in has exec'd", Duration::from_secs(5), || {
+        bench_sessions::process::hook_caller(pid) == pid
+    });
+    let report = |thread: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
+                "cwd": ws, "pid": pid, "bench_session": session}),
+        );
+    };
+    let answers = || {
+        let plain = bench(h, &["sessions"]);
+        assert_eq!(plain.code, 0, "stderr: {}", plain.stderr);
+        let who = bench(h, &["mail", "who", "--pane", &pane]);
+        assert_eq!(who.code, 0, "stderr: {}", who.stderr);
+        let all = bench(h, &["sessions", "--all", "--workspace", &ws]);
+        assert_eq!(all.code, 0, "stderr: {}", all.stderr);
+        [
+            json_of(&plain)["sessions"][0]["runtime_session"].clone(),
+            json_of(&who)["session"].clone(),
+            json_of(&all)["rows"][0]["id"].clone(),
+        ]
+    };
+    let first = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    report(first);
+    assert_eq!(
+        answers(),
+        [first; 3].map(serde_json::Value::from),
+        "not {session}"
+    );
+    // `/new`: the same process reports a second thread, which is the one it runs now.
+    std::thread::sleep(Duration::from_millis(20));
+    let second = "01a0f663-47f0-7d53-b41a-68f3a1f656ac";
+    report(second);
+    assert_eq!(answers(), [second; 3].map(serde_json::Value::from));
+}
+
 #[test]
 fn a_spawned_codex_is_listed_by_its_thread_and_its_rollout_reads_as_a_log() {
     let home = TestHome::claim("cxrow");
@@ -7902,6 +7955,54 @@ fn a_codex_thread_a_live_session_holds_is_not_resumed_a_second_time() {
         serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
             "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"]}),
     );
+    let again = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+        ],
+    );
+    assert_eq!(again.code, 3, "{}", again.stderr);
+    assert!(again.stderr.contains("already live"), "{}", again.stderr);
+    // `/new` in that codex: it reports another thread, and its app-server keeps the first open.
+    std::thread::sleep(Duration::from_millis(20));
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": "SessionStart",
+            "session": "019a0dde-1128-7572-8528-e0979f7e7071",
+            "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"]}),
+    );
+    let after_new = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+        ],
+    );
+    assert_eq!(after_new.code, 3, "{}", after_new.stderr);
+    assert!(
+        after_new.stderr.contains("already live"),
+        "{}",
+        after_new.stderr
+    );
+}
+
+#[test]
+fn a_codex_the_operator_started_in_a_pane_is_not_resumed_a_second_time() {
+    let home = TestHome::claim("cxpane");
+    let ws = workspace(&home.dir).display().to_string();
+    let (bin, _) = write_fake_codex(&home.dir);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    // His codex in a shell pane: its hook declares the pane, never a benchd session.
+    let (_, pid) = terminal_process(&home.dir, "his-codex");
+    let thread = "019a0dde-1128-7572-8528-e0979f7e7072";
+    let reply = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
+            "cwd": ws, "pid": pid, "pane": HOOK_PANE}),
+    );
+    assert!(reply["handle"].is_string(), "it claimed a mailbox: {reply}");
     let again = bench(
         &home.dir,
         &[
