@@ -241,6 +241,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "focus/waiting",
     "layout/resize",
     "drawer/toggle",
+    "drawer/place",
     // M3: benchd asks helm for what only helm can do.
     "helm/ask",
     "helm/answer",
@@ -1384,7 +1385,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            55,
+            56,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

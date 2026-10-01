@@ -46,7 +46,7 @@ boots it out.
 
 **And the bench document (M4, #354), daemon side.** `bench-doc` is helm's `Workbench` —
 workspaces, columns, slots, panes, typed surfaces, placement as data — and benchd serves it:
-the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `drawer/toggle`,
+the layout verbs (`workspace/*`, `pane/*`, `focus/*`, `layout/resize`, `drawer/toggle`, `drawer/place`,
 `bench/get`), each logged as one `bench/changed` event that says who asked; `bench.json` as the
 record it boots from; and `events --follow`, one line per event with the whole document attached when it
 changed. The focus rule is the document's own: an agent's verb that would move the operator's
@@ -60,6 +60,14 @@ or closes one, and `pane/open` takes a `drawer` to put a pane in one. Which draw
 operator's focus, so an agent's toggle is refused without `asked`, and an agent's pane badges the
 drawer instead of opening it. No drawer operation touches a workspace. `bench.json` is version 1
 from here, so an older benchd quarantines it rather than dropping drawers on its next save.
+
+**Where a drawer sits is in the document too (#178).** `drawer/place {drawer, edge}` puts a
+drawer against the left, right or bottom edge; helm sends it when the operator drags the drawer
+by its header. The document keeps `drawer_edges` by name, so the edge outlives the drawer, which
+goes with its last pane. It moves no focus, so the document's focus guard would let it through;
+`place_drawer` refuses an agent without `asked` itself. A drawer with no edge is drawn where
+helm's keymap file (`[drawer.<name>] edge`) or its built-in table says, and the size is always
+helm's. The record stays version 1: an older benchd reads the document and drops only the edges.
 
 **A drop names its place (#178).** `pane/move`'s `to` is a step (the keyboard) or a place named by
 ids, `{tab: {slot, before?}}` or `{beside: {slot, side}}` (a dragged tab); `pane/open` takes the

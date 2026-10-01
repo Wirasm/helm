@@ -202,5 +202,9 @@
       "badged": false
     }
   ],
-  "open_drawer": "scratch"
+  "open_drawer": "scratch",
+  "drawer_edges": {
+    "browser": "left",
+    "notes": "bottom"
+  }
 }

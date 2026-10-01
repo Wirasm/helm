@@ -12,7 +12,7 @@
 //!
 //! These are helm's spool codes, kept on purpose.
 
-use bench_doc::{DrawerName, Surface};
+use bench_doc::{DrawerEdge, DrawerName, Surface};
 use bench_wire::{
     Actor, BENCH_URL, CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Endpoint, Harness,
     HookArgs, HookReply, JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs,
@@ -131,10 +131,13 @@ fn usage() -> &'static str {
      \x20     browser setup                       the same profile in a real window, to install\n\
      \x20                                         extensions and sign in; quit it to go headless\n\
      \x20     drawer toggle <name>                show a drawer over the bench, or hide it: the\n\
-     \x20           [--surface <s>]               operator's focus, so refused from an agent. <s>\n\
+     \x20           [--surface <s>] [--asked]     operator's focus, so an agent needs --asked. <s>\n\
      \x20                                         is what a new drawer starts with: browser,\n\
      \x20                                         sessions, archon, worktrees, terminal or\n\
      \x20                                         file:<path>\n\
+     \x20     drawer place <name>                 put a drawer against that window edge: where\n\
+     \x20           <left|right|bottom> [--asked] his drawers sit is the operator's, so an agent\n\
+     \x20                                         needs --asked\n\
      \x20     just <recipe> [args...]             run a recipe from <root>/rules/justfile here;\n\
      \x20                                         answers {run, log}, and just/finished says how\n\
      \x20                                         it ended\n\
@@ -166,6 +169,7 @@ fn run() -> i32 {
     let mut all = false;
     let mut json_out = false;
     let mut in_pane = false;
+    let mut asked = false;
 
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -185,6 +189,7 @@ fn run() -> i32 {
             "--json" => json_out = true,
             "--in-pane" => in_pane = true,
             "--follow" => follow = true,
+            "--asked" => asked = true,
             "--all" => all = true,
             "--to" | "--from" | "--subject" | "--body" | "--body-file" | "--handle"
             | "--workspace" | "--harness" | "--pane" | "--surface" => {
@@ -220,6 +225,9 @@ fn run() -> i32 {
     }
     if in_pane && verb != "attach" {
         return refuse("--in-pane is for `attach`");
+    }
+    if asked && verb != "drawer" {
+        return refuse("--asked here is for `drawer`; the pane verbs take it too");
     }
     if follow && verb != "events" {
         return refuse("--follow is for `events`");
@@ -259,7 +267,7 @@ fn run() -> i32 {
     }
     if verb == "drawer" {
         if positional.is_empty() {
-            return refuse("drawer needs a subcommand: toggle");
+            return refuse("drawer needs a subcommand: toggle, place");
         }
         verb = format!("drawer/{}", positional.remove(0));
     }
@@ -403,6 +411,23 @@ fn run() -> i32 {
                 .map(|v| v["args"].clone())
                 .unwrap_or(Value::Null)
         }
+        "drawer/place" => {
+            let [name, edge] = positional.as_slice() else {
+                return refuse(
+                    "drawer place needs a drawer name and an edge: left, right or bottom",
+                );
+            };
+            let drawer = match DrawerName::new(name) {
+                Ok(d) => d,
+                Err(why) => return refuse(&why),
+            };
+            let Ok(edge) = serde_json::from_value::<DrawerEdge>(json!(edge)) else {
+                return refuse(&format!("an edge is left, right or bottom, not {edge:?}"));
+            };
+            serde_json::to_value(LayoutVerb::DrawerPlace { drawer, edge })
+                .map(|v| v["args"].clone())
+                .unwrap_or(Value::Null)
+        }
         "mail/list" => json!(MailListArgs {
             handle: flag("handle").unwrap_or_else(own_handle),
         }),
@@ -428,7 +453,7 @@ fn run() -> i32 {
         verb: verb.clone(),
         args,
         root,
-        asked: false,
+        asked,
     };
     if verb == "attach" {
         attach::run(cli, in_pane)

@@ -201,7 +201,8 @@ a browser pane holds the keyboard). After changing a built-in key, regenerate
 command bus: do not add one.
 
 **Drawers are drawn over the bench, never in it** (#356). An agent puts a pane in a drawer, which
-badges it, and never opens one: `drawer/toggle` without *asked* is refused. A key with
+badges it, and never opens or moves one: `drawer/toggle` and `drawer/place` without *asked* are
+refused. The edge the operator drags a drawer to lives in benchd's document. A key with
 `action = "just"` runs a recipe from the operator's bench justfile through benchd.
 
 **Put a handler where its lifetime is right.** A subscription that must work while its view is
