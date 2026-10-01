@@ -170,7 +170,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
     fileprivate enum StepKeys: String, CodingKey { case step }
     fileprivate enum PlaceTagKeys: String, CodingKey { case tab, beside }
     fileprivate enum PlaceKeys: String, CodingKey { case slot, before, side }
-    private enum DividerKeys: String, CodingKey { case between, member, against }
+    fileprivate enum DividerKeys: String, CodingKey { case between, member, against }
 
     // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 18 (limit 15)
     package func encode(to encoder: any Encoder) throws {
@@ -223,17 +223,8 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encode(direction, forKey: .direction)
         case .focusWaiting: break
         case let .layoutResize(divider, fraction):
-            var d = a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)
-            switch divider {
-            case let .columns(member, against):
-                try d.encode("columns", forKey: .between)
-                try d.encode(member, forKey: .member)
-                try d.encode(against, forKey: .against)
-            case let .slots(member, against):
-                try d.encode("slots", forKey: .between)
-                try d.encode(member, forKey: .member)
-                try d.encode(against, forKey: .against)
-            }
+            try Self.encode(
+                divider, into: a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider))
             try a.encode(fraction, forKey: .fraction)
         case let .drawerToggle(name, surface):
             try a.encode(name, forKey: .drawer)
@@ -329,6 +320,23 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .verb, in: c, debugDescription: "not a layout verb: \(name)")
         }
+    }
+}
+
+extension BenchRequest {
+    /// `{between, member, against}`: which divider of `layout/resize`.
+    fileprivate static func encode(
+        _ divider: BenchDivider, into d: KeyedEncodingContainer<DividerKeys>
+    ) throws {
+        var d = d
+        let (between, member, against) =
+            switch divider {
+            case let .columns(member, against): ("columns", member, against)
+            case let .slots(member, against): ("slots", member, against)
+            }
+        try d.encode(between, forKey: .between)
+        try d.encode(member, forKey: .member)
+        try d.encode(against, forKey: .against)
     }
 }
 
