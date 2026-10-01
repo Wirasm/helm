@@ -161,9 +161,9 @@ pub struct SpawnSpec {
     /// The first prompt's file. argv carries a sentence naming it, never its text: the
     /// agent reads it as its first act, so nothing waits for a TUI to be ready and nothing is
     /// typed into the pty (#358), and `ps` shows a path rather than a plan (helm #93). The
-    /// file must outlive the spawn. A resume carries one only when the caller sends a new
-    /// message into the resumed conversation (`bench spawn --resume --prompt-file`); `bench
-    /// resume` re-enters without one.
+    /// file must outlive the spawn. A resume always carries one: the caller's new message
+    /// (`bench spawn --resume --prompt-file`), else the notice benchd writes for it
+    /// (`spawn::wire` in benchd), never the prompt of an earlier spawn.
     pub prompt_file: Option<String>,
     /// The caller's own flags, after the posture and before the prompt (`--remote-control`,
     /// say). They add to the posture, never replace it: a posture removes a prompt, and the

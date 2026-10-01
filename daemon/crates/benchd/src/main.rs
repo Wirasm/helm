@@ -1047,7 +1047,8 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
         return Err(refused(unresumable(spec.agent, sid)));
     };
     spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
-    // Re-entering is not a new message: the first prompt was the spawn's.
+    // The first prompt was the spawn's and is never sent again; `spawn::wire` gives the resume
+    // its notice instead.
     spec.prompt_file = None;
     let (id, root, notices) = {
         let mut c = core.lock().unwrap();

@@ -156,13 +156,34 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 /// claude's settings (its hooks), and codex's own app-server socket (#454). Every route that
 /// starts an agent, `spawn`, `restore` and `resume`, goes through here, so none starts one
 /// benchd cannot reach.
+///
+/// It also gives a resumed conversation its first message when the caller sent none: the
+/// [`resume_notice`], so the agent starts a turn rather than sitting at its prompt after its
+/// last turn was cut off. A caller's own prompt (`bench spawn --resume --prompt-file`, what
+/// `just release-resume` sends) wins. `bench resume` drops the old spawn's prompt before it
+/// gets here, so the notice is the only thing a resume ever sends that the caller did not.
 pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
     match spec.agent {
         AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
         AgentKind::Codex => spec.codex_server = Some(codex_server_socket(root, id)?),
         _ => {}
     }
+    if matches!(spec.conversation, Conversation::Resume(_)) && spec.prompt_file.is_none() {
+        spec.prompt_file = Some(write_prompt(root, &resume_notice(&crate::now_rfc3339()))?);
+    }
     Ok(())
+}
+
+/// What a conversation benchd resumes is told first. It asks only to carry on: the operator's
+/// own agents are resumed too, and the notice must never restate a task.
+fn resume_notice(at: &str) -> String {
+    format!(
+        "benchd resumed this conversation in a new process at {at}: benchd restarted, or the \
+         process it ran in ended. Everything above is still your conversation. Your last turn \
+         was interrupted. Continue where you were; if that work was already finished, say so in \
+         one line and wait. Check that anything you had running (gates, watchers, reviewers, \
+         background processes) is still alive, and re-arm it. This notice is not a new task.\n"
+    )
 }
 
 /// The hook trust `spec` starts with ([`SpawnSpec::codex_hook_trust`]): asked of codex for a
@@ -327,7 +348,8 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     bench_session::argv(&spec)?;
     let mut spec = spec;
     if let Some(text) = args.prompt {
-        spec.prompt_file = Some(write_prompt(core, &text)?);
+        let root = core.lock().unwrap().root.clone();
+        spec.prompt_file = Some(write_prompt(&root, &text)?);
     }
     Ok(Plan {
         agent,
@@ -344,13 +366,8 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
 /// reads it after the spawn answers (helm #93). A folder per spawn, because a read-only agent is
 /// granted its prompt's folder (`bench_session::argv`), and that grant must not reach another
 /// spawn's prompt.
-fn write_prompt(core: &Arc<Mutex<Core>>, text: &str) -> Result<String, String> {
-    let dir = core
-        .lock()
-        .unwrap()
-        .root
-        .join("prompts")
-        .join(mint_session_id());
+fn write_prompt(root: &std::path::Path, text: &str) -> Result<String, String> {
+    let dir = root.join("prompts").join(mint_session_id());
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("prompt.md");
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
