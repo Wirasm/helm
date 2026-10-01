@@ -29,7 +29,7 @@ named.
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build`, `swift test`, `xcodegen generate`, unless every change is one no Swift build or test reads | Swift toolchain, xcodegen |
 | `skills` | the `helm-board` and `post-canvas` skill gates | node, zsh, python3, git, lsof |
-| `daemon` | `daemon/test.sh`, when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill, `RenderableFile.swift`, the shell integration or GhosttyTerminal's `Package.swift` changed | cargo, lsof |
+| `daemon` | `daemon/test.sh`, when `daemon/`, `daemon.yml`, a `bench-*`, the `helm-canvas` or the `helm-orchestrate` skill, `RenderableFile.swift`, the shell integration or GhosttyTerminal's `Package.swift` changed | cargo, lsof |
 | `pi` | the `pi-extensions` gate, when `pi/` changed | node, `npm install` in `pi/`, lsof |
 
 "Changed" means against `origin/development`, committed or not. The path rules live only in
@@ -142,7 +142,7 @@ An agent's whole surface onto the bench is the `bench` CLI, the same door the op
 through: `open <file|browser|terminal>`, `split`, `show`, `focus`, `move`, `name`, `close`, `get`,
 `get pane`, `get screen`, `watch screen`, `send`, `spawn`, `sessions`, `file read|write`, `mail`.
 The skills are the guides: `bench-panes`, `bench-mail`, `bench-browser`, `bench-sessions`,
-`helm-canvas`.
+`helm-canvas`, and `helm-orchestrate` for running a fleet of agents through them.
 
 - **Appear, don't seize (#125).** Every verb lands in the background. `--asked` means the operator
   asked, and only then may a verb bring something forward or move his keyboard. benchd cannot know
@@ -243,7 +243,8 @@ Conventional commits, written as a human, with no AI attribution.
   (`docs/agents/domain.md`).
 - `.claude/skills/`: the seven listed in `skills-lock.json` are vendored from
   `mattpocock/skills` and pinned by hash, so do not hand-edit them. helm's own are `helm-canvas`
-  (what a canvas can do), `helm-board` (the drawable board), `post-canvas` and `pi-extensions`;
-  benchd's are `bench-panes`, `bench-mail`, `bench-browser` and `bench-sessions`.
+  (what a canvas can do), `helm-board` (the drawable board), `post-canvas`, `pi-extensions` and
+  `helm-orchestrate` (running a fleet of agents on the bench); benchd's are `bench-panes`,
+  `bench-mail`, `bench-browser` and `bench-sessions`.
 - `.claude/agents/`: `house-rules-auditor` checks a change against this project's written rules,
   quoting each one; `seam-analyzer` hunts a missing type at a seam.

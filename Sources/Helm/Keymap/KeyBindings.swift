@@ -11,6 +11,14 @@ import SwiftUI
 ///
 /// **⌘T, ⌘W, ⌘L, ⌘R, ⌘[ and ⌘] are the browser's, and only in a browser pane** (#542). Outside
 /// one, ⌘T stays unbound (it left with the chat face, #375) and ⌘W stays the window's.
+///
+/// **⌘K, ⌘N, ⌘D and ⌘O are the page's in a browser pane** (#548): GitHub, Linear and Slack all
+/// use ⌘K, and helm has no browser-pane use for any of the four. ⌘⇧P opens the palette from
+/// there. What stays helm's in a browser pane does something to the bench or helm itself, which
+/// is as useful from a page as from anywhere: ⌘J (zoom the slot), the ⌘⇧ drawers and toggles (⌘⇧B
+/// is how the browser drawer closes), and ⌃1–9 and ⌃←/→ (workspaces). The page surface keeps
+/// the menu's mirror of a page key from firing too (`bindsElsewhere`), which also gives ⌘↑/⌘↓
+/// back to pages; the prompt-jump menu items used to take them.
 enum KeyBindings {
     /// In hint order: the key pop-up shows hints in the order their label first appears here,
     /// and the menu lists items in this order. Match order would only matter where two rows
@@ -28,7 +36,7 @@ enum KeyBindings {
 
     private static let panes: [KeyBinding] = [
         KeyBinding(
-            .character("n"), .command, .verb(.newTerminal), hint: "new",
+            .character("n"), .command, .verb(.newTerminal), when: .awayFromBrowser, hint: "new",
             menu: "New Terminal"),
         // ⌘⇧N — a note, beside ⌘N because it is the same shape one surface over: ⌘N makes a
         // pane to work in, ⌘⇧N one to write in. Shift arrives applied and `match` folds case,
@@ -37,8 +45,8 @@ enum KeyBindings {
             .character("n"), [.command, .shift], .local(.newNote), hint: "note",
             menu: "New Note"),
         KeyBinding(
-            .character("d"), .command, .verb(.split(.right)), hint: "split",
-            menu: "Split Right"),
+            .character("d"), .command, .verb(.split(.right)), when: .awayFromBrowser,
+            hint: "split", menu: "Split Right"),
         KeyBinding(
             .character("d"), [.command, .shift], .verb(.split(.down)), hint: "split down",
             menu: "Split Down"),
@@ -128,8 +136,8 @@ enum KeyBindings {
     /// text-navigation meaning everywhere else.
     private static let turns: [KeyBinding] = [
         KeyBinding(
-            .character("o"), .command, .local(.openArtifactPanel), hint: "artifact",
-            menu: "Open Artifact…"),
+            .character("o"), .command, .local(.openArtifactPanel), when: .awayFromBrowser,
+            hint: "artifact", menu: "Open Artifact…"),
         KeyBinding(
             ArrowKey.up.trigger, .command, .local(.jumpToPrompt(offset: -1)),
             when: .terminalFocused,
@@ -167,9 +175,14 @@ enum KeyBindings {
 
     private static let chrome: [KeyBinding] = [
         // ⌘K — the command palette (#500): anything a key can do, found by typing its name.
+        // A page's own ⌘K in a browser pane (#548), where ⌘⇧P is the way in, as in VS Code;
+        // ⌘⇧P works everywhere, so one key opens the palette wherever the keyboard is.
         KeyBinding(
-            .character("k"), .command, .local(.toggleCommandPalette), hint: "commands",
-            menu: "Command Palette"),
+            .character("k"), .command, .local(.toggleCommandPalette), when: .awayFromBrowser,
+            hint: "commands", menu: "Command Palette"),
+        KeyBinding(
+            .character("p"), [.command, .shift], .local(.toggleCommandPalette),
+            hint: "commands"),
         KeyBinding(
             .character("o"), [.command, .shift], .local(.openWorkspacePanel), hint: "folder",
             menu: "Open Workspace…"),
@@ -246,6 +259,24 @@ enum KeyBindings {
         KeyBinding(
             .character(key), modifiers, .local(.browser(.zoom(step))), when: .browserFocused,
             hint: "zoom")
+    }
+
+    /// Whether helm binds a chord somewhere, but no row fires it where the keyboard is now
+    /// (#548). ⌘K in a browser pane is one: the page's, so the page surface sends it to the page
+    /// before the menu mirror of its row (`KeyBindingMenu`) can claim it, since a menu item
+    /// fires wherever the keyboard is. A chord helm never binds (⌘Q, ⌘C) answers false and goes
+    /// to the menu as ever.
+    static func bindsElsewhere(
+        characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
+        focus: KeyFocus, in table: [KeyBinding]
+    ) -> Bool {
+        func fires(_ elsewhere: KeyFocus) -> Bool {
+            match(
+                characters: characters, keyCode: keyCode, modifiers: modifiers,
+                focus: elsewhere, in: table) != nil
+        }
+        return !fires(focus)
+            && [KeyFocus.terminal, .browser, .other].contains { $0 != focus && fires($0) }
     }
 
     /// The row a keystroke fires, if any.

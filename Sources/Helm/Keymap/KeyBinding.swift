@@ -148,7 +148,7 @@ enum VerbTemplate: Equatable {
             return .paneShow(slot.panes[index].id)
         case let .stepFocus(direction): return .focusStep(direction: direction)
         case let .moveFocused(direction):
-            return bench?.focusedPane.map { .paneMove($0.id, direction) }
+            return bench?.focusedPane.map { .paneMove($0.id, .step(direction)) }
         case let .activateWorkspace(index):
             guard workspaces.indices.contains(index) else { return nil }
             return .workspaceActivate(path: workspaces[index].value)

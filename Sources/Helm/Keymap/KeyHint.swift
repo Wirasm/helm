@@ -111,8 +111,16 @@ enum KeyGlyph {
     ///
     /// The first row that binds the action, which for an action bound once is the only one.
     /// nil when nothing binds it or its trigger has no glyph.
-    static func binding(for action: KeyBinding.Action, in rows: [KeyBinding]) -> String? {
-        guard let row = rows.first(where: { $0.action == action }),
+    ///
+    /// With `focus`, only a row that fires there: the status bar names ⌘⇧P for the palette while
+    /// a browser pane has the keyboard, where ⌘K is the page's (#548).
+    static func binding(
+        for action: KeyBinding.Action, in rows: [KeyBinding], focus: KeyFocus? = nil
+    ) -> String? {
+        guard
+            let row = rows.first(where: {
+                $0.action == action && (focus.map($0.canFire) ?? true)
+            }),
             let key = trigger(row.trigger)
         else { return nil }
         return modifiers(row.modifiers) + key
