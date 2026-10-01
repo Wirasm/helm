@@ -70,9 +70,10 @@ package enum HelmAsk: Codable, Equatable, Sendable {
     }
 }
 
-/// The largest request line benchd reads for `helm/answer`, `file/write` and `file/append`
-/// (`bench_wire::FILE_REQUEST_MAX_BYTES`). A capture answer longer than this would be refused
-/// unread and leave the caller waiting, so helm refuses it first and says why.
+/// The largest request line benchd reads for `helm/answer`, `file/write`, `file/append` and
+/// `browser/upload` (`bench_wire::FILE_REQUEST_MAX_BYTES`). A capture answer or an upload longer
+/// than this would be refused unread and leave the caller waiting, so helm refuses it first and
+/// says why.
 package let benchLargeRequestMaxBytes = 16 * 1024 * 1024
 
 /// `helm/answer`: helm's outcome for one ask, sent as helm. benchd hands `status`, `reason` and

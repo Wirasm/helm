@@ -117,6 +117,7 @@ final class BindingTableTests: XCTestCase {
         let expected: [(String, BrowserCommand)] = [
             ("t", .newTab), ("w", .closeTab), ("l", .focusAddress), ("r", .reload),
             ("[", .back), ("]", .forward), ("3", .showTab(index: 2)), ("9", .showTab(index: 8)),
+            ("f", .find),
         ]
         for (key, command) in expected {
             XCTAssertEqual(
@@ -127,7 +128,7 @@ final class BindingTableTests: XCTestCase {
     /// …and nowhere else: every one of those chords does what it did before #542.
     func testBrowserKeysLeaveEveryOtherFocusAlone() {
         for focus in [KeyFocus.terminal, .other] {
-            for key in ["t", "w", "l", "r", "[", "]"] {
+            for key in ["t", "w", "l", "r", "[", "]", "f"] {
                 XCTAssertNil(match(key, .command, focus: focus), "⌘\(key) in \(focus)")
             }
             XCTAssertEqual(
