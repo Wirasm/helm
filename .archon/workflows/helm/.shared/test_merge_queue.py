@@ -4,8 +4,11 @@ Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .archon/workflows
 """
 
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import merge_queue
@@ -293,6 +296,89 @@ class AfterTheMergeCommand(unittest.TestCase):
         views = [{"state": "MERGED", "mergeCommit": {"oid": "m"}}, ["tip", "head"]]
         item, report = self.merge_with(views)
         self.assertEqual((item["status"], report["merged"], report["stopped"]), ("merged", [7], ""))
+
+
+class PruneAfterTheBatch(unittest.TestCase):
+    """The report prunes the worktrees of the PRs this batch merged, and only those."""
+
+    def test_only_merged_branches_are_handed_to_the_pruner(self):
+        tmp = tempfile.mkdtemp()
+        env = {"ARTIFACTS_DIR": os.path.join(tmp, "run"), "STATE_DIR": os.path.join(tmp, "state")}
+        with mock.patch.dict(os.environ, env):
+            queue = merge_queue.Queue()
+        statuses = ["merged", "held", "merged_unverified", "landed_through", "merged"]
+        queue.state = {"repo": "o/r", "mode": "merge", "required": [], "base_sha": "tip",
+                       "stopped": "", "items": [
+                           {"number": n, "status": st, "reason": "", "branch": f"b{n}"}
+                           for n, st in enumerate(statuses)]}
+        with mock.patch.object(merge_queue, "prune_merged", return_value="remove b0\nprune: 1 removed, 1 kept") as prune:
+            report = queue.report()
+        prune.assert_called_once_with(["b0", "b4"])
+        self.assertEqual(report["pruned"], "remove b0\nprune: 1 removed, 1 kept")
+        self.assertIn("prune: prune: 1 removed, 1 kept", report["summary"])
+
+
+SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "prune-worktrees.sh"
+
+
+class PruneMerged(unittest.TestCase):
+    """`prune_merged` against a real repository with the repo's own prune-worktrees.sh."""
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=cwd or self.repo, check=True, capture_output=True, text=True, timeout=60,
+        ).stdout.strip()
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        origin = self.tmp / "origin.git"
+        self.git("init", "-q", "--bare", "-b", "development", str(origin), cwd=self.tmp)
+        self.repo = self.tmp / "repo"
+        self.git("clone", "-q", str(origin), str(self.repo), cwd=self.tmp)
+        (self.repo / "scripts").mkdir()
+        shutil.copy(SCRIPT, self.repo / "scripts" / "prune-worktrees.sh")
+        (self.repo / "f").write_text("base\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "base")
+        self.git("push", "-q", "origin", "HEAD:development")
+
+    def worktree(self, name, merge):
+        path = self.repo / ".worktrees" / name
+        self.git("worktree", "add", "-q", "-b", name, str(path), "origin/development")
+        (path / name).write_text(name)
+        self.git("add", name, cwd=path)
+        self.git("commit", "-q", "-m", name, cwd=path)
+        if merge:
+            self.git("merge", "-q", "--no-ff", "-m", f"merge {name}", name)
+            self.git("push", "-q", "origin", "HEAD:development")
+        return path
+
+    def test_only_named_merged_and_idle_clean_worktrees_go(self):
+        gone = self.worktree("gone", merge=True)
+        unnamed = self.worktree("unnamed", merge=True)
+        dirty = self.worktree("dirty", merge=True)
+        (dirty / "f").write_text("edited\n")
+        unmerged = self.worktree("unmerged", merge=False)
+        busy = self.worktree("busy", merge=True)
+        sleeper = subprocess.Popen(["sleep", "60"], cwd=busy)  # bounded by itself
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+
+        said = merge_queue.prune_merged(["gone", "dirty", "unmerged", "busy"],
+                                        script=self.repo / "scripts" / "prune-worktrees.sh")
+
+        self.assertFalse(gone.exists(), said)
+        for kept in (unnamed, dirty, unmerged, busy):
+            self.assertTrue(kept.exists(), f"{kept.name}: {said}")
+        self.assertIn("keep   dirty (tracked changes)", said)
+        self.assertIn("keep   unmerged (not merged)", said)
+        self.assertIn("keep   busy (a process is working in it)", said)
+        self.assertNotIn("unnamed", said, "a branch the batch did not merge is not considered")
+
+    def test_nothing_merged_runs_nothing(self):
+        self.assertEqual(merge_queue.prune_merged([], script=self.tmp / "absent.sh"), "")
 
 
 if __name__ == "__main__":

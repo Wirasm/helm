@@ -37,6 +37,14 @@ It takes the PR numbers in the order given. The orchestrator owns the order. For
    **stops the batch**, and the remaining PRs stay
    `queued`, because the next update would build on a base nobody checked.
 
+After the last PR, the report node removes the worktrees of the PRs this batch merged, by
+running `scripts/prune-worktrees.sh --branch <head branch>` for each one. That script keeps a
+worktree with a process working in it, a tracked change, untracked files that are not ignored, a
+lock, or a HEAD that has not reached `development` through a merge, and says which reason held
+it. A worktree on a PR that was held, landed through another PR, or merged unverified is left
+alone, and so is one whose PR merged in another run: `just prune-worktrees` judges those. Each
+worktree holds 3-4 GB of builds, and about sixty of them filled the disk on 2026-10-01.
+
 A held PR does not move `development`, so the next PR carries on. Each PR has 50 minutes
 before it is held as `timeout`. `mode=preview` does steps 1-4 and stops at `tested`. Those
 steps still change PRs (update-branch, retarget, close and reopen), so a preview is not a
@@ -68,11 +76,12 @@ archon workflow get <runId> --json | jq '.status, .terminal_record.returns.value
 `wait` exits 0 when the run has an answer, 3 when `--timeout` passed with the run still
 going, and 1 when the wait itself failed. A failed run also exits 0, so read `status`.
 The answer is the `report` node:
-`{mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, summary}`.
+`{mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, pruned, summary}`.
 `unverified` means `development` changed and nobody checked how: stop and look. `queued` lists
 PRs the run never reached (it stopped first). `reran` lists PRs whose red check was re-run
 once: each is a flake to fix or a real red, whatever the PR's final status. `reasons` maps a
-PR number to why.
+PR number to why. `pruned` is prune-worktrees' own output, one `remove` or `keep` line per merged
+PR's worktree, or why it did not run.
 
 A launch while a queue is live does not queue behind it. Archon cancels the new run
 (`precondition_failed`, "This worktree is in use"). Check `status` first, and send the PRs

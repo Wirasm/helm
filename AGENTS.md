@@ -22,7 +22,9 @@ just check              # or, with no `just` installed: bash scripts/check.sh
 
 `scripts/check.sh` is the one definition of the gate, and CI calls it. It ends with one line per
 part: `PASS`, `FAIL (rerun: <command>)` or `SKIP (<why>)`. `just check swift` runs only the parts
-named.
+named. It refuses to start with less than 20 GB free on the repo's volume and names `just
+prune-worktrees`: every worktree keeps 3-4 GB of builds, and about sixty of them filled the disk
+on 2026-10-01. `HELM_CHECK_MIN_FREE_GB=<n>` moves the floor and `0` turns it off, as CI does.
 
 | Part | Runs | Needs |
 | --- | --- | --- |

@@ -39,6 +39,10 @@ review, or another agent. Poll what you wait for with a bounded command, for exa
 (its exit code says green, red or timed out), and never end a turn waiting for a message nobody
 will send.
 
+Before every report mail, delete your worktree's builds: `rm -rf <worktree>/.build
+<worktree>/daemon/target` (3-4 GB; sixty worktrees' builds filled the disk once). The next gate
+run rebuilds them if I send you back.
+
 Bound everything you start with `timeout`. A test-drive of benchd or helm runs against its own
 root: BENCH_DIR=$(mktemp -d) (you inherited the live one, and it wins over BENCH_SUITE).
 
