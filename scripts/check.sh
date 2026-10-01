@@ -17,6 +17,10 @@
 # display, and TerminalKeyboardTests and WorkbenchFocusRoutingTests need a real ghostty
 # surface (#253), so they are skipped there. Nowhere else spells that skip.
 #
+# HELM_CHECK_MIN_FREE_GB (default 20) is the free space the run needs on the volume holding the
+# repo; below it the gate refuses to start. A gate builds 3-4 GB of Swift and Rust per worktree,
+# and sixty worktrees' builds filled the disk on 2026-10-01. CI sets it to 0, which turns it off.
+#
 # lint and swift need only the Swift toolchain and xcodegen (AGENTS.md). The other parts need
 # node, bash/zsh/python3, cargo or npm; a missing tool is a FAIL that names it, never a skip.
 set -uo pipefail
@@ -194,6 +198,23 @@ if [ "${1:-}" = "--needs" ]; then
     [ -n "${2:-}" ] || { echo "usage: scripts/check.sh --needs <part> [base]" >&2; exit 2; }
     needs "$2" "${3:-origin/development}"
     exit $?
+fi
+
+# Refuses before any part builds. `df -Pk` is POSIX: the fourth column is free KiB.
+min_free_gb=${HELM_CHECK_MIN_FREE_GB:-20}
+case "$min_free_gb" in
+    '' | *[!0-9]*) echo "check: HELM_CHECK_MIN_FREE_GB is '$min_free_gb'; it takes whole GB (0 turns the check off)" >&2; exit 2 ;;
+esac
+if [ "$min_free_gb" -gt 0 ]; then
+    free_gb=$(( $(df -Pk . | awk 'NR == 2 { print $4 }') / 1024 / 1024 ))
+    if [ "$free_gb" -lt "$min_free_gb" ]; then
+        echo "check: only ${free_gb} GB free on the volume holding $(pwd); the gate needs ${min_free_gb} GB." >&2
+        echo "  Every worktree keeps its own .build and daemon/target (3-4 GB). Free space with:" >&2
+        echo "    just prune-worktrees --dry-run   # which merged worktrees would go" >&2
+        echo "    just prune-worktrees" >&2
+        echo "  HELM_CHECK_MIN_FREE_GB=<n> sets the floor; 0 turns this check off." >&2
+        exit 2
+    fi
 fi
 
 for part in "$@"; do

@@ -175,7 +175,12 @@ fn has_transcript(id: &str) -> bool {
 }
 
 /// Whether a live session already holds conversation `runtime`: by the id it was started with,
-/// or, for a codex that names its thread after the fact, by the id its hook recorded.
+/// or, for a codex that names its thread after the fact, by the id its hook recorded; or a live
+/// agent whose hook reported it, which is how a codex the operator started in a pane is seen.
+/// A thread a benchd codex left with `/new` stays held until that session ends: its app-server
+/// keeps the thread open, and a second codex on it is read-only ("This conversation is open in
+/// another app", measured on codex 0.159.3). The operator's own codex ends the old thread on
+/// `/new` (`SessionEnd`), so his is free at once.
 pub fn held(core: &Core, runtime: &str) -> bool {
     let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
     core.sessions
@@ -185,6 +190,9 @@ pub fn held(core: &Core, runtime: &str) -> bool {
             h.id == runtime
                 && matches!(&h.via, bench_wire::HostedVia::Bench { session, .. } if live(session))
         })
+        || crate::hook::hooked(core)
+            .iter()
+            .any(|h| h.session == runtime && bench_sessions::process::alive(h.pid, None))
 }
 
 /// Where the pane's shell was last working, if that directory is still there.

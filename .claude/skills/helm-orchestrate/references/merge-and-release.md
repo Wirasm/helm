@@ -42,7 +42,9 @@ archon workflow get <runId> --json | jq '.status, .terminal_record.returns.value
 - A second launch while one runs is cancelled, not queued. PRs that become ready mid-run go in the
   next batch.
 - Read the report and act on each key:
-  - `merged`: log it, clean up (below).
+  - `merged`: log it, clean up (below). `pruned` says which of their worktrees the queue
+    removed, and for each one it kept, why: a process in it, uncommitted work, commits
+    `development` does not have.
   - `held` with a conflict reason: mail the owner the catch-up brief, requeue when green.
   - `held` on a red check after one re-run: a real failure or a flake. Read the log; send it to
     the owner.
@@ -87,12 +89,18 @@ After a release, mail each resumed workstream where it stands.
 
 ## Clean up after a merge
 
+The queue removes the worktrees of the PRs it merged that nobody is working in (`pruned` in its
+report). A workstream whose agent is still in its pane keeps its worktree until you close the
+pane. After every batch, close the panes you are done with, prune the rest, and look at each one
+the script keeps:
+
 ```text
-git -C <repo> fetch -q origin
-git -C <repo> worktree remove .worktrees/<name>        # refuses a dirty tree: keep it and say so
+just -f <repo>/justfile prune-worktrees --dry-run      # what would go, and why each other stays
+just -f <repo>/justfile prune-worktrees
 git -C <repo> branch -d <branch>
 ```
 
-Close the workstream's pane (`bench close <pane> --force`) once nothing more is needed from that
-agent. `just prune-worktrees --dry-run` lists merged worktrees still on disk; they hold a build
-each and filled the disk once.
+It never removes a worktree with a process in it, a tracked change, untracked files or commits
+`development` lacks. Close the workstream's pane (`bench close <pane> --force`) once nothing
+more is needed from that agent. Each worktree holds 3-4 GB of builds, and about sixty of them
+filled the disk on 2026-10-01.

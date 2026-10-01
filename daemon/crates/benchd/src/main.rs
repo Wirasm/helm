@@ -1209,29 +1209,33 @@ fn dispatch(
                     .map(|s| {
                         let pane = c.bench.document.pane_showing_session(&s.id);
                         let hooked = waiting::hook_report(&c, &s.id);
-                        (Arc::clone(s), pane, waiting::of_session(&c, &s.id), hooked)
+                        let runtime = hook::conversation(&c, s);
+                        let waiting = waiting::of_session(&c, &s.id);
+                        (Arc::clone(s), pane, waiting, hooked, runtime)
                     })
                     .collect();
                 (c.home.clone(), shown, usage::held(&c))
             };
             let sessions = shown
                 .into_iter()
-                .map(|(s, pane, waiting, hooked)| bench_wire::SessionEntry {
-                    report: waiting::report(&s, &home, hooked),
-                    session: s.id.clone(),
-                    handle: s.handle.clone(),
-                    agent: s.agent.name().to_string(),
-                    cwd: s.cwd.clone(),
-                    pid: s.pid,
-                    pane,
-                    foreground_pid: s.foreground_pid(),
-                    live: s.is_live(),
-                    attached: s.is_attached(),
-                    output_bytes: s.output_bytes(),
-                    runtime_session: s.runtime_session.clone(),
-                    uptime_secs: s.spawned_at.elapsed().as_secs(),
-                    waiting,
-                })
+                .map(
+                    |(s, pane, waiting, hooked, runtime)| bench_wire::SessionEntry {
+                        report: waiting::report(&s, &home, hooked),
+                        session: s.id.clone(),
+                        handle: s.handle.clone(),
+                        agent: s.agent.name().to_string(),
+                        cwd: s.cwd.clone(),
+                        pid: s.pid,
+                        pane,
+                        foreground_pid: s.foreground_pid(),
+                        live: s.is_live(),
+                        attached: s.is_attached(),
+                        output_bytes: s.output_bytes(),
+                        runtime_session: runtime,
+                        uptime_secs: s.spawned_at.elapsed().as_secs(),
+                        waiting,
+                    },
+                )
                 .collect();
             (
                 ok(json!(bench_wire::LiveSessions { sessions, usage })),
