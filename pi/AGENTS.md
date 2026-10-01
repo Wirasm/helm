@@ -60,3 +60,7 @@ claim — that `/reload` picks up an edited extension without a session restart,
 verified by hand because the automation cannot watch a live TUI. Keep that distinction when
 adding to either file: what a command proved and what someone reported are not the same kind of
 fact, and a reader deserves to know which one they are getting.
+
+The pty harness's start-up claims (pi draws its header only after the terminal's colour reply,
+and `/dev/null` stdin quits it first) were measured on **pi 0.99.2 on 2026-10-01**, when the
+whole gate was also run green on that version. The other claims were not re-measured then.
