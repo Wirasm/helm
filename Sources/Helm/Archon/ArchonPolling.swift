@@ -9,7 +9,7 @@ import Foundation
 /// reads access control as where the seam is rather than as something in its way.
 enum ArchonPolling {
     /// Two seconds: a healthy `archon` call is ~0.6s (measured, 0.7.0, warm), so this leaves
-    /// the CLI idle most of the window, and the rail is something you glance at while an agent
+    /// the CLI idle most of the window, and the drawer is something you glance at while an agent
     /// works rather than something you watch.
     static let interval: Duration = .seconds(2)
 

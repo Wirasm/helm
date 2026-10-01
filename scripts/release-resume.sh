@@ -407,14 +407,14 @@ warn() { log "WARNING: $*"; }
 # benchd (and every agent it spawns), the `bench spawn` that resumes, and the fallback claude.
 # Its session identity must reach none of them, or the resume is attributed to the dead agent
 # and a claude can claim its address. So whole namespaces go, not a list of names that misses
-# the next one. Suites come only from the flags. Two are locations, not identity, and stay:
-# HELM_BUILD_DIR is where `make release` announces the build, and CLAUDE_CONFIG_DIR is where the
-# fallback claude finds the session.
+# the next one. Suites come only from the flags. HELM_BUILD_DIR is a location, not identity, and
+# stays: it is where `make release` announces the build. CLAUDE_CONFIG_DIR goes with the rest:
+# every claude runs the operator's default profile under HOME (#491).
 scrub_caller_env() {
   local v
   for v in $(compgen -e); do
     case "$v" in
-    HELM_BUILD_DIR | CLAUDE_CONFIG_DIR) ;;
+    HELM_BUILD_DIR) ;;
     CLAUDE* | BENCH_* | HELM_*) unset "$v" ;;
     esac
   done

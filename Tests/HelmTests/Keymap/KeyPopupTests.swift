@@ -59,8 +59,9 @@ final class KeyPopupTests: XCTestCase {
 
     /// A hold released and taken again restarts the delay: the first hold's delay must not show
     /// the pop-up early on the second. **This one sleeps to stay inside a deadline**, the shape
-    /// `AGENTS.md` warns about: each sleep is 1.2 s against a 2 s delay, a margin of 0.8 s, and
-    /// a machine that overshoots by that much turns it red with the behaviour correct.
+    /// `docs/testing.md` ("Tests that sleep") warns about: each sleep is 1.2 s against a 2 s
+    /// delay, a margin of 0.8 s, and a machine that overshoots by that much turns it red with
+    /// the behaviour correct.
     @MainActor
     func testARenewedHoldRestartsTheDelay() async throws {
         let hold = ManageHold(delay: .seconds(2))

@@ -54,8 +54,6 @@ const INHERITED: &[&str] = &[
     "BENCH_LISTEN",
     "HELM_PANE",
     "PLAYWRIGHT_BROWSERS_PATH",
-    // Where Claude keeps its transcripts, which `restore` reads: the test's HOME decides it.
-    "CLAUDE_CONFIG_DIR",
     // prp's store home, which `prp/*` reads and writes: the test's HOME decides it, never the
     // operator's `~/.prp`.
     "PRP_HOME",
@@ -7227,12 +7225,34 @@ fn a_claude_conversation_with_a_transcript_is_resumed_after_a_restart() {
 }
 
 #[test]
-fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
+fn an_alternate_profile_is_neither_read_nor_passed_on() {
+    // The operator's ruling (#491): benchd and its agents always use the default profile under
+    // HOME. A transcript that exists only where CLAUDE_CONFIG_DIR points is not a transcript,
+    // and no session benchd spawns inherits CLAUDE_CONFIG_DIR, CODEX_HOME or PI_CODING_AGENT_DIR.
     let home = TestHome::claim("m5b-claudecfg");
     let ws = workspace(&home.dir).display().to_string();
     let config = home.dir.join("elsewhere-claude");
+    let projects = config.join("projects/ws");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("c-9a1f.jsonl"), "{}\n").unwrap();
+    let seen = home.dir.join("agent-env");
+    let bin = write_agent_script(
+        &home.dir,
+        "pi",
+        &format!("env > '{}'; exec cat", seen.display()),
+    );
+    write_fake_agent(&home.dir, "claude");
+    let path = std::env::var("PATH").unwrap_or_default();
+    let with_alternates = || {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()))
+            .env("CLAUDE_CONFIG_DIR", &config)
+            .env("CODEX_HOME", home.dir.join("elsewhere-codex"))
+            .env("PI_CODING_AGENT_DIR", home.dir.join("elsewhere-pi"));
+        cmd
+    };
     let pane = {
-        let daemon = DaemonGuard::start(&home.dir, None);
+        let daemon = DaemonGuard::start_with(&home.dir, None, with_alternates());
         ok_data(layout(
             &daemon.socket,
             "workspace/open",
@@ -7252,17 +7272,27 @@ fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
         );
         pane
     };
-    let projects = config.join("projects/ws");
-    fs::create_dir_all(&projects).unwrap();
-    fs::write(projects.join("c-9a1f.jsonl"), "{}\n").unwrap();
-    let bin = write_fake_agent(&home.dir, "claude");
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()))
-        .env("CLAUDE_CONFIG_DIR", &config);
-    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let _daemon = DaemonGuard::start_with(&home.dir, None, with_alternates());
     let restored = json_of(&bench(&home.dir, &["restore", &pane]));
-    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    assert_ne!(restored["restored"][0]["how"], "resumed", "{restored}");
+
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(&seen).is_ok_and(|e| e.contains("BENCH_SESSION=")) {
+        assert!(
+            Instant::now() < deadline,
+            "the spawned agent never wrote its environment"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let env = fs::read_to_string(&seen).unwrap();
+    for name in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR"] {
+        assert!(
+            !env.lines().any(|l| l.starts_with(&format!("{name}="))),
+            "{name} reached the spawned agent:\n{env}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

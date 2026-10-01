@@ -28,8 +28,9 @@ struct StatusBarView: View {
     let justRuns: JustRuns
     /// Already polled on the workspace bar's behalf; observing it here costs nothing new.
     @ObservedObject private var board = BoardModel.shared
-    /// A `@StateObject` because the poll's lifetime should be this bar's, not a render's — the
-    /// mistake `AGENTS.md` records twice over. A badge nobody can see is a poll nobody needs.
+    /// A `@StateObject` because the poll's lifetime should be this bar's, not a render's (a
+    /// handler lives where its lifetime is right, `AGENTS.md`). A badge nobody can see is a
+    /// poll nobody needs.
     @StateObject private var builds = BuildUpdateModel()
     /// The manage key to name, and why the operator's keymap file was refused, if it was.
     @ObservedObject private var keymap = Keymap.shared
