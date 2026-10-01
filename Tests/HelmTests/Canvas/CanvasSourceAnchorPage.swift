@@ -79,6 +79,20 @@ final class CanvasSourceAnchorPage: NSObject, WKScriptMessageHandler {
         return messages
     }
 
+    /// A second visible copy makes quote fallback ambiguous, so an ID test can only pass
+    /// through identifier lookup. The echo has no id and cannot match the captured source id.
+    func repeatLabel(_ text: String) async throws {
+        let echoed: String = try await withCheckedThrowingContinuation { continuation in
+            webView.callAsyncJavaScript(
+                "var echo = document.createElement('p'); echo.textContent = text; document.body.appendChild(echo); return echo.textContent;",
+                arguments: ["text": text], in: nil, in: CanvasFileCoordinator.bridgeWorld
+            ) { result in
+                continuation.resume(with: result.map { ($0 as? String) ?? "" })
+            }
+        }
+        XCTAssertEqual(echoed, text)
+    }
+
     /// Exercise the real sidecar parser and Swift-to-page hover bridge after capture.
     func hover(_ annotation: CanvasAnnotation) async throws -> Bool {
         let note = try XCTUnwrap(

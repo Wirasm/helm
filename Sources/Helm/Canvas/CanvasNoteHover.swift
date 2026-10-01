@@ -16,7 +16,7 @@ final class CanvasNoteHover: ObservableObject {
         clear()
         active = note.id
         guard case let .selection(anchor) = note.mark else {
-            status[note.id] = "This note points at something I cannot find."
+            status[note.id] = note.heading.isEmpty ? nil : "This note cannot be highlighted."
             return
         }
         guard let webView else {
@@ -70,9 +70,7 @@ struct CanvasHoverNote: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(CanvasNotes.readable(note.text))
                 .textSelection(.enabled)
-            if let message = hover.status[note.id]
-                ?? (note.mark == nil ? "This note points at something I cannot find." : nil)
-            {
+            if let message = hover.status[note.id] {
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textMuted)

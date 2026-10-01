@@ -4,6 +4,7 @@ import XCTest
 
 /// Cross-runtime pairing for MermaidAnchor.swift and canvas-annotation.js. The vendor renders,
 /// the shipped script captures, Swift reduces, the sidecar round-trips, and hover must find it.
+/// Each label also appears in plain prose, so a wrong ID cannot pass through quote fallback.
 @MainActor
 final class CanvasHoverIntegrationTests: XCTestCase {
     private let diagrams = [
@@ -40,6 +41,16 @@ final class CanvasHoverIntegrationTests: XCTestCase {
                 XCTFail("Expected a Mermaid source identifier"); continue
             }
             XCTAssertEqual(id, expectedID)
+            let selected = try XCTUnwrap(body["text"] as? String)
+            try await page.repeatLabel(selected)
+            let missingID = try XCTUnwrap(
+                CanvasAnnotation.decode(
+                    posted: [
+                        "kind": "selection", "anchorKind": "element", "id": "missing-id-probe",
+                        "text": selected,
+                    ], comment: "probe the fallback"))
+            let fallbackPainted = try await page.hover(missingID)
+            XCTAssertFalse(fallbackPainted, "Repeated labels must make quote fallback ambiguous")
             let painted = try await page.hover(annotation)
             XCTAssertTrue(painted, "Capture and lookup disagreed on \(expectedID) in \(diagram)")
         }

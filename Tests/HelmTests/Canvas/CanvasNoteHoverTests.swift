@@ -26,6 +26,17 @@ final class CanvasNoteHoverTests: XCTestCase {
         XCTAssertNil(CanvasNotes.mark(in: "`#phase2` — \"Ship"))
     }
 
+    func testLegacyNoteAndPreambleOnlyOfferNeutralFeedbackOnHover() {
+        let hover = CanvasNoteHover()
+        let legacy = CanvasNotes.Note(id: 0, heading: "circled old", text: "old note")
+        let preamble = CanvasNotes.Note(id: 1, heading: "", text: "introductory prose")
+        XCTAssertTrue(hover.status.isEmpty)
+        hover.hover(legacy, entered: true)
+        XCTAssertEqual(hover.status[0], "This note cannot be highlighted.")
+        hover.hover(preamble, entered: true)
+        XCTAssertNil(hover.status[1], "A preamble does not claim to name a target")
+    }
+
     func testMissingPageIsUnavailableRatherThanMissingAnchor() {
         let hover = CanvasNoteHover()
         let note = CanvasNotes.Note(id: 0, heading: "\"valid words\"", text: "note")
@@ -139,7 +150,7 @@ final class CanvasNoteHoverTests: XCTestCase {
         check(try await page.ask("String(CSS.highlights.has('helm-note'))"), "true")
         let missing = CanvasNotes.Note(id: 1, heading: "legacy geometry", text: "old note")
         hover.hover(missing, entered: true)
-        XCTAssertEqual(hover.status[1], "This note points at something I cannot find.")
+        XCTAssertEqual(hover.status[1], "This note cannot be highlighted.")
         check(try await page.ask("String(CSS.highlights.has('helm-note'))"), "false")
         hover.clear()
     }
