@@ -89,10 +89,9 @@ final class CanvasNoteCourierTests: XCTestCase {
         let with = CanvasNoteCourier.body(annotation, on: page, liveFile: live)
         let without = CanvasNoteCourier.body(annotation, on: page, liveFile: nil)
 
-        XCTAssertTrue(
-            with.contains(
-                "answer by writing /work/artifacts/review.data.json with `bench file write --expect`"),
-            with)
+        let answer =
+            "answer by writing /work/artifacts/review.data.json with `bench file write --expect`"
+        XCTAssertTrue(with.contains(answer), with)
         XCTAssertFalse(with.contains("edit the artifact"), with)
         XCTAssertTrue(without.hasSuffix("answer in your own pane, or edit the artifact."), without)
     }
@@ -129,7 +128,8 @@ final class CanvasNoteCourierTests: XCTestCase {
         let courier = CanvasNoteCourier(
             mail: mailbox(recording: sends, refusing: "no mailbox at sild-611a"))
 
-        let delivery = try courier.send(annotation(), on: canvas, liveFile: nil, along: .mailbox(handle))
+        let delivery = try courier.send(
+            annotation(), on: canvas, liveFile: nil, along: .mailbox(handle))
 
         guard case let .failed(named, why) = delivery else {
             return XCTFail("expected a failure, got \(delivery)")
