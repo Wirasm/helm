@@ -15,8 +15,11 @@
  *   changes the request, not the history, so what arrived in a run is re-sent on every request
  *   of that run and dropped when the next run starts (helm-mail measured both on 0.83.0).
  *   It is re-sent where it arrived, not appended again: appended, it was the newest message on
- *   every request, and the agent read and answered the same mail twice (#559). Within a run pi
- *   only appends to the message list, so the length at arrival stays the notice's place.
+ *   every request, and the agent read and answered the same mail twice (#559). Between
+ *   compactions pi only appends to the message list, so the length at arrival stays the
+ *   notice's place. A compaction mid-run (pi 0.99.2, `_compactBeforeNextAssistantResponse`)
+ *   shortens the list and moves every index, so a notice the model has already been sent is
+ *   dropped then: its answer is in the summary, and re-sending it would make it new again.
  * - **Idle.** The session_start reply names the inbox. A watch on it asks benchd for the mail
  *   (`wake`) when something lands while pi is idle, and `sendUserMessage` starts a turn with
  *   it. benchd answers only when it also sees the agent idle and its wake cap allows a turn.
@@ -147,6 +150,8 @@ function install(pi: ExtensionAPI): void {
 	let rule: string | undefined;
 	/** Notices that arrived during this run, each re-sent at `at`, the request length it arrived at. */
 	let pending: Notice[] = [];
+	/** How long the last request's message list was; a shorter one means pi compacted. */
+	let seen = 0;
 	let watcher: fs.FSWatcher | undefined;
 	let poll: ReturnType<typeof setInterval> | undefined;
 	let asking = false;
@@ -205,6 +210,8 @@ function install(pi: ExtensionAPI): void {
 	async function inject(event: ContextEvent) {
 		if (!who) return undefined;
 		const reply = await report("context", who);
+		if (event.messages.length < seen) pending = pending.filter((notice) => notice.at === undefined);
+		seen = event.messages.length;
 		if (reply?.context) pending.push({ text: reply.context });
 		if (pending.length === 0) return undefined;
 		const messages = [...event.messages];
@@ -241,6 +248,7 @@ function install(pi: ExtensionAPI): void {
 		step("agent_start handler", () =>
 			pi.on("agent_start", () => {
 				pending = [];
+				seen = 0;
 				tell("agent_start");
 			}),
 		);

@@ -199,6 +199,12 @@ await test("mail benchd hands over at a model request is new once, then stays wh
 		const third = await inject({ messages: [user("go"), user("read m1"), user("replied"), user("more")] }, ctx);
 		check(texts(third) === "go | mail m1 | read m1 | replied | more | mail m2", `third request: ${texts(third)}`);
 
+		// pi compacts mid-run: the list shrinks and every index moves. Notices already sent go;
+		// one arriving now is placed at the end of the compacted list.
+		bench.answer({ handle: "h", context: "mail m4" });
+		const compacted = await inject({ messages: [user("summary"), user("x")] }, ctx);
+		check(texts(compacted) === "summary | x | mail m4", `after compaction: ${texts(compacted)}`);
+
 		record.handlers.get("agent_start")({}, ctx);
 		bench.answer({ handle: "h" });
 		const next = await inject({ messages: [user("next run")] }, ctx);
@@ -255,9 +261,14 @@ await test("a turn that cannot start sends the notice with the next request inst
 		await record.handlers.get("agent_settled")({}, ctx);
 		await eventually(() => bench.requests().some((r) => r.hook_event_name === "wake"));
 		await sleep(100);
-		bench.answer({ handle: "h" });
+		// More mail arrives with that request: both land at the same place, in arrival order.
+		bench.answer({ handle: "h", context: "You have mail from b: /x/m2.md" });
 		const next = await record.handlers.get("context")({ messages: [user("go")] }, ctx);
-		check(next?.messages?.[1]?.content?.[0]?.text === "You have mail from a: /x/m1.md", JSON.stringify(next));
+		const texts = next?.messages?.map((m) => m.content[0].text);
+		check(
+			texts?.join(" | ") === "go | You have mail from a: /x/m1.md | You have mail from b: /x/m2.md",
+			JSON.stringify(texts),
+		);
 		record.handlers.get("session_shutdown")({}, ctx);
 	} finally {
 		bench.done();
