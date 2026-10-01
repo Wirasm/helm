@@ -195,4 +195,36 @@ mod tests {
         assert!(start.elapsed() < VERSION_TIMEOUT + Duration::from_secs(2));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// DIAGNOSTIC (to be removed): the original test's shape in a loop, beside a thread that
+    /// spawns, as the other tests in this binary do. Reports how each spawn of a stub failed.
+    #[test]
+    fn diagnostic_stub_exec_beside_a_spawning_thread() {
+        let root = std::env::temp_dir().join(format!("benchd-agents-diag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawner = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = Command::new("true").status();
+                }
+            })
+        };
+        let mut errors: HashMap<String, u32> = HashMap::new();
+        let mut none = 0;
+        for i in 0..300 {
+            let name = format!("s{i}");
+            stub(&root, &name, "echo 1.2.3");
+            match Command::new(root.join(&name)).arg("--version").output() {
+                Err(e) => *errors.entry(format!("{e:?}")).or_default() += 1,
+                Ok(o) if o.stdout.is_empty() => none += 1,
+                Ok(_) => {}
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        spawner.join().unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(errors.is_empty() && none == 0, "spawn errors {errors:?}, empty output {none}");
+    }
 }
