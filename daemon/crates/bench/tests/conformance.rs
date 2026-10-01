@@ -3763,6 +3763,7 @@ fn the_bench_sessions_skills_snippets_execute() {
     let home = TestHome::claim("sskill");
     let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
     let ws = workspace(&home.dir);
+    fs::write(ws.join(".git/HEAD"), "ref: refs/heads/feat/skill\n").unwrap();
     let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
     write_claude_transcript(&home.dir, "s-2");
     let mut outputs = Vec::new();
@@ -3786,7 +3787,7 @@ fn the_bench_sessions_skills_snippets_execute() {
         outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     assert!(
-        outputs[0].contains(&format!("pi {pi_session} running")),
+        outputs[0].contains(&format!("pi {pi_session} feat/skill running")),
         "the live session is listed: {}",
         outputs[0]
     );
@@ -7891,8 +7892,8 @@ fn write_fake_codex(home: &Path) -> (PathBuf, PathBuf) {
 /// The fake codex's `hooks/list`: one hook to review, one already trusted.
 const FAKE_CODEX_HOOKS: &str = r#"{"data":[{"hooks":[{"key":"/h/hooks.json:stop:0:0","currentHash":"sha256:new","trustStatus":"untrusted"},{"key":"/h/hooks.json:session_start:0:0","currentHash":"sha256:old","trustStatus":"trusted"}]}]}"#;
 
-/// The codex invocations the stand-in saw, once `n` of them have run.
-fn codex_runs(runs: &Path, n: usize) -> Vec<String> {
+/// The invocations a recording stand-in saw (one argv line each), once `n` of them have run.
+fn recorded_runs(runs: &Path, n: usize) -> Vec<String> {
     let lines = || {
         fs::read_to_string(runs)
             .unwrap_or_default()
@@ -7900,7 +7901,7 @@ fn codex_runs(runs: &Path, n: usize) -> Vec<String> {
             .map(str::to_string)
             .collect::<Vec<_>>()
     };
-    wait_until("codex runs", Duration::from_secs(5), || lines().len() >= n);
+    wait_until("agent runs", Duration::from_secs(5), || lines().len() >= n);
     lines()
 }
 
@@ -7936,6 +7937,29 @@ fn assert_served_resume(root: &Path, runs: &[String], session: &str, thread: &st
         !tui.contains("--dangerously-bypass-approvals-and-sandbox"),
         "{tui}"
     );
+    assert_resume_notice(tui);
+}
+
+/// The text of the prompt file an agent's argv line (its args joined by spaces) points at last.
+fn pointed_prompt(line: &str) -> (String, String) {
+    let marker = "Read and act on the prompt in ";
+    let at = line
+        .rfind(marker)
+        .unwrap_or_else(|| panic!("no prompt pointer in {line:?}"));
+    let path = line[at + marker.len()..].to_string();
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    (path, text)
+}
+
+/// A resumed agent's argv ends pointing at benchd's resume notice, and only at that.
+fn assert_resume_notice(line: &str) -> String {
+    let (path, text) = pointed_prompt(line);
+    assert!(
+        text.starts_with("benchd resumed this conversation")
+            && text.contains("Continue where you were"),
+        "a resume's first message is the notice: {text:?}"
+    );
+    path
 }
 
 #[test]
@@ -7977,7 +8001,7 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
     assert_eq!(run["restored"][0]["how"], "resumed", "{run}");
     let session = run["restored"][0]["session"].as_str().unwrap();
     let root = home.dir.join(".bench");
-    assert_served_resume(&root, &codex_runs(&runs, 2), session, "019a-thread");
+    assert_served_resume(&root, &recorded_runs(&runs, 2), session, "019a-thread");
 
     // Mail wakes it before any hook has reported: a resumed codex fires none until a turn runs.
     // The stand-in's app-server never binds, so the test answers on the session's socket.
@@ -8107,7 +8131,7 @@ fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_r
     let spawned = json_of(&run);
     let first = spawned["session"].as_str().unwrap().to_string();
     let root = home.dir.join(".bench");
-    assert_served_resume(&root, &codex_runs(&runs, 2), &first, thread);
+    assert_served_resume(&root, &recorded_runs(&runs, 2), &first, thread);
     // Mail wakes it through its own session's server, before any hook has reported.
     let wakes = |session: &str| {
         let server = FakeAppServer::bind(
@@ -8153,7 +8177,7 @@ fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_r
     assert_eq!(resumed.code, 0, "stderr: {}", resumed.stderr);
     let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
     assert_ne!(second, first);
-    assert_served_resume(&root, &codex_runs(&runs, 2), &second, thread);
+    assert_served_resume(&root, &recorded_runs(&runs, 2), &second, thread);
     wakes(&second);
 }
 
@@ -8186,9 +8210,143 @@ fn a_claude_conversation_with_a_transcript_is_resumed_after_a_restart() {
     let projects = home.dir.join(".claude/projects/ws");
     fs::create_dir_all(&projects).unwrap();
     fs::write(projects.join("c-7e2d.jsonl"), "{}\n").unwrap();
-    let _daemon = DaemonGuard::start_with_fake(&home.dir, "claude");
+    let runs = home.dir.join("claude-runs");
+    let _daemon = DaemonGuard::start_with_script(
+        &home.dir,
+        "claude",
+        &format!("printf '%s\\n' \"$*\" >> '{}'\nexec cat", runs.display()),
+    );
     let restored = json_of(&bench(&home.dir, &["restore", &pane]));
     assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    wait_until("claude ran", Duration::from_secs(5), || runs.exists());
+    let run = fs::read_to_string(&runs).unwrap();
+    assert!(run.contains("--resume c-7e2d"), "{run}");
+    assert_resume_notice(run.trim_end());
+}
+
+/// A pi stand-in that records each run's argv in `<home>/pi-runs`, and that file.
+fn recording_pi(home: &Path) -> (String, PathBuf) {
+    let runs = home.join("pi-runs");
+    let record = format!("printf '%s\\n' \"$*\" >> '{}'\nexec cat", runs.display());
+    (record, runs)
+}
+
+#[test]
+fn bench_resume_and_restore_send_a_fresh_notice_and_never_the_spawn_prompt() {
+    // A resumed agent whose last turn was cut off sits at its prompt until something starts a
+    // turn, so benchd's resume routes start one with the notice.
+    let home = TestHome::claim("resume-notice");
+    let ws = workspace(&home.dir).display().to_string();
+    let (record, runs) = recording_pi(&home.dir);
+    let (agent_pane, shell_pane, task) = {
+        let daemon = DaemonGuard::start_with_script(&home.dir, "pi", &record);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let brief = home.dir.join("task.md");
+        fs::write(&brief, "TASK-ALPHA").unwrap();
+        let brief = brief.display().to_string();
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn",
+                "--agent",
+                "pi",
+                "--cwd",
+                &ws,
+                "--prompt-file",
+                &brief,
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+        let spawned = json_of(&spawned);
+        let (task, text) = pointed_prompt(&recorded_runs(&runs, 1)[0]);
+        assert_eq!(text, "TASK-ALPHA", "a new conversation gets its own prompt");
+
+        // `bench resume` of an exited session: the notice, never the spawn's prompt again.
+        let sid = spawned["session"].as_str().unwrap().to_string();
+        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
+        wait_until("the agent's session ends", Duration::from_secs(10), || {
+            session_row(&home.dir, &sid)["live"] == false
+        });
+        let resumed = bench(&home.dir, &["resume", &sid]);
+        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+        let notice = assert_resume_notice(&recorded_runs(&runs, 2)[1]);
+        assert_ne!(notice, task);
+
+        let shell = json_of(&bench(&home.dir, &["open", "terminal"]));
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            shell["pane"].as_str().unwrap().to_string(),
+            task,
+        )
+    };
+
+    // A restart, then `restore --all`: the agent pane's resume gets a notice written for it,
+    // and the shell pane starts no agent at all.
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "pi", &record);
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let how = |pane: &str| {
+        restored["restored"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["pane"] == pane)
+            .map(|r| r["how"].as_str().unwrap().to_string())
+    };
+    assert_eq!(how(&agent_pane).as_deref(), Some("resumed"), "{restored}");
+    assert_eq!(how(&shell_pane).as_deref(), Some("shell"), "{restored}");
+    let all = recorded_runs(&runs, 3);
+    assert_eq!(all.len(), 3, "{all:?}");
+    let notice = assert_resume_notice(&all[2]);
+    assert_ne!(notice, task);
+}
+
+#[test]
+fn spawn_resume_sends_the_notice_unless_the_caller_sent_a_prompt() {
+    let home = TestHome::claim("resume-notice-spawn");
+    let ws = workspace(&home.dir).display().to_string();
+    let (record, runs) = recording_pi(&home.dir);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "pi", &record);
+    let bare = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "pi", "--cwd", &ws, "--resume", "p-other",
+        ],
+    );
+    assert_eq!(bare.code, 0, "{}", bare.stderr);
+    let line = &recorded_runs(&runs, 1)[0];
+    assert!(line.contains("--session-id p-other "), "{line}");
+    assert_resume_notice(line);
+
+    // A caller's own message replaces the notice: `just release-resume` sends its own.
+    let mine = home.dir.join("mine.md");
+    fs::write(&mine, "CALLER-NOTE").unwrap();
+    let mine = mine.display().to_string();
+    let with_prompt = bench(
+        &home.dir,
+        &[
+            "spawn",
+            "--agent",
+            "pi",
+            "--cwd",
+            &ws,
+            "--resume",
+            "p-third",
+            "--prompt-file",
+            &mine,
+        ],
+    );
+    assert_eq!(with_prompt.code, 0, "{}", with_prompt.stderr);
+    let (path, text) = pointed_prompt(&recorded_runs(&runs, 2)[1]);
+    assert_eq!(
+        (path.as_str(), text.as_str()),
+        (mine.as_str(), "CALLER-NOTE")
+    );
 }
 
 #[test]
@@ -9959,7 +10117,7 @@ fn a_pi_fork_is_its_own_conversation_with_only_read_tools_and_comes_back_so() {
     assert_ne!(restored, fork_sid);
     let argv = stub_argv(&home.dir, restored);
     assert_eq!(
-        argv,
+        argv[..5],
         [
             "--approve",
             "--tools",
@@ -9969,6 +10127,9 @@ fn a_pi_fork_is_its_own_conversation_with_only_read_tools_and_comes_back_so() {
         ],
         "a restored pi fork is read-only again"
     );
+    // Its answer was cut off like any other turn, so it is told to carry on.
+    assert_eq!(argv.len(), 6, "{argv:?}");
+    assert_resume_notice(&argv[5]);
 }
 
 #[test]
@@ -10023,7 +10184,7 @@ fn a_codex_fork_runs_on_a_read_only_app_server_and_comes_back_on_one() {
         assert_eq!(fork["forked_from"], "019a-author");
         assert_eq!(fork["runtime_session"], serde_json::Value::Null);
         let sid = fork["session"].as_str().unwrap().to_string();
-        let (server, tui) = served(&codex_runs(&runs, 2), &sid);
+        let (server, tui) = served(&recorded_runs(&runs, 2), &sid);
         assert!(
             server.contains(r#"-c sandbox_mode="read-only""#),
             "{server}"
@@ -10048,12 +10209,91 @@ fn a_codex_fork_runs_on_a_read_only_app_server_and_comes_back_on_one() {
     let again = json_of(&bench(&home.dir, &["restore", &pane]));
     assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
     let restored = again["restored"][0]["session"].as_str().unwrap();
-    let (server, tui) = served(&codex_runs(&runs, 2), restored);
+    let (server, tui) = served(&recorded_runs(&runs, 2), restored);
     assert!(
         server.contains(r#"-c sandbox_mode="read-only""#),
         "a restored codex fork is served read-only again: {server}"
     );
     assert!(tui.contains(&format!(" resume {fork_thread} ")), "{tui}");
+}
+
+/// `<home>/<name>`, a git repository with one commit and a linked worktree at
+/// `.worktrees/wt`, made by git itself; answers the worktree.
+fn git_repo_with_worktree(home: &Path, name: &str) -> PathBuf {
+    let repo = home.join(name);
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.canonicalize().unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["commit", "-q", "--allow-empty", "-m", "x"],
+        &["worktree", "add", "-q", ".worktrees/wt"],
+    ] {
+        let out = isolated("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    repo.join(".worktrees/wt")
+}
+
+#[test]
+fn a_codex_in_a_worktree_of_a_repo_the_operator_trusts_is_served_that_trust() {
+    // A served codex checks only its exact `-C` folder, so without this a worktree of a trusted
+    // repository stops at "Trust this folder?". A plain codex follows the worktree to its main
+    // repository; benchd does the same, and only for a repository the operator trusts.
+    let home = TestHome::claim("cxtrust");
+    let trusted = git_repo_with_worktree(&home.dir, "t");
+    let untrusted = git_repo_with_worktree(&home.dir, "u");
+    fs::create_dir_all(home.dir.join(".codex")).unwrap();
+    let config = format!(
+        "[projects.{:?}]\ntrust_level = \"trusted\"\n",
+        home.dir
+            .join("t")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    fs::write(home.dir.join(".codex/config.toml"), &config).unwrap();
+    let (bin, runs) = write_fake_codex(&home.dir);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let server_of = |cwd: &Path, n: usize| {
+        let run = bench(
+            &home.dir,
+            &["spawn", "--agent", "codex", "--cwd", cwd.to_str().unwrap()],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let sid = json_of(&run)["session"].as_str().unwrap().to_string();
+        let socket = home.dir.join(format!(".bench/codex/{sid}.sock"));
+        recorded_runs(&runs, n)
+            .into_iter()
+            .find(|r| {
+                r.starts_with("app-server ")
+                    && r.ends_with(&format!(" --listen unix://{}", socket.display()))
+            })
+            .unwrap_or_else(|| panic!("{sid} runs its own app-server"))
+    };
+    let server = server_of(&trusted, 2);
+    assert!(
+        server.contains(&format!(
+            r#" -c projects={{"{}"={{trust_level="trusted"}}}} "#,
+            trusted.display()
+        )),
+        "{server}"
+    );
+    let server = server_of(&untrusted, 4);
+    assert!(!server.contains("projects="), "{server}");
+    assert_eq!(
+        fs::read_to_string(home.dir.join(".codex/config.toml")).unwrap(),
+        config,
+        "benchd never writes the operator's codex config"
+    );
 }
 
 #[test]

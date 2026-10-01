@@ -140,7 +140,12 @@ or tool call. benchd starts codex with `--dangerously-bypass-hook-trust`, which 
 against its own app-server ignores: it reviews hooks at startup whatever the flag says. So a
 resumed codex's app-server gets the trust instead, for that session alone: benchd asks
 `hooks/list` which hooks need review and passes their current hashes as a `-c hooks.state=…`
-override, the form codex's own `/hooks` saves, without saving it. `just mail-ring` is the proof: claude, codex and pi pass a number around through
+override, the form codex's own `/hooks` saves, without saving it. Folder trust has the same
+gap: a TUI against a separate app-server checks only its exact `-C` folder, where a plain codex
+also accepts the git main repository the folder belongs to, so a worktree of a trusted repo
+would stop at "Trust this folder?". When `~/.codex/config.toml` trusts that repository (and the
+folder has no entry of its own), benchd gives every codex app-server it starts
+`-c projects={"<cwd>"={trust_level="trusted"}}`, again without saving it. `just mail-ring` is the proof: claude, codex and pi pass a number around through
 benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
@@ -189,7 +194,9 @@ shell (`shells.rs`), with the environment helm's panes gave their shells and Gho
 integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
 the panes keep their records, and `restore` (`bench restore --all`, `just resume-all`) gives
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
-pane's last directory. benchd writes both: which agent is in a pane from that agent's own hook
+pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `spawn --resume` with
+no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
+interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 

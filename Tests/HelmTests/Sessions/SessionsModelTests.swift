@@ -161,6 +161,12 @@ final class SessionsModelTests: XCTestCase {
                 open: .focusPane(UUID()), updatedAtMs: seconds * 1000)
         }
         XCTAssertEqual(SessionLine.status(running("busy", nil, at: 9_880), now: now), "busy · 2m")
+        let branched = Self.fixtureRows.rows.first {
+            $0.id == "6b1f0c9e-3d2a-4f5b-9c8d-7e6a5b4c3d2e"
+        }!
+        XCTAssertEqual(
+            SessionLine.status(branched, now: Date(timeIntervalSince1970: 1_790_000_129)),
+            "feat/sessions · shell · 2m")
         XCTAssertEqual(
             SessionLine.status(running("waiting", "permission prompt", at: 7_600), now: now),
             "waiting: permission prompt · 40m")

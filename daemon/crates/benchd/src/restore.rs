@@ -7,7 +7,8 @@
 //!
 //! - **An agent was recorded there** (`Surface::Terminal::agent`: its harness, its conversation
 //!   and where it ran): that conversation is resumed, with the posture `bench_session::argv`
-//!   spells, as a benchd session shown in the same pane, under the mailbox it had.
+//!   spells, as a benchd session shown in the same pane, under the mailbox it had. Its first
+//!   message is the resume notice (`spawn::wire`), so it starts a turn and carries on.
 //! - **Otherwise** the operator's login shell, in the directory the pane's shell was last seen
 //!   working in (`Surface::Terminal::cwd`), else the pane's workspace.
 //!
@@ -247,6 +248,7 @@ fn resume(
         settings: None,
         codex_server: None,
         codex_hook_trust: hook_trust,
+        codex_trust_folder: false,
     };
     spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(

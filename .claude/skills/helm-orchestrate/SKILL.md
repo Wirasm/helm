@@ -163,7 +163,8 @@ outcome section, and send the operator one message with what shipped and what ne
 
 Reload the newest run file, then reconcile it against `bench sessions --all`, `gh pr list` and
 `git worktree list`. After a benchd restart every session ended: `just resume-all` resumes every
-recorded agent in its pane. Mail each resumed agent its state and next step.
+recorded agent in its pane, and each starts with benchd's resume notice: carry on where you were,
+re-arm what you had running. Mail an agent only when its state or next step has changed.
 
 ## Safety rules
 
