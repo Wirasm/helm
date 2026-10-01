@@ -109,7 +109,7 @@ part_swift() {
     echo "--> test"
     # INJECTION_NOGENERICS=1 is not optional with --skip: anything that makes SwiftPM
     # enumerate goes through `swiftpm-xctest-helper`, which dies with `signalled(10)` when
-    # InjectionNext rebinds symbols under it (AGENTS.md, the `--filter` paragraph).
+    # InjectionNext rebinds symbols under it (docs/testing.md, "Running one suite").
     if [ "${HELM_CHECK_HEADLESS:-}" = 1 ]; then
         INJECTION_NOGENERICS=1 swift test --disable-keychain \
             --skip TerminalKeyboardTests --skip WorkbenchFocusRoutingTests || return 1

@@ -52,7 +52,7 @@ extension EnvironmentValues {
     ///
     /// A zoomed bench (⌘J, `BenchCamera`) is laid out past this rectangle on every side, and
     /// the slots out there are clipped from the screen but not from AppKit's geometry: their
-    /// rectangles lie under the workspace bar, the status bar and the rail. Only a click inside
+    /// rectangles lie under the workspace bar and the status bar. Only a click inside
     /// this rectangle can be a click on a slot.
     @Entry var benchViewport: CGRect?
 }

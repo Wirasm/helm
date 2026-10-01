@@ -244,7 +244,7 @@ _Avoid_: leader, prefix, hyper, super, mod key
 
 **bench justfile**:
 `<bench root>/rules/justfile`, the operator's recipes: compositions of `bench` verbs (#356). A
-key bound to `action = "just"`, a line in the command palette (⌘K, which lists them through
+key bound to `action = "just"`, a line in the command palette (⌘K, or ⌘⇧P in a browser pane; it lists them through
 `just/list`) or an agent's `bench just <recipe>` asks benchd to run one (`just/run`), at the
 active workspace, logged as `just/started` and `just/finished`. Run for
 the operator, its verbs are his and may move his focus; run for an agent, they are the agent's.
