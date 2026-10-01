@@ -75,6 +75,7 @@ pub fn start_in(core: &mut Core, pane: PaneId, cwd: &str) -> Option<Arc<Session>
         extra_args: Vec::new(),
         settings: None,
         codex_server: None,
+        codex_hook_trust: None,
     };
     let env = shell_env::for_pane(&core.root, &pane.to_string(), &shell);
     match Session::spawn(

@@ -663,11 +663,14 @@ fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_lin
     // A hook in the file runs only once codex trusts it, and only codex can say whether it
     // does: the trust record is a hash of codex's own normalized form of the hook.
     let codex_home = codex_file.parent().unwrap_or(Path::new("."));
-    let review = codex_hooks_list().map(|list| {
-        let events = bench_wire::hook::codex_needs_review(&list, bench);
-        let profiles = codex_profile_trust(codex_home, &list, bench, &events);
-        (events, profiles)
-    });
+    let review = std::env::current_dir()
+        .map_err(|e| format!("no current directory: {e}"))
+        .and_then(|cwd| bench_wire::hook::codex_hooks_list(&cwd))
+        .map(|list| {
+            let events = bench_wire::hook::codex_needs_review(&list, bench);
+            let profiles = codex_profile_trust(codex_home, &list, bench, &events);
+            (events, profiles)
+        });
     let trusted = review.as_ref().is_ok_and(|(events, _)| events.is_empty());
     let mut codex = json!({ "file": codex_file, "missing_events": codex_missing });
     match review {
@@ -741,75 +744,6 @@ fn codex_profile_trust(
             (!events.is_empty()).then(|| (name, json!(events)))
         })
         .collect()
-}
-
-/// How long `wiring --check` waits for codex's answer. Measured: 60 ms on 0.159.3, 250 ms on
-/// 0.157.0, both from a cold start.
-const CODEX_ANSWER_WAIT: Duration = Duration::from_secs(10);
-
-/// codex's own `hooks/list` for this directory, from the `codex` on PATH (the one a shell
-/// starts), through a stdio app-server of its own that is killed once it answers. It reads the
-/// operator's codex config and writes nothing. stdin stays open until the answer: an
-/// app-server whose stdin closes exits before answering.
-fn codex_hooks_list() -> Result<Value, String> {
-    use std::io::BufRead;
-    let cwd = std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?;
-    let mut child = process::Command::new("codex")
-        .arg("app-server")
-        .stdin(process::Stdio::piped())
-        .stdout(process::Stdio::piped())
-        .stderr(process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot start `codex app-server`: {e}"))?;
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("`codex app-server` has no stdio".into());
-    };
-    let requests = [
-        json!({ "id": 1, "method": "initialize",
-                "params": { "clientInfo": { "name": "bench-wiring",
-                                            "version": env!("CARGO_PKG_VERSION") } } }),
-        json!({ "method": "initialized" }),
-        json!({ "id": 2, "method": "hooks/list", "params": { "cwds": [cwd] } }),
-    ];
-    let wrote = requests.iter().try_for_each(|r| writeln!(stdin, "{r}"));
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in std::io::BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-        {
-            if let Ok(message) = serde_json::from_str::<Value>(&line)
-                && message["id"] == 2
-            {
-                let _ = tx.send(message);
-                return;
-            }
-        }
-    });
-    let answer = wrote
-        .map_err(|e| format!("cannot write to `codex app-server`: {e}"))
-        .and_then(|()| {
-            rx.recv_timeout(CODEX_ANSWER_WAIT).map_err(|e| match e {
-                std::sync::mpsc::RecvTimeoutError::Timeout => format!(
-                    "`codex app-server` did not answer hooks/list within {}s",
-                    CODEX_ANSWER_WAIT.as_secs()
-                ),
-                std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                    "`codex app-server` ended its output without answering hooks/list".into()
-                }
-            })
-        });
-    drop(stdin);
-    let _ = child.kill();
-    let _ = child.wait();
-    let answer = answer?;
-    if answer["result"].is_object() {
-        Ok(answer["result"].clone())
-    } else {
-        Err(format!("codex refused hooks/list: {}", answer["error"]))
-    }
 }
 
 /// How long a hook waits on the daemon before giving up silently. A hook runs on every tool

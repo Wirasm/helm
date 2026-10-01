@@ -125,10 +125,11 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
   its own hook), else a shell in the directory the pane's shell was last working in.
-- A resumed codex opens on codex's "Hooks need review" until someone answers it, unless the
-  operator has trusted his hooks in codex once: codex ignores `--dangerously-bypass-hook-trust`
-  when it resumes against its own app-server. Mail to it answers `queued` and starts its turn once
-  it is past that screen.
+- A resumed codex skips codex's "Hooks need review" too. codex ignores
+  `--dangerously-bypass-hook-trust` when it resumes against its own app-server, so benchd asks
+  codex which hooks need review and has that server trust them for the session alone; nothing is
+  saved. If that question fails, the screen shows the dialog and `bench sessions` reports `hook
+  review`.
 
 ## See what he sees
 

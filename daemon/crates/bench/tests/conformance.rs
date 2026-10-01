@@ -7554,7 +7554,19 @@ fn stopping_benchd_keeps_the_records_its_ending_agents_report_on_their_way_out()
             &["spawn", "--agent", "claude", "--cwd", &ws],
         ));
         let pane = spawned["pane"].as_str().unwrap().to_string();
-        std::thread::sleep(Duration::from_millis(800));
+        // It reports SessionStart after setting its trap, so once benchd has logged that, the
+        // stop reaches a claude that reports its end. Waiting on the event rather than for a
+        // fixed time: an 800 ms window the stub had to report inside failed on a loaded machine.
+        // (The pane's record is no signal: benchd writes it at spawn.)
+        let events = home.dir.join(".bench/events.jsonl");
+        wait_until(
+            "the fake claude's SessionStart",
+            Duration::from_secs(20),
+            || {
+                fs::read_to_string(&events)
+                    .is_ok_and(|log| log.contains(r#""event":"SessionStart""#))
+            },
+        );
         let stop = bench(&home.dir, &["stop"]);
         assert_eq!(stop.code, 0, "{}", stop.stderr);
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -7732,19 +7744,28 @@ fn a_shell_comes_back_in_the_directory_it_was_last_working_in() {
 
 /// `<home>/bin/codex`: a stand-in that appends each invocation's argv to `<home>/codex-runs`, one
 /// line each. As the app-server (`codex app-server --listen …`) it exits at once, which ends
-/// the served script's wait for its socket; as the TUI it echoes its pty, like `cat`.
+/// the served script's wait for its socket; as the TUI it echoes its pty, like `cat`. Asked
+/// `hooks/list` on stdio (benchd's probe before a resume, not recorded) it answers
+/// [`FAKE_CODEX_HOOKS`].
 fn write_fake_codex(home: &Path) -> (PathBuf, PathBuf) {
     let runs = home.join("codex-runs");
     let bin = write_agent_script(
         home,
         "codex",
         &format!(
-            "printf '%s\\n' \"$*\" >> {}\n[ \"$1\" = app-server ] && exit 0\nexec cat",
-            runs.display()
+            "if [ \"$*\" = app-server ]; then\n\
+             while IFS= read -r line; do case \"$line\" in *'\"hooks/list\"'*) \
+             printf '{{\"id\":2,\"result\":%s}}\\n' '{hooks}' ;; esac; done; exit 0; fi\n\
+             printf '%s\\n' \"$*\" >> {runs}\n[ \"$1\" = app-server ] && exit 0\nexec cat",
+            hooks = FAKE_CODEX_HOOKS,
+            runs = runs.display()
         ),
     );
     (bin, runs)
 }
+
+/// The fake codex's `hooks/list`: one hook to review, one already trusted.
+const FAKE_CODEX_HOOKS: &str = r#"{"data":[{"hooks":[{"key":"/h/hooks.json:stop:0:0","currentHash":"sha256:new","trustStatus":"untrusted"},{"key":"/h/hooks.json:session_start:0:0","currentHash":"sha256:old","trustStatus":"trusted"}]}]}"#;
 
 /// The codex invocations the stand-in saw, once `n` of them have run.
 fn codex_runs(runs: &Path, n: usize) -> Vec<String> {
@@ -7766,10 +7787,17 @@ fn assert_served_resume(root: &Path, runs: &[String], session: &str, thread: &st
         "unix://{}",
         root.join("codex").join(format!("{session}.sock")).display()
     );
+    let server = runs
+        .iter()
+        .find(|r| r.starts_with("app-server ") && r.ends_with(&format!(" --listen {socket}")))
+        .unwrap_or_else(|| panic!("{session} runs its own app-server: {runs:?}"));
+    // A TUI resuming against a separate server reviews hooks whatever its own flag says, so the
+    // server trusts, for this session, the hooks codex says need review.
     assert!(
-        runs.iter()
-            .any(|r| r.starts_with("app-server ") && r.ends_with(&format!(" --listen {socket}"))),
-        "{session} runs its own app-server: {runs:?}"
+        server.contains(
+            r#" -c hooks.state={ "/h/hooks.json:stop:0:0" = { trusted_hash = "sha256:new" } } "#
+        ),
+        "{server}"
     );
     let tui = runs
         .iter()

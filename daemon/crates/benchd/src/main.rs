@@ -1058,6 +1058,7 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
     // A new session id, so codex gets an app-server of its own rather than the exited
     // session's socket.
     spawn::wire(&mut spec, &root, &id).map_err(errored)?;
+    spec.codex_hook_trust = spawn::hook_trust(&spec);
     let session = Session::spawn(
         id.clone(),
         old.handle.clone(),

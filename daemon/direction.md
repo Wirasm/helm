@@ -128,7 +128,11 @@ that trusts the current hooks (`trusted_only_under_profile`). A codex benchd spa
 its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
 which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
 codex the operator starts himself embeds its app-server, so its mail waits for its next prompt
-or tool call. `just mail-ring` is the proof: claude, codex and pi pass a number around through
+or tool call. benchd starts codex with `--dangerously-bypass-hook-trust`, which a TUI resuming
+against its own app-server ignores: it reviews hooks at startup whatever the flag says. So a
+resumed codex's app-server gets the trust instead, for that session alone: benchd asks
+`hooks/list` which hooks need review and passes their current hashes as a `-c hooks.state=…`
+override, the form codex's own `/hooks` saves, without saving it. `just mail-ring` is the proof: claude, codex and pi pass a number around through
 benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
