@@ -26,6 +26,7 @@ final class BrowserSurfaceTests: XCTestCase {
         recorder = Recorder()
         surface = BrowserSurfaceView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         surface.model = recorder
+        surface.keyTable = { KeyBindings.all }
         window = NSWindow(
             contentRect: surface.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -99,6 +100,45 @@ final class BrowserSurfaceTests: XCTestCase {
         XCTAssertEqual(key.type, "rawKeyDown")
         XCTAssertNil(key.text, "⌘A is not the letter a")
         XCTAssertEqual(key.commands, ["selectAll"])
+    }
+
+    private func keyEquivalent(
+        _ keyCode: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
+        return window.contentView!.performKeyEquivalent(with: event)
+    }
+
+    /// #548: ⌘K, ⌘N, ⌘D and ⌘O are the page's in a browser pane. The key monitor leaves them
+    /// alone there, and the view takes them before the main menu, whose items mirror helm's rows
+    /// with their chords and would otherwise open the palette, a terminal, a split, a panel.
+    func testAChordHelmBindsElsewhereGoesToThePageBeforeAnyMenu() throws {
+        for (keyCode, letter) in [(UInt16(0x28), "k"), (0x2D, "n"), (0x02, "d"), (0x1F, "o")] {
+            recorder.keys.removeAll()
+            XCTAssertTrue(keyEquivalent(keyCode, letter, .command), "⌘\(letter) is the page's")
+            let key = try XCTUnwrap(recorder.keys.first, "⌘\(letter) never reached the page")
+            XCTAssertEqual(key.key, letter)
+            XCTAssertEqual(key.modifiers, BrowserModifiers.meta.rawValue)
+        }
+    }
+
+    /// The other side: a chord helm never binds (⌘Q) is the menu's, and one helm binds for the
+    /// browser (⌘W, a browser key) is the key monitor's. Neither is taken here.
+    func testEveryOtherChordGoesOnToTheMenu() {
+        XCTAssertFalse(keyEquivalent(0x0C, "q", .command))
+        XCTAssertFalse(keyEquivalent(0x0D, "w", .command))
+        XCTAssertTrue(recorder.keys.isEmpty)
+    }
+
+    /// Only the surface holding the keyboard: AppKit offers a key equivalent to every view in
+    /// the key window, and a pane the operator is not typing in has no claim to it.
+    func testASurfaceWithoutTheKeyboardTakesNothing() {
+        window.makeFirstResponder(nil)
+        XCTAssertFalse(keyEquivalent(0x28, "k", .command))
+        XCTAssertTrue(recorder.keys.isEmpty)
     }
 
     func testPasteInsertsTheClipboardAsText() {
