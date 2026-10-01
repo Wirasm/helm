@@ -44,6 +44,21 @@
         "runtime_session": "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2",
         "uptime_secs": 40
       }
+    ],
+    "usage": [
+      {
+        "harness": "claude",
+        "windows": [
+          { "minutes": 300, "used_percent": 62.0, "resets_at_ms": 1790553600000, "at_ms": 1790540800000 },
+          { "minutes": 10080, "used_percent": 30.5, "resets_at_ms": 1791043200000, "at_ms": 1790540800000 }
+        ]
+      },
+      {
+        "harness": "codex",
+        "windows": [
+          { "minutes": 10080, "used_percent": 30.0, "at_ms": 1790534669555 }
+        ]
+      }
     ]
   }
 }

@@ -22,6 +22,9 @@ final class SessionForegrounds: ObservableObject {
     /// The agents waiting on the operator, by the pane showing each. Published: the status
     /// bar counts them.
     @Published private(set) var waiting: [UUID: BenchLiveSessions.Waiting] = [:]
+    /// Each harness's plan limits as benchd last heard them (#143). Published: the status bar
+    /// shows them.
+    @Published private(set) var usage: [BenchUsage] = []
 
     /// The foreground pid of the session `pane` shows, as of the last refresh.
     func pid(ofPane pane: UUID) -> pid_t? { byPane[pane] }
@@ -42,6 +45,7 @@ final class SessionForegrounds: ObservableObject {
         reports = live.reportByPane
         let waiting = live.waitingByPane
         if waiting != self.waiting { self.waiting = waiting }
+        if live.usage != usage { usage = live.usage }
     }
 
     /// Set directly, for tests that say what benchd would answer.

@@ -3856,6 +3856,129 @@ fn a_hook_never_fails_its_agent() {
     assert_eq!(unknown, 1);
 }
 
+/// `bench statusline <command>` exactly as Claude Code runs it: the payload on stdin.
+fn bench_statusline(home: &Path, command: &[&str], payload: &serde_json::Value) -> CliRun {
+    let mut child = isolated(bench_bin())
+        .env("HOME", home)
+        .arg("statusline")
+        .args(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bench statusline");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// `sessions`' `usage` for one harness, with each window's `at_ms` set aside: Claude's is the
+/// moment `bench statusline` ran.
+fn usage_of(home: &Path, harness: &str) -> Option<serde_json::Value> {
+    let run = bench(home, &["sessions"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let mut usage = json_of(&run)["usage"]
+        .as_array()?
+        .iter()
+        .find(|u| u["harness"] == harness)?
+        .clone();
+    for w in usage["windows"].as_array_mut().unwrap() {
+        w.as_object_mut().unwrap().remove("at_ms");
+    }
+    Some(usage)
+}
+
+/// #143: Claude's plan limits reach `sessions` through `bench statusline`, which runs the
+/// operator's own statusline on the same input whether or not benchd is there; codex's reach it
+/// through its hook, from the rollout the payload names. A lower reading of the same window
+/// never replaces a higher one.
+#[test]
+fn plan_limits_reach_sessions_from_claudes_statusline_and_codexs_hook() {
+    let home = TestHome::claim("usage");
+    let h = &home.dir;
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/usage.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let payload = &fixture["claude_statusline"];
+    let mine = write_agent_script(h, "statusline", "printf 'mine:'; wc -c | tr -d ' '; exit 3")
+        .join("statusline");
+    let mine = mine.to_str().unwrap();
+    let expected_out = format!("mine:{}\n", payload.to_string().len());
+
+    let alone = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (alone.code, alone.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        alone.stderr
+    );
+
+    let _daemon = DaemonGuard::start(h, None);
+    assert_eq!(usage_of(h, "claude"), None, "nothing reported yet");
+    let run = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        run.stderr
+    );
+    let mut want = fixture["claude_usage"].clone();
+    for w in want["windows"].as_array_mut().unwrap() {
+        w.as_object_mut().unwrap().remove("at_ms");
+    }
+    assert_eq!(usage_of(h, "claude"), Some(want.clone()));
+
+    let mut lower = payload.clone();
+    lower["rate_limits"]["five_hour"]["used_percentage"] = serde_json::json!(10);
+    assert_eq!(
+        bench_statusline(h, &[], &lower).code,
+        0,
+        "no command is an empty statusline"
+    );
+    assert_eq!(usage_of(h, "claude"), Some(want), "an older, lower reading");
+
+    let rollout = h.join("rollout.jsonl");
+    let lines: Vec<String> = fixture["codex_rollout"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    fs::write(&rollout, lines.join("\n") + "\n").unwrap();
+    let hook = bench_hook(
+        h,
+        "codex",
+        serde_json::json!({"session_id": "c1", "hook_event_name": "Stop", "cwd": "/tmp",
+                           "transcript_path": rollout}),
+    );
+    assert_eq!(hook.code, 0);
+    let run = bench(h, &["sessions"]);
+    let codex = json_of(&run)["usage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["harness"] == "codex")
+        .cloned();
+    assert_eq!(
+        codex,
+        Some(fixture["codex_usage"].clone()),
+        "the line's own time, the plan's limit"
+    );
+}
+
 #[test]
 fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     // codex runs its hook command as a shell string. bash and macOS's sh exec a single

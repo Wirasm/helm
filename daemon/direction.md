@@ -120,6 +120,30 @@ benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.
 
+**Plus each plan's limits (#143).** benchd holds how close the operator's Claude and codex
+plans are to their limits, as each harness publishes it on benchd's machine, and answers it as
+`usage` in `sessions`, which helm shows as one status-bar capsule. Nothing asks a provider and
+nothing holds a credential. codex writes `rate_limits` into its rollout, which every hook payload
+names (`transcript_path`), so `bench hook codex` reads the newest record of the plan's own limit
+(`limit_id: codex`; per-model limits are not the plan) on `SessionStart`, `PostToolUse` and `Stop`.
+Claude Code publishes `rate_limits` only to its statusline command (no hook payload carries it,
+measured on 2.1.286), so `bench statusline [command...]` is that command: it runs the operator's
+own statusline on the same input, prints what it prints, and sends `usage/report`. **That is a
+one-line change the operator makes himself**, and nothing here makes it for him:
+
+```json
+"statusLine": { "type": "command", "command": "<bench> statusline ~/.claude/statusline.py" }
+```
+
+with `<bench>` the absolute path `bench wiring` prints. Leave `refreshInterval` unset: the payload
+carries no fetch time, so each run is stamped when it ran, and a timer would keep restamping an idle
+session's figure as current. benchd keeps one figure per harness and window, merged so that a
+window that resets later wins and, within one window, the higher reading wins (usage in a window
+only rises). An idle session repeating an old figure, or a resumed codex session's old record,
+never replaces a newer one; two accounts on one benchd are not told apart. It is memory only: a
+restarted benchd shows nothing until the next turn reports. helm greys a figure older than 15
+minutes and drops a window whose reset time has passed.
+
 **And the wire front (M3, #355): `bench` is the agent's whole surface.** The CLI speaks the
 pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — as
 the socket's own layout verbs, carrying who asked (`HELM_PANE`, `BENCH_HANDLE`) and `asked` only

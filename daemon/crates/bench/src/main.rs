@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod attach;
 mod files;
+mod usage;
 mod verbs;
 
 fn main() {
@@ -42,6 +43,8 @@ fn main() {
         }
         Some("hook") => hook(raw.get(1).map(String::as_str)),
         Some("wiring") => wiring(raw.get(1).map(String::as_str)),
+        // Claude Code's `statusLine` command, with the same exit-0-on-our-failure contract.
+        Some("statusline") => usage::statusline(&raw[1..]),
         _ if files::owns(&raw) => files::run(&raw),
         _ if verbs::owns(&raw) => verbs::run(&raw),
         _ => run(),
@@ -112,6 +115,9 @@ fn usage() -> &'static str {
      \x20     hook <claude|codex|pi>              the sensor, wired into an agent's own hooks: reads\n\
      \x20                                         the hook payload on stdin, reports it, prints the\n\
      \x20                                         agent's mail as hook context; always exits 0\n\
+     \x20     statusline [command...]             Claude Code's statusLine: reports its plan limits\n\
+     \x20                                         and runs command (your own statusline) on the\n\
+     \x20                                         same input; exits with its status\n\
      \x20     browser start                       start the shared browser, or find it running;\n\
      \x20                                         `cdp` in its answer is for playwright-cli attach\n\
      \x20     browser status                      the endpoint, or running: false\n\
@@ -596,6 +602,12 @@ fn wiring(mode: Option<&str>) -> i32 {
                     "then": "open codex once and trust the hook in /hooks",
                 },
                 "pi": { "link": pi_link, "to": "<helm checkout>/pi/extensions/bench" },
+                // Claude's plan limits reach benchd only through its statusline (#143). Its
+                // own statusline command, if any, goes after `statusline`.
+                "claude_statusline": {
+                    "file": claude_file,
+                    "statusLine": { "type": "command", "command": format!("{bench} statusline") },
+                },
             });
             println!(
                 "{}",
@@ -692,8 +704,11 @@ fn hook(harness: Option<&str>) -> i32 {
         pane: env("HELM_PANE"),
         bench_session: env("BENCH_SESSION"),
         messaging_socket: env("CLAUDE_CODE_MESSAGING_SOCKET"),
+        usage: usage::codex_hook(harness, &event, field("transcript_path").as_deref()),
     };
-    let Some(reply) = hook_request(&args) else {
+    let Some(reply) = quiet_request("hook", json!(args))
+        .and_then(|data| serde_json::from_value::<HookReply>(data).ok())
+    else {
         return 0;
     };
     match harness {
@@ -713,18 +728,19 @@ fn hook(harness: Option<&str>) -> i32 {
     0
 }
 
-/// One request line, one reply line, `None` on anything short of an ok reply. The root is
-/// resolved exactly as every other verb resolves it; a suite that cannot isolate reaches no
-/// daemon at all.
-fn hook_request(args: &HookArgs) -> Option<HookReply> {
+/// One request line, one reply line, `None` on anything short of an ok reply, each way bounded by
+/// [`HOOK_TIMEOUT`]: what a harness's own hook or statusline asks, which must never stall it. The
+/// root is resolved exactly as every other verb resolves it; a suite that cannot isolate reaches
+/// no daemon at all.
+fn quiet_request(verb: &str, args: Value) -> Option<Value> {
     let root = record_root(None).ok()?;
     let stream = endpoint(&root).ok()?.connect().ok()?;
     let _ = stream.set_write_timeout(Some(HOOK_TIMEOUT));
     let _ = stream.set_read_timeout(Some(HOOK_TIMEOUT));
     let request = Request {
         id: request_id(),
-        verb: "hook".into(),
-        args: json!(args),
+        verb: verb.into(),
+        args,
         by: None,
         asked: false,
     };
@@ -734,7 +750,7 @@ fn hook_request(args: &HookArgs) -> Option<HookReply> {
     if response.status != Status::Ok {
         return None;
     }
-    serde_json::from_value(response.data?).ok()
+    response.data
 }
 
 /// The record root every verb talks to: the `--suite` flag or `BENCH_SUITE`, validated
