@@ -105,19 +105,32 @@ final class WorkbenchAskForkTests: XCTestCase {
         XCTAssertEqual(copied, [], "the fork has the question; the clipboard is left alone")
     }
 
-    /// The refusals: a pi author, and a canvas whose opener had no conversation recorded. The
-    /// action says why and nothing reaches benchd.
-    func testACanvasWithNoClaudeAuthorSaysWhyAndSpawnsNothing() throws {
-        let pi = BenchDocument.Agent(command: "pi", session: "p-1", cwd: "/tmp/work")
-        for (author, reason) in [(pi, "Opened by pi"), (nil, "no recorded conversation")] {
+    /// benchd forks codex and pi too, read-only like claude (harness parity G8), so a canvas a
+    /// codex or a pi opened asks a fork of that harness's conversation.
+    func testACodexOrPiAuthorIsForkedInItsOwnHarness() throws {
+        for author in [
+            BenchDocument.Agent(command: "codex", session: "019a-thread", cwd: "/tmp/work"),
+            BenchDocument.Agent(command: "pi", session: "p-1", cwd: "/tmp/work"),
+        ] {
             let (model, server) = try openedCanvas(by: author)
-            guard case let .unavailable(why) = model.forkRoute() else {
-                return XCTFail("\(String(describing: author)) cannot be forked")
-            }
-            XCTAssertTrue(why.contains(reason), why)
+            XCTAssertEqual(model.forkRoute(), .fork(author))
             try ask("why?", on: model)
-            XCTAssertEqual(spawns(server).count, 0)
-            XCTAssertEqual(model.notesNotice, "Written to report.notes.md and copied — \(why)")
+            let args = try XCTUnwrap(spawns(server).first?["args"] as? [String: Any])
+            XCTAssertEqual(args["agent"] as? String, author.command)
+            XCTAssertEqual(args["fork"] as? String, author.session)
         }
+    }
+
+    /// The refusal left: a canvas whose opener had no conversation recorded. The action says why
+    /// and nothing reaches benchd.
+    func testACanvasWithNoRecordedAuthorSaysWhyAndSpawnsNothing() throws {
+        let (model, server) = try openedCanvas(by: nil)
+        guard case let .unavailable(why) = model.forkRoute() else {
+            return XCTFail("no conversation to fork")
+        }
+        XCTAssertTrue(why.contains("no recorded conversation"), why)
+        try ask("why?", on: model)
+        XCTAssertEqual(spawns(server).count, 0)
+        XCTAssertEqual(model.notesNotice, "Written to report.notes.md and copied — \(why)")
     }
 }

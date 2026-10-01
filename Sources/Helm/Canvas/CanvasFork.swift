@@ -13,7 +13,8 @@ import HelmWire
 ///
 /// Pure, so the rule is tested without a daemon.
 enum CanvasForkRoute: Equatable {
-    /// A Claude Code conversation to fork, and the cwd its transcript lives under.
+    /// The conversation to fork, which harness holds it, and the cwd its transcript lives under.
+    /// benchd forks claude, codex and pi, each read-only, and refuses anything else by name.
     case fork(BenchDocument.Agent)
     /// Nothing to fork, and the sentence the disabled action shows. **Never a silent no-op**: a
     /// button that does nothing reads as a broken one.
@@ -26,12 +27,6 @@ enum CanvasForkRoute: Equatable {
         guard let author else {
             return .unavailable(
                 "The agent that opened this canvas had no recorded conversation to fork")
-        }
-        // benchd forks Claude Code only (#531): codex's fork is a subcommand its served TUI cannot
-        // take, and pi has no read-only mode.
-        guard author.command == "claude" else {
-            return .unavailable(
-                "Opened by \(author.command), and only a Claude Code conversation can be forked")
         }
         return .fork(author)
     }

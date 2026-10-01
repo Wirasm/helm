@@ -9,22 +9,21 @@ final class CanvasForkTests: XCTestCase {
     private let claude = BenchDocument.Agent(
         command: "claude", session: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6", cwd: "/work")
 
-    func testOnlyAClaudeConversationThatOpenedTheCanvasCanBeForked() {
+    /// Any harness benchd recorded as the author can be forked: benchd forks claude, codex and pi
+    /// read-only (harness parity G8). Only a canvas with no conversation behind it cannot.
+    func testTheConversationThatOpenedTheCanvasCanBeForkedWhateverItsHarness() {
         let opener = UUID()
-        XCTAssertEqual(CanvasForkRoute.route(opener: opener, author: claude), .fork(claude))
+        let codex = BenchDocument.Agent(command: "codex", session: "t-1", cwd: "/work")
+        let pi = BenchDocument.Agent(command: "pi", session: "p-1", cwd: "/work")
+        for author in [claude, codex, pi] {
+            XCTAssertEqual(CanvasForkRoute.route(opener: opener, author: author), .fork(author))
+        }
         XCTAssertEqual(
             CanvasForkRoute.route(opener: nil, author: nil),
             .unavailable(CanvasForkRoute.noOpener))
-        guard
-            case let .unavailable(noRecord) = CanvasForkRoute.route(opener: opener, author: nil),
-            case let .unavailable(pi) = CanvasForkRoute.route(
-                opener: opener, author: .init(command: "pi", session: "p-1", cwd: "/work")),
-            case let .unavailable(codex) = CanvasForkRoute.route(
-                opener: opener, author: .init(command: "codex", session: "t-1", cwd: "/work"))
-        else { return XCTFail("only claude forks") }
+        guard case let .unavailable(noRecord) = CanvasForkRoute.route(opener: opener, author: nil)
+        else { return XCTFail("no conversation, no fork") }
         XCTAssertTrue(noRecord.contains("no recorded conversation"), noRecord)
-        XCTAssertTrue(pi.contains("Opened by pi"), pi)
-        XCTAssertTrue(codex.contains("Opened by codex"), codex)
     }
 
     func testThePromptNamesTheFileTheLinesTheMarkAndTheQuestion() {

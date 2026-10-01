@@ -68,14 +68,16 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   pick the model. `--arg <flag>` adds a flag after the posture; it never replaces it.
 - `--resume <session-id>` re-enters a claude, codex or pi conversation instead of starting one
   (codex's id is its thread id, which its hook records).
-- `--fork <session-id>` starts a new claude conversation that begins as a copy of that one, to
-  ask about its work while the original carries on untouched. The fork gets its own id (the
-  answer's `runtime_session`; `forked_from` names the original) and runs **read-only**, in
-  Claude's plan mode rather than the unattended posture: it shares the original's worktree, and
-  an edit there collides with the original's work. Put the question in `--prompt-file`. A fork
-  resumed later, by `--resume`, `bench resume` or `bench restore`, is read-only too. `--arg`
-  still adds flags after the posture, so a permission flag there is your explicit override of
-  it: do not pass one unless the operator asked. codex and pi refuse `--fork`.
+- `--fork <session-id>` starts a new claude, codex or pi conversation that begins as a copy of
+  that one, to ask about its work while the original carries on untouched. The fork gets its own
+  id (the answer's `runtime_session`, null for codex until its hook reports the fork's thread;
+  `forked_from` names the original) and runs **read-only** rather than in the unattended
+  posture: Claude in plan mode, codex on an app-server with a read-only sandbox, pi with only
+  `read,grep,find,ls`. It shares the original's worktree, and an edit there collides with the
+  original's work. Put the question in `--prompt-file`. A fork resumed later, by `--resume`,
+  `bench resume` or `bench restore`, is read-only too. `--arg` still adds flags after the
+  posture, so a permission flag there is your explicit override of it: do not pass one unless
+  the operator asked.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
 - codex must already trust `--cwd` itself, or it stops at "Trust this folder?". A trusted parent

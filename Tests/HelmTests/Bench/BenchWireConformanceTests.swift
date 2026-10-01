@@ -180,7 +180,7 @@ final class BenchWireConformanceTests: XCTestCase {
         let samples =
             try JSONSerialization.jsonObject(with: fixture("spawn-verbs.json")) as! [String: Any]
         let request = BenchForkRequest(
-            id: "helm-3", fork: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
+            id: "helm-3", agent: "claude", fork: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
             cwd: "/Users/operator/Projects/helm",
             prompt: "You are a fork.\n\n```text\nthe marked passage\n```\n\nWhy four retries?")
         XCTAssertEqual(

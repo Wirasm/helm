@@ -456,8 +456,10 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         .and_then(|id| c.sessions.get(id))
     {
         let (session, handle) = (spawned.id.clone(), spawned.handle.clone());
-        // codex names its session after the fact, so its spawn recorded nothing; the hook's
-        // id is the first the daemon hears of it.
+        let forked_from = spawned.spec.conversation.forked_from().map(str::to_string);
+        // codex names its session after the fact, a fork's too, so its spawn recorded nothing;
+        // the hook's id is the first the daemon hears of it. A fork's record says so, which is
+        // what brings it back read-only (#531).
         sessions::record_claim(
             c,
             HostedSession {
@@ -469,7 +471,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
                     handle: Some(handle.clone()),
                 },
                 recorded_at: now_rfc3339(),
-                forked_from: None,
+                forked_from,
             },
             args.pid,
         )?;

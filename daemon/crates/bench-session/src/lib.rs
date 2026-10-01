@@ -99,18 +99,19 @@ pub enum Conversation {
     New(Option<String>),
     /// Re-enter conversation `id`.
     Resume(String),
-    /// A new conversation `id` that starts as a copy of `from`, which carries on untouched: how
-    /// the operator asks an agent about its work without interrupting it (#531). benchd mints
-    /// `id` as it does for [`Conversation::New`], so no record of the fork ever names `from`.
-    Fork { from: String, id: String },
+    /// A new conversation that starts as a copy of `from`, which carries on untouched: how the
+    /// operator asks an agent about its work without interrupting it (#531). benchd mints `id`
+    /// as it does for [`Conversation::New`] (claude, pi), so no record of the fork ever names
+    /// `from`; codex names its fork itself, and its hook reports it.
+    Fork { from: String, id: Option<String> },
 }
 
 impl Conversation {
     /// The conversation the session holds, when the bench knows it.
     pub fn id(&self) -> Option<&str> {
         match self {
-            Conversation::New(id) => id.as_deref(),
-            Conversation::Resume(id) | Conversation::Fork { id, .. } => Some(id),
+            Conversation::New(id) | Conversation::Fork { id, .. } => id.as_deref(),
+            Conversation::Resume(id) => Some(id),
         }
     }
 
@@ -131,7 +132,8 @@ pub enum Posture {
     Unattended,
     /// Reads, never writes: a fork (#531), which exists to answer, in the author's worktree
     /// where an edit would collide with the author's work. The one posture that withholds
-    /// capability, by the operator's ruling. claude's plan mode; the other runtimes refuse it.
+    /// capability, by the operator's ruling. claude's plan mode, codex's read-only sandbox, pi
+    /// with only its read tools.
     ReadOnly,
 }
 
@@ -190,28 +192,39 @@ impl SpawnSpec {
     }
 }
 
-/// How a served codex session starts, as a script: `$0` is the socket, `"$@"` the TUI's
-/// flags. Measured on codex 0.157.0:
+/// How a served codex session starts, as a script: `$0` is the socket, `$1` the app-server's
+/// sandbox ([`codex_sandbox`]), the rest the TUI's flags. Measured on codex 0.157.0:
 /// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
 ///   parent. So it runs in the session's environment (`BENCH_SESSION`), one per session, and
 ///   benchd knows which session a hook is from without matching threads.
 /// - The TUI renders and takes keys against it with `--remote`, and a second client's
 ///   `turn/start` on its idle thread runs a turn the TUI shows.
-/// - The server holds the unattended posture, the only one codex runs in on the bench. A resumed
-///   thread takes the server's permissions, because the TUI refuses permission flags when it
-///   resumes against a remote server ([`argv`]); without these it ran `workspace-write`, where
-///   `bench` cannot reach benchd's socket (measured on 0.159.3). A new thread's flags agree.
+/// - The server holds the session's posture. A resumed or forked thread takes the server's
+///   permissions, because the TUI refuses permission flags when it resumes or forks against a
+///   remote server ([`argv`]); without these it ran `workspace-write`, where `bench` cannot reach
+///   benchd's socket (measured on 0.159.3). A new thread's flags agree.
 /// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
 ///   watcher is its leash: it outlives a hangup and stops the server within a second of the
 ///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
-pub const CODEX_SERVED: &str = r#"s="$0"
-codex app-server -c 'sandbox_mode="danger-full-access"' -c 'approval_policy="never"' --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
+pub const CODEX_SERVED: &str = r#"s="$0" m="$1"
+shift
+codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
 p=$!
 ( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 i=0
 while [ ! -S "$s" ] && [ $i -lt 100 ] && kill -0 $p 2>/dev/null; do sleep 0.1; i=$((i+1)); done
 exec codex --remote "unix://$s" "$@"
 "#;
+
+/// codex's sandbox for a posture: every command runs unsandboxed, or none may write. Either way
+/// with approvals `never`, since nobody is at an unattended pane to approve anything, and a write
+/// a read-only fork attempts fails rather than asking.
+fn codex_sandbox(posture: Posture) -> &'static str {
+    match posture {
+        Posture::Unattended => "danger-full-access",
+        Posture::ReadOnly => "read-only",
+    }
+}
 
 /// The sentence a first prompt becomes in argv.
 pub fn prompt_pointer(path: &str) -> String {
@@ -252,28 +265,36 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             "claude"
         }
         AgentKind::Codex => {
-            // codex names its session after the fact; the id comes from its own hook, which is
-            // how a pane's record knows it (M5b), and `codex resume <id>` takes every flag below.
-            match &spec.conversation {
-                Conversation::New(_) => {}
-                Conversation::Resume(id) => args.extend(["resume".into(), id.clone()]),
-                // `codex fork` is a subcommand of the embedded TUI; benchd runs codex against
-                // an app-server of its own (`codex --remote`), where a fork is a different call.
-                Conversation::Fork { .. } => return Err(
-                    "codex forks through `codex fork`, which a codex benchd serves (`codex --remote`) cannot take — fork a claude conversation instead"
-                        .into(),
-                ),
-            }
-            // A codex read-only posture would also have to reach the app-server, which holds the
-            // unattended one for every served session ([`CODEX_SERVED`]).
-            if spec.posture == Posture::ReadOnly {
-                return Err("codex has no read-only posture on the bench".into());
-            }
-            // A served resume takes its permissions from the app-server ([`CODEX_SERVED`]): the
-            // TUI exits on a permission flag there ("Permission overrides are not supported when
-            // resuming a remote task", measured on 0.157.0).
-            if spec.served_resume().is_none() {
-                args.push("--dangerously-bypass-approvals-and-sandbox".into());
+            // codex names its session after the fact, a fork's too; the id comes from its own
+            // hook, which is how a pane's record knows it (M5b). `codex resume <id>` and `codex
+            // fork <id>` take every flag below.
+            let carried = match &spec.conversation {
+                Conversation::New(_) => false,
+                Conversation::Resume(id) => {
+                    args.extend(["resume".into(), id.clone()]);
+                    true
+                }
+                Conversation::Fork { from, .. } => {
+                    args.extend(["fork".into(), from.clone()]);
+                    true
+                }
+            };
+            // A served resume or fork takes its permissions from the app-server
+            // ([`CODEX_SERVED`]): the TUI exits on a permission flag there ("Permission overrides
+            // are not supported when resuming a remote task", measured on 0.157.0, and "…when
+            // forking…" on 0.159.3). A new thread accepts them, and they agree with the server.
+            if !(carried && spec.codex_server.is_some()) {
+                match spec.posture {
+                    Posture::Unattended => {
+                        args.push("--dangerously-bypass-approvals-and-sandbox".into())
+                    }
+                    Posture::ReadOnly => args.extend([
+                        "-s".into(),
+                        codex_sandbox(spec.posture).into(),
+                        "-a".into(),
+                        "never".into(),
+                    ]),
+                }
             }
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
             // made in a dialog nobody is at an unattended pane to answer. An agent that already
@@ -302,17 +323,14 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             "codex"
         }
         AgentKind::Pi => {
-            // pi's `--fork <id>` is untested with a `--session-id` benchd mints, and pi has no
-            // plan mode to make a fork read-only.
-            if matches!(spec.conversation, Conversation::Fork { .. })
-                || spec.posture == Posture::ReadOnly
-            {
-                return Err(
-                    "pi forks are not on the bench: its --fork is untested with an id benchd mints, and pi has no read-only mode to run one in — fork a claude conversation instead"
-                        .into(),
-                );
-            }
+            // `--approve` trusts the project's own files, a prompt rather than a capability, so
+            // a read-only pi takes it too. Read-only is pi's own recipe: only the tools that
+            // read, which leaves it no bash, edit or write (measured on 0.99.2: a fork asked to
+            // write a file had no tool to do it with).
             args.push("--approve".into());
+            if spec.posture == Posture::ReadOnly {
+                args.extend(["--tools".into(), "read,grep,find,ls".into()]);
+            }
             if let Some(m) = &spec.model {
                 // pi carries thinking as a `:<level>` suffix on the model — one flag,
                 // measured working in the model-selection spike.
@@ -325,7 +343,11 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
                 args.extend(["--thinking".into(), e.clone()]);
             }
             // --session-id creates when missing and re-enters when present, so spawn
-            // and resume are the same flag (session-state spike).
+            // and resume are the same flag (session-state spike). Beside `--fork` it names the
+            // copy, which keeps `parentSession` (measured on 0.84.4 and 0.99.2).
+            if let Conversation::Fork { from, .. } = &spec.conversation {
+                args.extend(["--fork".into(), from.clone()]);
+            }
             if let Some(id) = spec.conversation.id() {
                 args.extend(["--session-id".into(), id.to_string()]);
             }
@@ -350,7 +372,12 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
         args.push(prompt_pointer(path));
     }
     if let (AgentKind::Codex, Some(socket)) = (spec.agent, &spec.codex_server) {
-        let mut served = vec!["-c".to_string(), CODEX_SERVED.to_string(), socket.clone()];
+        let mut served = vec![
+            "-c".to_string(),
+            CODEX_SERVED.to_string(),
+            socket.clone(),
+            codex_sandbox(spec.posture).to_string(),
+        ];
         served.extend(args);
         return Ok(("/bin/sh".to_string(), served));
     }
@@ -393,13 +420,12 @@ fn claude_flags(spec: &SpawnSpec) -> Vec<String> {
         // Claude takes `--session-id` beside `--resume` only with `--fork-session` (2.1.285:
         // "--session-id can only be used with --continue or --resume if --fork-session is also
         // specified"), which is what names the fork up front.
-        Conversation::Fork { from, id } => args.extend([
-            "--resume".into(),
-            from.clone(),
-            "--fork-session".into(),
-            "--session-id".into(),
-            id.clone(),
-        ]),
+        Conversation::Fork { from, id } => {
+            args.extend(["--resume".into(), from.clone(), "--fork-session".into()]);
+            if let Some(id) = id {
+                args.extend(["--session-id".into(), id.clone()]);
+            }
+        }
     }
     args
 }
@@ -820,9 +846,12 @@ mod tests {
         s.codex_server = Some("/r/codex/s1.sock".into());
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "/bin/sh");
-        assert_eq!(a[..3], ["-c", CODEX_SERVED, "/r/codex/s1.sock"]);
         assert_eq!(
-            a[3..],
+            a[..4],
+            ["-c", CODEX_SERVED, "/r/codex/s1.sock", "danger-full-access"]
+        );
+        assert_eq!(
+            a[4..],
             embedded[..],
             "the TUI keeps every flag and the prompt"
         );
@@ -836,15 +865,12 @@ mod tests {
         assert!(embedded.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
         s.codex_server = Some("/r/codex/s1.sock".into());
         let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..5], ["resume", "019a-thread"]);
+        assert_eq!(a[3..6], ["danger-full-access", "resume", "019a-thread"]);
         assert!(
             !a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
             "codex exits on a permission flag in a remote resume: {a:?}"
         );
-        assert!(
-            CODEX_SERVED
-                .contains(r#"-c 'sandbox_mode="danger-full-access"' -c 'approval_policy="never"'"#)
-        );
+        assert!(CODEX_SERVED.contains(r#"-c "sandbox_mode=\"$m\"" -c 'approval_policy="never"'"#));
     }
 
     /// A stub `codex` on PATH: `app-server` records its pid and sleeps; the TUI sleeps too, so
@@ -886,7 +912,12 @@ mod tests {
             let socket = dir.join("s.sock");
             let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
             let mut tui = std::process::Command::new("/bin/sh")
-                .args(["-c", CODEX_SERVED, socket.to_str().unwrap()])
+                .args([
+                    "-c",
+                    CODEX_SERVED,
+                    socket.to_str().unwrap(),
+                    "danger-full-access",
+                ])
                 .env("PATH", path)
                 .spawn()
                 .unwrap();
@@ -1006,7 +1037,7 @@ mod tests {
         let mut s = spec(AgentKind::Claude);
         s.conversation = Conversation::Fork {
             from: "author-1".into(),
-            id: "fork-2".into(),
+            id: Some("fork-2".into()),
         };
         s.posture = Posture::ReadOnly;
         s.prompt_file = Some("/tmp/q.md".into());
@@ -1034,22 +1065,99 @@ mod tests {
         assert_eq!(a[..4], ["--permission-mode", "plan", "--resume", "fork-2"]);
     }
 
+    /// A codex fork is a fork against its own app-server, which holds the read-only sandbox: the
+    /// TUI takes no permission flag there, and the server's posture is what codex runs the fork
+    /// in. Resumed later, it is served read-only again.
     #[test]
-    fn codex_and_pi_refuse_a_fork_naming_why() {
-        let fork = Conversation::Fork {
-            from: "a".into(),
-            id: "b".into(),
-        };
+    fn a_served_codex_fork_runs_on_a_read_only_server() {
         let mut s = spec(AgentKind::Codex);
-        s.conversation = fork.clone();
+        s.conversation = Conversation::Fork {
+            from: "019a-author".into(),
+            id: None,
+        };
         s.posture = Posture::ReadOnly;
-        let err = argv(&s).unwrap_err();
-        assert!(err.contains("codex fork"), "{err}");
+        s.codex_server = Some("/r/codex/s2.sock".into());
+        s.prompt_file = Some("/tmp/q.md".into());
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "/bin/sh");
+        assert_eq!(
+            a[..6],
+            [
+                "-c",
+                CODEX_SERVED,
+                "/r/codex/s2.sock",
+                "read-only",
+                "fork",
+                "019a-author"
+            ]
+        );
+        for refused in ["--dangerously-bypass-approvals-and-sandbox", "-s", "-a"] {
+            assert!(!a.contains(&refused.to_string()), "{refused} in {a:?}");
+        }
+        assert_eq!(a.last().unwrap(), "Read and act on the prompt in /tmp/q.md");
+
+        s.conversation = Conversation::Resume("019b-fork".into());
+        s.prompt_file = None;
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(a[3..6], ["read-only", "resume", "019b-fork"]);
+    }
+
+    /// Unserved, the TUI carries the posture itself.
+    #[test]
+    fn an_embedded_read_only_codex_carries_its_sandbox_on_the_tui() {
+        let mut s = spec(AgentKind::Codex);
+        s.conversation = Conversation::Fork {
+            from: "019a-author".into(),
+            id: None,
+        };
+        s.posture = Posture::ReadOnly;
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "codex");
+        assert_eq!(
+            a[..6],
+            ["fork", "019a-author", "-s", "read-only", "-a", "never"]
+        );
+        assert!(!a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
+    fn a_pi_fork_copies_the_conversation_under_the_minted_id_with_only_read_tools() {
         let mut s = spec(AgentKind::Pi);
-        s.conversation = fork;
+        s.conversation = Conversation::Fork {
+            from: "author-1".into(),
+            id: Some("fork-2".into()),
+        };
         s.posture = Posture::ReadOnly;
-        let err = argv(&s).unwrap_err();
-        assert!(err.contains("no read-only mode"), "{err}");
+        s.prompt_file = Some("/tmp/q.md".into());
+        let (p, a) = argv(&s).unwrap();
+        assert_eq!(p, "pi");
+        assert_eq!(
+            a,
+            [
+                "--approve",
+                "--tools",
+                "read,grep,find,ls",
+                "--fork",
+                "author-1",
+                "--session-id",
+                "fork-2",
+                "Read and act on the prompt in /tmp/q.md"
+            ]
+        );
+        s.conversation = Conversation::Resume("fork-2".into());
+        s.prompt_file = None;
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(
+            a,
+            [
+                "--approve",
+                "--tools",
+                "read,grep,find,ls",
+                "--session-id",
+                "fork-2"
+            ],
+            "a pi fork resumed later still has only its read tools"
+        );
     }
 
     #[test]
