@@ -26,6 +26,13 @@ final class CanvasNoteHoverTests: XCTestCase {
         XCTAssertNil(CanvasNotes.mark(in: "`#phase2` — \"Ship"))
     }
 
+    func testMissingPageIsUnavailableRatherThanMissingAnchor() {
+        let hover = CanvasNoteHover()
+        let note = CanvasNotes.Note(id: 0, heading: "\"valid words\"", text: "note")
+        hover.hover(note, entered: true)
+        XCTAssertEqual(hover.status[0], "The canvas cannot highlight this note right now.")
+    }
+
     func testEntriesKeepEveryByteOfTheSidecarAndLegacyProse() {
         let text =
             "## \"first\"\n\nA comment\n\n<sub>2026-10-01</sub>\n\n## circled old\n\nLegacy comment\n"

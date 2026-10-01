@@ -15,8 +15,12 @@ final class CanvasNoteHover: ObservableObject {
         }
         clear()
         active = note.id
-        guard case let .selection(anchor) = note.mark, let webView else {
+        guard case let .selection(anchor) = note.mark else {
             status[note.id] = "This note points at something I cannot find."
+            return
+        }
+        guard let webView else {
+            status[note.id] = "The canvas cannot highlight this note right now."
             return
         }
         let payload: [String: String]
@@ -38,6 +42,11 @@ final class CanvasNoteHover: ObservableObject {
                 self.status[note.id] = "The canvas cannot highlight this note right now."
             }
         }
+    }
+
+    func reset() {
+        clear()
+        status = [:]
     }
 
     func clear() {

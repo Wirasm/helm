@@ -146,7 +146,8 @@
   }
 
   function verified(node, text) {
-    return node && addressable(node) && node.getClientRects().length
+    return node && addressable(node) && words(node.textContent).includes(words(text))
+      && node.getClientRects().length
       && getComputedStyle(node).visibility !== "hidden"
       && words(node.innerText === undefined ? node.textContent : node.innerText).includes(words(text));
   }

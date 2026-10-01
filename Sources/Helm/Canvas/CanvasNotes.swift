@@ -169,9 +169,7 @@ enum CanvasNotes {
     /// notes the drawer is not showing.
     ///
     static func headings(in text: String) -> [String] {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { $0.hasPrefix("## ") }
-            .map { String($0.dropFirst(3)) }
+        entries(in: text).map(\.heading).filter { !$0.isEmpty }
     }
 
     /// The sidecar as the drawer reads it: the file's own text, with the timestamp's `<sub>`
