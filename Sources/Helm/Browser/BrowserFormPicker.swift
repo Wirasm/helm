@@ -73,7 +73,8 @@ final class BrowserFormPicker: ObservableObject {
                 let activation = try await connection.call(
                     "Runtime.callFunctionOn",
                     Function(
-                        objectId: resolved.hit, functionDeclaration: BrowserFormScript.activate),
+                        objectId: resolved.hit, functionDeclaration: BrowserFormScript.activate,
+                        arguments: [.object(object)]),
                     session: session, returning: ValueReply<Bool>.self)
                 guard activation.result.value == true else { release(held); return true }
             }
@@ -163,7 +164,7 @@ final class BrowserFormPicker: ObservableObject {
                 "Runtime.callFunctionOn",
                 Function(
                     objectId: held.object, functionDeclaration: BrowserFormScript.commit,
-                    arguments: [Argument(value: answer)]),
+                    arguments: [.answer(answer)]),
                 session: held.session, returning: ValueReply<String>.self)
             guard current?.id == pick.id else { return }
             if result.result.value == "ok" {
@@ -204,7 +205,19 @@ private struct RemoteObject: Decodable { let objectId: String? }
 private struct Resolved: Decodable { let object: RemoteObject }
 private struct ObjectReply: Decodable { let result: RemoteObject }
 private struct Answer: Encodable { let index: Int?; let value: String?; let label: String? }
-private struct Argument: Encodable { let value: Answer }
+private enum Argument: Encodable {
+    case answer(Answer)
+    case object(String)
+
+    private enum Keys: String, CodingKey { case value, objectId }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case let .answer(value): try container.encode(value, forKey: .value)
+        case let .object(id): try container.encode(id, forKey: .objectId)
+        }
+    }
+}
 private struct Function: Encodable {
     let objectId: String
     let functionDeclaration: String

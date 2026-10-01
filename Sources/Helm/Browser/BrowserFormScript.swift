@@ -32,18 +32,28 @@ enum BrowserFormScript {
         """
 
     /// Give page handlers the pointer gesture before opening our UI. Cancelling the gesture
-    /// leaves a page's own widget in charge. Synthetic clicks do not open Chrome's native menu.
+    /// leaves a page's own widget in charge. Observe the label's forwarded control click too:
+    /// cancelling it does not cancel the original label event. The listener lives for this call.
     static let activate = """
-        function() {
+        function(control) {
           const r = this.getBoundingClientRect(), w = this.ownerDocument.defaultView;
           const p = {bubbles:true, cancelable:true, composed:true, button:0,
             clientX:r.x+r.width/2, clientY:r.y+r.height/2, pointerType:'mouse'};
-          let allowed = true;
-          for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
-            const C = type.startsWith('pointer') ? w.PointerEvent : w.MouseEvent;
-            if (!this.dispatchEvent(new C(type,p))) allowed = false;
+          let allowed = true, forwarded = null;
+          const root = control.getRootNode();
+          const observe = event => { if (event.target === control) forwarded = event; };
+          // Observe before target handlers: stopping propagation alone does not cancel a click.
+          root.addEventListener('click', observe, true);
+          try {
+            for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
+              const C = type.startsWith('pointer') ? w.PointerEvent : w.MouseEvent;
+              if (!this.dispatchEvent(new C(type,p))) allowed = false;
+            }
+          } finally {
+            root.removeEventListener('click', observe, true);
           }
-          return allowed;
+          // If propagation stopped before observation, leave the page's widget in charge.
+          return allowed && (this === control || (!!forwarded && !forwarded.defaultPrevented));
         }
         """
 
