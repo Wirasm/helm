@@ -5,6 +5,9 @@
 #
 #   scripts/prune-worktrees.sh             remove every one that qualifies
 #   scripts/prune-worktrees.sh --dry-run   say which would go, remove nothing
+#   scripts/prune-worktrees.sh --branch <b> [--branch <b>...]
+#                                          consider only the worktrees on those branches: the
+#                                          merge queue's cleanup after a batch it merged
 #
 # A worktree goes only when all of these hold, and a line names the first that does not:
 #   - its HEAD reached origin/development through a merge: an ancestor of it, and not on its
@@ -19,23 +22,48 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 dry_run=0
-case "${1:-}" in
-    "") ;;
-    --dry-run) dry_run=1 ;;
-    *) echo "usage: scripts/prune-worktrees.sh [--dry-run]" >&2; exit 2 ;;
-esac
+branches=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) dry_run=1 ;;
+        --branch)
+            [ -n "${2:-}" ] || { echo "prune: --branch needs a name" >&2; exit 2; }
+            branches+=("refs/heads/$2")
+            shift
+            ;;
+        *) echo "usage: scripts/prune-worktrees.sh [--dry-run] [--branch <name>]..." >&2; exit 2 ;;
+    esac
+    shift
+done
 
 timeout 60 git fetch --quiet origin development || { echo "prune: cannot fetch origin" >&2; exit 1; }
 base=$(git rev-parse origin/development) || exit 1
 first_parent=$(git rev-list --first-parent "$base")
 # The main checkout is the first entry, spelled the way git spells every other one.
 root="$(git worktree list --porcelain | sed -n '1s/^worktree //p')/.worktrees/"
-busy=$(timeout 30 lsof -nP -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -F "$root" || true)
+# Every process's working directory. lsof exits 1 when it could not read some processes, which
+# is normal; anything else, or no answer, means nobody can say which worktrees are in use, so
+# nothing is removed. This script runs unattended from the merge queue.
+cwds=$(timeout 30 lsof -nP -d cwd -Fn 2>/dev/null)
+case $? in
+    0 | 1) ;;
+    *) echo "prune: cannot list the processes working in worktrees (lsof failed); removing nothing" >&2; exit 1 ;;
+esac
+busy=$(sed -n 's/^n//p' <<<"$cwds" | grep -F "$root" || true)
 
 removed=0 kept=0
-path="" head="" locked=0
+path="" head="" branch="" locked=0
+# Named branches only, when any were named. A detached worktree (the queue's own, a review
+# checkout) is on no branch, so it is never one of them.
+named() {
+    [ ${#branches[@]} -eq 0 ] && return 0
+    local b
+    for b in "${branches[@]}"; do [ "$b" = "$branch" ] && return 0; done
+    return 1
+}
 consider() {
     [[ -n "$path" && "$path" == "$root"* ]] || return 0
+    named || return 0
     local why=""
     if [ "$locked" = 1 ]; then
         why="locked"
@@ -65,8 +93,9 @@ consider() {
 
 while IFS= read -r line; do
     case "$line" in
-        "worktree "*) path="${line#worktree }" head="" locked=0 ;;
+        "worktree "*) path="${line#worktree }" head="" branch="" locked=0 ;;
         "HEAD "*) head="${line#HEAD }" ;;
+        "branch "*) branch="${line#branch }" ;;
         locked*) locked=1 ;;
         "") consider; path="" ;;
     esac

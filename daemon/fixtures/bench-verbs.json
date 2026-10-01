@@ -381,5 +381,16 @@
     "by": {
       "kind": "operator"
     }
+  },
+  {
+    "id": "v-28",
+    "verb": "drawer/place",
+    "args": {
+      "drawer": "browser",
+      "edge": "bottom"
+    },
+    "by": {
+      "kind": "operator"
+    }
   }
 ]

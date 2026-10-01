@@ -37,11 +37,14 @@ or a mail), not replaced.
 | `--fork <id>` | yes, read-only (plan mode), its own new id | yes, read-only (read-only sandbox on its app-server), its own thread, which its hook records | yes, read-only (`--tools read,grep,find,ls`), its own new id |
 | posture | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approve` |
 | mail wake when idle | yes (inbox socket) | yes when benchd spawned it (its app-server) | yes (`bench` extension) |
-| activity in `bench sessions` | busy, shell, idle, waiting with its own words | unknown | unknown |
-| `bench log` | yes | no | yes |
+| activity in `bench sessions` | busy, shell, idle, waiting with its own words | busy, idle, waiting, from its hooks | busy, idle, waiting, from its hooks |
+| `bench log` | yes | yes | yes |
 
 `runtime_session` in the spawn answer is the id `--resume` and `--fork` take. It is null for a new
-codex, which names its thread after the fact: its hook records the id.
+codex, which names its thread after the fact: its hook records the id, and from then on `bench
+sessions` and `bench mail who` name the session by it, and after `/new` by the new thread. The
+thread a benchd codex left with `/new` cannot be resumed until that session ends: its app-server
+keeps it open, so `--resume` refuses it as already live.
 
 Effort is a judgment, not a table: `high` for delivery, `xhigh` or `max` for a hard design or a
 diagnosis that has already failed once, `medium` or `low` for mechanical work.

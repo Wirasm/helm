@@ -1,3 +1,4 @@
+import HelmWire
 import XCTest
 
 @testable import Helm
@@ -52,5 +53,34 @@ final class StandardizedPathTests: XCTestCase {
         XCTAssertEqual(
             CanvasSource.file("/tmp/./plan.md").fileURL,
             URL(fileURLWithPath: "/tmp/plan.md"))
+    }
+
+    /// `daemon/fixtures/standard-path.json` is the table `bench_doc::StandardPath` answers in the
+    /// daemon gate, so a path benchd's document holds and helm's spelling of it are one string.
+    /// The `/private` rows are the ones `URL.standardizedFileURL` got wrong: it dropped the
+    /// prefix whenever the shorter path existed, which `/private/tmp` and `/private/etc/hosts`
+    /// always do on a Mac.
+    func testTheStandardPathTableIsAnsweredAsBenchdAnswersIt() throws {
+        struct Table: Decodable {
+            struct Row: Decodable {
+                let raw: String
+                let standard: String
+            }
+            let rows: [Row]
+            let refused: [String]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("daemon/fixtures/standard-path.json")
+        let table = try JSONDecoder().decode(Table.self, from: Data(contentsOf: url))
+        XCTAssertFalse(table.rows.isEmpty)
+        for row in table.rows {
+            XCTAssertEqual(FilesystemPath.standardized(row.raw), row.standard, row.raw)
+            XCTAssertEqual(StandardizedPath(row.raw).value, row.standard, row.raw)
+        }
+        for raw in table.refused {
+            XCTAssertNil(FilesystemPath.standardized(raw), "\(raw) should be refused")
+        }
     }
 }

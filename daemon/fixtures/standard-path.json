@@ -1,0 +1,17 @@
+{
+  "about": "One spelling of an absolute path, the rule bench_doc::StandardPath and helm's FilesystemPath.standardized both answer every row of: empty and '.' components dropped, '..' collapsed lexically, no trailing slash, and symlinks never resolved. The /private rows are what URL.standardizedFileURL got wrong: it drops /private when the shorter path exists, so helm and benchd named one canvas two ways.",
+  "rows": [
+    { "raw": "/tmp/plan.md", "standard": "/tmp/plan.md" },
+    { "raw": "/tmp/./plan.md", "standard": "/tmp/plan.md" },
+    { "raw": "/tmp//a/../plan.md", "standard": "/tmp/plan.md" },
+    { "raw": "/tmp/work/", "standard": "/tmp/work" },
+    { "raw": "/", "standard": "/" },
+    { "raw": "/..", "standard": "/" },
+    { "raw": "/private/tmp", "standard": "/private/tmp" },
+    { "raw": "/private/tmp/", "standard": "/private/tmp" },
+    { "raw": "/private/tmp/./review.html", "standard": "/private/tmp/review.html" },
+    { "raw": "/private/var/folders", "standard": "/private/var/folders" },
+    { "raw": "/private/etc/hosts", "standard": "/private/etc/hosts" }
+  ],
+  "refused": ["plan.md", "./plan.md", "~/plan.md", ""]
+}

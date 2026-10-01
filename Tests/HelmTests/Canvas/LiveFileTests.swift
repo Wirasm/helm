@@ -100,6 +100,27 @@ final class LiveFileTests: XCTestCase {
         XCTAssertEqual(files.writes.map(\.notify), [false])
     }
 
+    /// **The live file is written where benchd looks for it.** benchd mails a live file's
+    /// change to the opener of the canvas whose live file it is, matched by path against its own
+    /// document. A canvas under `/private/tmp` is held there with the prefix, so helm has to
+    /// write `/private/tmp/…/tasks.data.json`; dropping `/private` left the mail with no canvas.
+    func testAPageWriteUnderPrivateTmpKeepsTheSpellingBenchdsDocumentHolds() throws {
+        let folder = "/private/tmp/helm-live-file-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            atPath: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: folder) }
+        let canvas = folder + "/tasks.html"
+        try "<p>tasks</p>".write(toFile: canvas, atomically: true, encoding: .utf8)
+        guard case let .canvas(source) = Pane.Content(.canvas(path: canvas)) else {
+            return XCTFail("a canvas surface is a canvas pane")
+        }
+        let files = Recording()
+        let model = CanvasModel(source: source, files: files)
+
+        _ = model.pageWroteData(try write(["done": true]))
+        XCTAssertEqual(files.writes.map(\.path), [BenchLiveFile.path(for: canvas)])
+    }
+
     /// **Nobody's write replaces a version its writer has not seen.** The agent wrote since the
     /// page read; the page is handed the agent's bytes and the file keeps them.
     func testAStaleWriteIsAnsweredWithTheFileAndWritesNothing() throws {

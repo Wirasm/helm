@@ -3,7 +3,7 @@
 //! travel and where they are kept.
 
 use bench_doc::{
-    ColumnId, Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split,
+    ColumnId, Direction, Document, DrawerEdge, DrawerName, PaneId, PaneName, Place, SlotId, Split,
     StandardPath, Surface,
 };
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,14 @@ pub enum LayoutVerb {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         surface: Option<Surface>,
     },
+    /// Put a drawer against another edge of the window (#178, the operator dragging it there).
+    /// Kept in the document, so it outlives the drawer and benchd. Where his drawers sit is the
+    /// operator's, so an agent needs `asked`.
+    #[serde(rename = "drawer/place")]
+    DrawerPlace {
+        drawer: DrawerName,
+        edge: DrawerEdge,
+    },
 }
 
 /// `pane/open`'s arguments: what to show, and where.
@@ -275,6 +283,7 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "focus/waiting",
     "layout/resize",
     "drawer/toggle",
+    "drawer/place",
 ];
 
 /// The event every document change is logged as. One kind, so a follower that only wants

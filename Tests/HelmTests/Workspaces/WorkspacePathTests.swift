@@ -8,7 +8,7 @@ import XCTest
 /// route in normalizes the same way `Workspace.path` already does.
 ///
 /// **Not `StandardizedPath`'s discipline, on purpose, past the shared `Codable` shape.**
-/// `StandardizedPath` runs through `URL.standardizedFileURL`, which collapses `.`/`..` and
+/// `StandardizedPath` runs through `FilesystemPath.standardized`, which collapses `.`/`..` and
 /// does not expand `~`. A `WorkspacePath` built the same way would silently re-normalize
 /// every saved `Workspace`, `BenchSnapshot` and benchd document path on the next
 /// launch — `~/Projects/foo` staying a literal `~` directory, and a path built by any code
@@ -39,7 +39,7 @@ final class WorkspacePathTests: XCTestCase {
         XCTAssertEqual(WorkspacePath("/").value, "/", "the root must not be trimmed to empty")
     }
 
-    /// The distinguishing case from `StandardizedPath`'s `.standardizedFileURL`, and the one
+    /// The distinguishing case from `StandardizedPath`'s `FilesystemPath.standardized`, and the one
     /// a regression back to it would get wrong silently: `FilesystemPath.normalized` does not
     /// touch dot segments at all, so neither does this.
     func testDotSegmentsAreNotCollapsed() {
@@ -56,8 +56,8 @@ final class WorkspacePathTests: XCTestCase {
     /// snapshot gate returns early forever; normalizing too much and two different
     /// workspaces compare equal, so a push from one lands on the other's bench. A symlink is
     /// the sharpest version of "too much" — resolving it is exactly what `Workspace.path`
-    /// has never done, so it is what a regression to `StandardizedPath`-style normalization
-    /// would get wrong first. Built against `NSTemporaryDirectory()` rather than asserted in
+    /// has never done, so it is what a regression to `URL.standardizedFileURL` (which drops
+    /// `/private` when the shorter path exists) would get wrong first. Built against `NSTemporaryDirectory()` rather than asserted in
     /// the abstract, so this is a real `symlink(2)` and a real distinct directory, not a
     /// description of one.
     func testASymlinkAndItsRealTargetAreGenuinelyDifferentWorkspaces() throws {

@@ -35,7 +35,10 @@ echo "$PANE"
   and it reuses the pane already showing that file. Write the file again and helm re-renders it.
 - A mark he makes on it is mailed to you (the `bench-mail` skill reads it).
 - `bench open browser` shows the shared browser (the `bench-browser` skill drives it);
-  `bench open terminal` opens a shell. `--drawer <name>` puts it in a drawer instead. Every
+  `bench open terminal` opens a shell. `--drawer <name>` puts it in a drawer instead, which
+  badges the drawer. Opening a drawer and moving one to another edge (`bench drawer toggle
+  <name>`, `bench drawer place <name> <left|right|bottom>`) are his: refused from you unless he
+  asked, and then pass `--asked`. Every
   terminal pane is a benchd session, his own shells included (`bench sessions` lists them).
 
 ## Where is a pane, and can he see it
