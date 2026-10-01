@@ -550,6 +550,23 @@ extension BrowserPaneModel: BrowserInputSink {
         connection?.send("Input.insertText", InsertText(text: text), session: inputSession)
     }
 
+    func setComposition(_ text: String, selection: NSRange) {
+        guard let inputSession else { return }
+        connection?.send(
+            "Input.imeSetComposition", BrowserComposition(text: text, selection: selection),
+            session: inputSession)
+    }
+
+    func textCaretRect() async -> CGRect? {
+        guard let connection, let session = inputSession else { return nil }
+        let result = try? await connection.call(
+            "Runtime.evaluate",
+            Evaluate(expression: BrowserTextInput.caretExpression, returnByValue: true),
+            session: session, returning: Evaluated<TextCaret>.self)
+        guard session == inputSession, let caret = result?.result.value else { return nil }
+        return CGRect(x: caret.x, y: caret.y, width: caret.width, height: caret.height)
+    }
+
     /// The page's selection as text: a text field's selected range, else the document's. None
     /// under a dialog: the evaluate would wait for the answer and then overwrite the clipboard,
     /// maybe after the operator had copied something else.
@@ -623,6 +640,12 @@ private struct Screencast: Encodable {
     let everyNthFrame: Int
 }
 private struct FrameAck: Encodable { let sessionId: Int }
+private struct TextCaret: Decodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
 private struct InsertText: Encodable { let text: String }
 private struct Navigate: Encodable { let url: String }
 private struct Evaluate: Encodable {

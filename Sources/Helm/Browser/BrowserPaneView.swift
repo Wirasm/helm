@@ -243,6 +243,9 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
 
     private var currentFrame: BrowserFrame?
     private var markedText = ""
+    private var markedSelection = NSRange(location: NSNotFound, length: 0)
+    private var caretRect: CGRect?
+    private var caretRequest: Task<Void, Never>?
     /// The key being interpreted, while `interpretKeyEvents` runs.
     private var pendingKey: NSEvent?
     private var pendingHandled = false
@@ -477,9 +480,11 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
 
     func insertText(_ string: Any, replacementRange _: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+        let wasComposing = hasMarkedText()
         markedText = ""
+        markedSelection = NSRange(location: NSNotFound, length: 0)
         guard !text.isEmpty else { return }
-        if let event = pendingKey, !pendingHandled, text.count == 1 {
+        if let event = pendingKey, !pendingHandled, !wasComposing, text.count == 1 {
             pendingHandled = true
             sendKey(event, type: "keyDown", text: text, commands: nil)
         } else {
@@ -500,19 +505,41 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
             commands: command.map { [$0] })
     }
 
-    func setMarkedText(_ string: Any, selectedRange _: NSRange, replacementRange _: NSRange) {
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange _: NSRange) {
         markedText = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+        markedSelection =
+            markedText.isEmpty
+            ? NSRange(location: NSNotFound, length: 0) : selectedRange
         pendingHandled = true
+        model?.setComposition(markedText, selection: selectedRange)
+        refreshCaret()
     }
 
-    func unmarkText() { markedText = "" }
+    func unmarkText() {
+        guard hasMarkedText() else { return }
+        model?.insertText(markedText)
+        markedText = ""
+        markedSelection = NSRange(location: NSNotFound, length: 0)
+    }
+
+    private func refreshCaret() {
+        caretRequest?.cancel()
+        caretRect = nil
+        caretRequest = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rect = await model?.textCaretRect()
+            guard !Task.isCancelled else { return }
+            caretRect = rect
+            inputContext?.invalidateCharacterCoordinates()
+        }
+    }
     func hasMarkedText() -> Bool { !markedText.isEmpty }
     func markedRange() -> NSRange {
         markedText.isEmpty
             ? NSRange(location: NSNotFound, length: 0)
             : NSRange(location: 0, length: markedText.utf16.count)
     }
-    func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+    func selectedRange() -> NSRange { markedSelection }
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
     func attributedSubstring(
         forProposedRange _: NSRange, actualRange _: NSRangePointer?
@@ -521,7 +548,16 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     { nil }
     func characterIndex(for _: NSPoint) -> Int { NSNotFound }
     func firstRect(forCharacterRange _: NSRange, actualRange _: NSRangePointer?) -> NSRect {
-        window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        let rect: CGRect
+        if let caretRect, let frame = currentFrame {
+            rect = BrowserTextInput.viewRect(
+                caretRect, in: bounds.size,
+                image: CGSize(width: frame.image.width, height: frame.image.height),
+                page: frame.pageSize)
+        } else {
+            rect = .zero
+        }
+        return window?.convertToScreen(convert(rect, to: nil)) ?? .zero
     }
 }
 
@@ -532,6 +568,8 @@ protocol BrowserInputSink: AnyObject {
     func mouse(_ params: BrowserPaneModel.MouseEvent)
     func key(_ params: BrowserPaneModel.KeyEvent)
     func insertText(_ text: String)
+    func setComposition(_ text: String, selection: NSRange)
+    func textCaretRect() async -> CGRect?
     func selectedText() async -> String?
     func viewportChanged(size: CGSize, scale: CGFloat)
 }
