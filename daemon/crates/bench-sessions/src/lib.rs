@@ -221,6 +221,7 @@ pub fn open_action(
 /// Assembles rows; every row goes through [`open_action`].
 struct Rows<'a> {
     ws: &'a Workspace,
+    branches: HashMap<String, Option<String>>,
     rows: Vec<SessionRow>,
     unreadable: Vec<Unreadable>,
 }
@@ -237,7 +238,20 @@ struct Draft {
     updated_at_ms: u64,
 }
 
-impl Rows<'_> {
+impl<'a> Rows<'a> {
+    fn new(ws: &'a Workspace) -> Self {
+        Self {
+            ws,
+            branches: ws
+                .roots
+                .iter()
+                .map(|root| (root.clone(), scope::branch(root)))
+                .collect(),
+            rows: Vec::new(),
+            unreadable: Vec::new(),
+        }
+    }
+
     /// Adds the row when `scope_cwd` is in the workspace.
     fn push(&mut self, scope_cwd: &str, d: Draft) {
         self.push_resumable(scope_cwd, d, Posture::Unattended);
@@ -267,6 +281,7 @@ impl Rows<'_> {
             name: d.name,
             cwd: d.cwd,
             root: root.to_string(),
+            branch: self.branches.get(root).cloned().flatten(),
             state: d.state,
             host: d.host,
             open,
@@ -279,11 +294,7 @@ impl Rows<'_> {
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 296 lines, limit 100")]
 pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     let ws = Workspace::resolve(inputs.workspace);
-    let mut out = Rows {
-        ws: &ws,
-        rows: Vec::new(),
-        unreadable: Vec::new(),
-    };
+    let mut out = Rows::new(&ws);
     let alive = inputs.alive;
 
     let (registry, problems) =

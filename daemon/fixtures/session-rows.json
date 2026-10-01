@@ -57,6 +57,7 @@
     ],
     "rows": [
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -80,6 +81,7 @@
         "updated_at_ms": 1790000009000
       },
       {
+        "branch": null,
         "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
         "harness": "claude",
         "host": {
@@ -103,6 +105,7 @@
         "updated_at_ms": 1790000008000
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -129,6 +132,7 @@
         "updated_at_ms": 1790000007000
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "codex",
         "host": {
@@ -155,6 +159,7 @@
         "updated_at_ms": 1790000006500
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -180,6 +185,7 @@
         "updated_at_ms": 1790000006000
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -203,6 +209,7 @@
         "updated_at_ms": 1790000005500
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -230,6 +237,7 @@
         "updated_at_ms": 1790000005000
       },
       {
+        "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
         "harness": "claude",
         "host": {
@@ -255,6 +263,7 @@
         "updated_at_ms": 1789990000000
       },
       {
+        "branch": null,
         "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
         "harness": "pi",
         "host": {
