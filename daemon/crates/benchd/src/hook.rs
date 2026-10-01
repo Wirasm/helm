@@ -840,20 +840,33 @@ pub fn who(core: &Arc<Mutex<Core>>, pane: PaneId) -> Option<bench_wire::MailWho>
 }
 
 /// The agent in a pane that shows one of benchd's own sessions (M3): benchd spawned it, so it
-/// knows the address without waiting for a hook. `session` is the runtime's own id where the
-/// runtime takes one from the bench (claude, pi), else benchd's session id (codex).
+/// knows the address without waiting for a hook. `session` is the conversation it runs now
+/// ([`conversation`]), else benchd's session id (a codex no hook has reported yet).
 fn session_in(core: &Core, pane: PaneId) -> Option<bench_wire::MailWho> {
     let id = core.bench.document.pane(pane)?.surface.session()?;
     let session = core.sessions.get(id).filter(|s| s.is_live())?;
     Some(bench_wire::MailWho {
         handle: session.handle.clone(),
         harness: bench_wire::Harness::parse(session.agent.name())?,
-        session: session
-            .runtime_session
-            .clone()
-            .unwrap_or_else(|| session.id.clone()),
+        session: conversation(core, session).unwrap_or_else(|| session.id.clone()),
         pid: session.pid,
     })
+}
+
+/// The conversation benchd session `s` runs now, by the session list's rule
+/// ([`bench_sessions::conversation`]): what its agent's hook reported last, else the id it was
+/// started with. `None` for a shell, and for a codex no hook has reported yet.
+pub fn conversation(core: &Core, s: &bench_session::Session) -> Option<String> {
+    let Some(harness) = bench_wire::Harness::parse(s.agent.name()) else {
+        return s.runtime_session.clone();
+    };
+    bench_sessions::conversation(
+        &hooked(core),
+        harness,
+        &s.handle,
+        s.runtime_session.as_deref(),
+        &bench_sessions::process::alive,
+    )
 }
 
 /// Agents helm hosted as their hooks report them, for the session list: the one source for

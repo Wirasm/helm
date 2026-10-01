@@ -649,6 +649,39 @@ fn finished_rows_come_only_from_the_record_and_a_dismissal_hides_one_until_it_fi
 }
 
 #[test]
+fn a_pi_session_is_listed_by_the_name_it_was_given_running_and_finished() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let dir = f
+        .home()
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws));
+    let header = |id: &str| json!({"type": "session", "version": 3, "id": id, "cwd": ws});
+    let named = |name: &str| json!({"type": "session_info", "id": "e1", "parentId": null, "timestamp": "t", "name": name});
+    write(
+        &dir.join("t_pi-live.jsonl"),
+        &jsonl(&[header("pi-live"), named("Fix the build")]),
+    );
+    write(
+        &dir.join("t_pi-done.jsonl"),
+        &jsonl(&[header("pi-done"), named("First"), named("Ship it")]),
+    );
+    f.bench
+        .push(bench_session("s1", "pi-live", &ws, "worker", true));
+    f.hosted(Harness::Pi, "pi-done", &ws);
+    let built = f.build();
+    assert_eq!(
+        row(&built, "pi-live").unwrap().name.as_deref(),
+        Some("Fix the build")
+    );
+    assert_eq!(
+        row(&built, "pi-done").unwrap().name.as_deref(),
+        Some("Ship it"),
+        "the latest name"
+    );
+}
+
+#[test]
 fn a_pane_records_what_it_hosted_even_after_the_agent_exited() {
     let mut f = Fixture::new();
     let ws = Fixture::s(f.ws());
