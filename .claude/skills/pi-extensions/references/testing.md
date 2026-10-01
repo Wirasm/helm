@@ -133,18 +133,20 @@ the model.
 
 The one thing RPC cannot show: that a real TUI still reaches a normal prompt.
 
-`script` provides the pty. Feed `/dev/null` on stdin so pi renders and exits. BSD and util-linux
+`script` provides the pty. Hold its stdin open with a bounded `sleep 30 |` rather than feeding
+`/dev/null`: since 0.99 pi draws its header only after the terminal answers a colour query (or
+100ms), and the EOF from `/dev/null` reaches pi as ctrl+d and quits it first. BSD and util-linux
 `script` take different argument shapes; detect with `script --version | grep -qi util-linux`.
 
-Strip ANSI escapes from the capture, then assert both that pi rendered its banner (it reached a
-prompt) and that the extension reported (it was actually loaded). Poll the capture for the
+Strip ANSI escapes from the capture, then assert both that pi rendered its banner, whose first
+line ends with `v<version>` (it reached a prompt), and that the extension reported (it was actually loaded). Poll the capture for the
 expected text with a bounded loop rather than sleeping a fixed time.
 
 Cleaning up needs care: killing the backgrounded subshell does not reach `script`'s child. Plant a
 token unique to the run in the child's argv via `env`, then `pkill -f "$token"` — a bare `pkill`
 on the extension path also kills a concurrent run of the same suite.
 
-Note `script` refuses a non-tty stdin on macOS, so this harness cannot type into pi. Anything
+The pipe only keeps pi open; nothing is written into it, so this harness cannot type into pi. Anything
 requiring interaction (`/reload`, for instance) has to be verified by a human, and should be
 labelled as such wherever it is written down.
 

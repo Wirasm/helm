@@ -306,9 +306,13 @@ harness_rpc() {
 
 # ── pty ──────────────────────────────────────────────────────────────────────────────────
 # The one thing rpc cannot show: that a real interactive pi reaches a normal prompt with
-# our extension loaded. `script` gives it a pty; stdin is /dev/null so pi renders and exits.
+# our extension loaded. `script` gives it a pty. stdin is a pipe held open by a bounded
+# `sleep`, not /dev/null: since 0.99 pi draws its header only after the terminal answers its
+# colour query (or 100ms), and /dev/null's EOF reached pi as ctrl+d and quit it before that.
 pty_one() {
 	local name=$1 cwd=$2 ext="$EXTENSIONS_DIR/$1/index.ts" raw="$2/$1.raw"
+	# The header's first line ends with the version (`v0.99.2`), the only stable text in it.
+	local banner="v$(pi_version)"
 	# A token unique to this run, planted in the child's argv via `env`. The cleanup below
 	# has to reach a grandchild (script's own child pi), and a bare `pkill -f <extension
 	# path>` would also kill a second, concurrent run of this suite — parallel CI, or two
@@ -318,9 +322,9 @@ pty_one() {
 	(
 		cd "$cwd" || exit 1
 		if script --version 2>/dev/null | grep -qi util-linux; then
-			script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
+			sleep 30 | script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
 		else
-			script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
+			sleep 30 | script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
 		fi
 	) >"$raw" 2>&1 </dev/null &
 	local runner=$!
@@ -340,7 +344,7 @@ pty_one() {
 
 	local screen
 	screen=$(LC_ALL=C sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b\\][^\x07]*\x07//g' "$raw" | tr -d '\r')
-	if ! printf '%s' "$screen" | grep -q 'pi v'; then
+	if ! printf '%s' "$screen" | grep -qF "$banner"; then
 		bad "pty: $name — pi never rendered its banner; it did not reach a prompt"
 	elif ! printf '%s' "$screen" | grep -q "$name v"; then
 		bad "pty: $name — pi reached a prompt but the extension never reported"
