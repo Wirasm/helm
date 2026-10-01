@@ -495,7 +495,8 @@ final class CanvasModel: ObservableObject {
     fileprivate var liveSeen: CanvasFileRead?
 
     /// The live file, when the last read found one there. A mark's note points the agent at it
-    /// rather than at the artifact (`CanvasNoteCourier.body`): the page is derived from it.
+    /// rather than at the artifact (`CanvasNoteCourier.body`): the page is derived from it. A page
+    /// with no data file yet keeps the old advice: nothing on it is derived from one.
     var liveFileIfPresent: URL? {
         guard case .bytes = liveSeen else { return nil }
         return liveFile

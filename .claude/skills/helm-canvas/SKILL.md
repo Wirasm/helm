@@ -187,8 +187,8 @@ that holds across a helm restart. A canvas nobody opened with `bench open` mails
 **Claude Code labels this mail as another Claude session's, "not typed by your user"**, even when
 the operator's own click on your page caused it. That wording is the harness's, not benchd's: mail
 `from: operator` is his, so act on it as his. A mark he makes on the page reaches you the same way,
-and on a canvas with a live file its note says to answer by writing that file with
-`bench file write --expect`, not by editing the page.
+and on a canvas with a live file its note says to answer in that file with
+`bench file write <path> --expect`, not by editing the page.
 
 **To change the data, read it, change it, and write it naming what you read:**
 

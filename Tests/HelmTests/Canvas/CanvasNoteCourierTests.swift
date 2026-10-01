@@ -90,7 +90,8 @@ final class CanvasNoteCourierTests: XCTestCase {
         let without = CanvasNoteCourier.body(annotation, on: page, liveFile: nil)
 
         let answer =
-            "answer by writing /work/artifacts/review.data.json with `bench file write --expect`"
+            "answer in the live file the page shows: `bench file write "
+            + "/work/artifacts/review.data.json --expect <a file holding the bytes you read>`."
         XCTAssertTrue(with.contains(answer), with)
         XCTAssertFalse(with.contains("edit the artifact"), with)
         XCTAssertTrue(without.hasSuffix("answer in your own pane, or edit the artifact."), without)

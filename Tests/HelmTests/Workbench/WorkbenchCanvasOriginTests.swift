@@ -156,7 +156,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
 
         let body = try XCTUnwrap(bench.bodies.last, "the mark sent nothing")
         XCTAssertTrue(
-            body.contains("review.data.json with `bench file write --expect`"), body)
+            body.contains("review.data.json --expect <a file holding the bytes you read>`"), body)
         XCTAssertFalse(body.contains("edit the artifact"), body)
     }
 

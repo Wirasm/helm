@@ -97,7 +97,10 @@ struct CanvasNoteCourier {
         _ annotation: CanvasAnnotation, on canvas: URL, liveFile: URL?
     ) -> String {
         let answer =
-            liveFile.map { "answer by writing \($0.path) with `bench file write --expect`." }
+            liveFile.map {
+                "answer in the live file the page shows: "
+                    + "`bench file write \($0.path) --expect <a file holding the bytes you read>`."
+            }
             ?? "answer in your own pane, or edit the artifact."
         return CanvasNotes.clipboardEntry(annotation, for: canvas)
             + "\n\n"
