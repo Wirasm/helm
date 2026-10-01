@@ -11,9 +11,11 @@ final class BrowserSurfaceTests: XCTestCase {
         var keys: [BrowserPaneModel.KeyEvent] = []
         var mice: [BrowserPaneModel.MouseEvent] = []
         var inserted: [String] = []
+        func setComposition(_: String, selection _: NSRange) {}
         func mouse(_ params: BrowserPaneModel.MouseEvent) { mice.append(params) }
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
+        func textCaretRect() async -> CGRect? { nil }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
 
