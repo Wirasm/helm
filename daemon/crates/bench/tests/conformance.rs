@@ -2445,6 +2445,67 @@ fn a_pane_dropped_as_a_tab_or_beside_a_slot_lands_there() {
     );
 }
 
+/// A file dropped from Finder (#178) is `pane/open` with `at`, the place a drop names: it opens
+/// there, and a second drop of the same file moves the pane already showing it.
+#[test]
+fn a_file_opened_at_a_place_lands_there_and_is_not_opened_twice() {
+    let home = TestHome::claim("m4-open-at");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, _, _) = working_bench(&daemon.socket);
+    let file = home.dir.join("dropped.md");
+    std::fs::write(&file, "# dropped\n").unwrap();
+    let surface =
+        serde_json::json!({ "kind": "canvas", "source": { "kind": "file", "path": file } });
+    let columns = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]["workspaces"][0]["bench"]["columns"]
+            .clone()
+    };
+    let slot_of_first = columns(&daemon.socket)[0]["slots"][0]["id"].clone();
+    assert_eq!(
+        columns(&daemon.socket)[0]["slots"][0]["panes"][0]["id"],
+        first
+    );
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": surface, "at": { "beside": { "slot": slot_of_first, "side": "up" } } }),
+        operator(),
+        false,
+    ));
+    let pane = opened["pane_created"].as_str().unwrap().to_string();
+    let after = columns(&daemon.socket);
+    assert_eq!(after[0]["slots"][0]["panes"][0]["id"], pane, "a row above");
+    assert_eq!(after[0]["slots"][1]["id"], slot_of_first);
+
+    let again = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": surface, "at": { "tab": { "slot": slot_of_first, "before": first } } }),
+        operator(),
+        false,
+    ));
+    assert!(again["pane_created"].is_null(), "{again}");
+    assert_eq!(again["pane"], pane, "the pane already showing it");
+    let after = columns(&daemon.socket);
+    let panes: Vec<_> = after[0]["slots"][0]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].clone())
+        .collect();
+    assert_eq!(
+        panes,
+        vec![serde_json::json!(pane), serde_json::json!(first)]
+    );
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");

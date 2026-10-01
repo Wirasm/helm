@@ -49,6 +49,10 @@ struct ToyBench {
                 }
             }
             return answer
+        case let .paneOpenAt(_, surface):
+            // Where at the place it lands is benchd's (`bench-doc`'s `open_at`); the toy opens it
+            // by its own rules, so a test can read the pane it answers.
+            return try open(surface, in: document.active, focus: focus)
         case let .paneSplit(workspace, direction, surface):
             return try split(
                 direction, surface ?? .terminal(agent: nil), in: workspace ?? document.active,
