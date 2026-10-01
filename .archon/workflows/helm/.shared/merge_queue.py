@@ -180,10 +180,13 @@ def prune_merged(branches: list[str], checkout: Path | None = None) -> str:
     if not branches:
         return ""
     checkout = checkout or Path.cwd()
-    top = subprocess.run(
-        ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, timeout=30,
-    )
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as err:
+        return f"not pruned: cannot ask git where {checkout} is ({err})"
     if top.returncode != 0:
         return f"not pruned: {checkout} is not a git checkout ({top.stderr.strip()})"
     script = Path(top.stdout.strip()) / "scripts" / "prune-worktrees.sh"
