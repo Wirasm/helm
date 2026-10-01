@@ -114,7 +114,8 @@ reports once its harness is wired to the one fixed command: `bench wiring` print
 to the three files and `bench wiring --check` says what is missing. For codex that includes
 trust: codex runs a hook only once the operator has trusted it ("Hooks need review" at startup,
 "Trust all and continue"), so `--check` asks the `codex` on PATH (`hooks/list` on a stdio
-app-server of its own) and names the bench's hooks it has not trusted. A codex benchd spawns runs
+app-server of its own) and names each event codex will run no bench hook for: untrusted or
+changed since trusted, disabled, or not listed at all. A codex benchd spawns runs
 its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
 which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
 codex the operator starts himself embeds its app-server, so its mail waits for its next prompt

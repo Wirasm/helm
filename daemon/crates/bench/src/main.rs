@@ -629,6 +629,10 @@ fn wiring(mode: Option<&str>) -> i32 {
 /// What the operator does once so codex runs the bench's hooks, in the words its dialog uses.
 const CODEX_TRUST_STEP: &str = "open codex once and choose \"Trust all and continue\"";
 
+/// Why an event can still need review after that step: nothing in codex's dialog fixes these.
+const CODEX_TRUST_ELSE: &str = "an event still listed after that has its hook disabled in \
+     codex's /hooks, or codex reads another CODEX_HOME than ~/.codex";
+
 /// `bench wiring --check`: what is missing, and exit 3 if anything required is.
 fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_link: &Path) -> i32 {
     let read = |path: &PathBuf| -> Value {
@@ -657,7 +661,7 @@ fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_lin
         Err(why) => codex["trust_unverified"] = json!(why),
     }
     if !trusted {
-        codex["then"] = json!(CODEX_TRUST_STEP);
+        codex["then"] = json!(format!("{CODEX_TRUST_STEP}; {CODEX_TRUST_ELSE}"));
     }
     let report = json!({
         "bench": bench,
