@@ -25,6 +25,11 @@ concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true
 
+# A runner's disk is the runner's: the gate's free-space floor (scripts/check.sh) is for machines
+# that keep worktrees.
+env:
+  HELM_CHECK_MIN_FREE_GB: '0'
+
 jobs:
   swift:
     name: build · test · format
