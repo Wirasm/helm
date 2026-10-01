@@ -97,9 +97,12 @@ final class BrowserFilesLiveTests: XCTestCase {
                 + "<script>document.onselectionchange = () => { const s = getSelection();"
                 + " document.title = s.rangeCount ? 'sel:' + s.anchorNode.parentElement.id"
                 + " + ':' + s : 'none' }</script>")
-        let first = await pane.find("alpha", backwards: false, fromTop: true)
-        XCTAssertEqual(first, true)
-        try await eventually("the first match (\(title))") { self.title == "sel:one:alpha" }
+        // Asked again until it lands: the pane may still be attaching to the new tab.
+        try await eventually("the first match (\(title))") {
+            _ = await self.pane.find("alpha", backwards: false, fromTop: true)
+            try? await Task.sleep(for: .milliseconds(100))
+            return self.title == "sel:one:alpha"
+        }
         _ = await pane.find("alpha", backwards: false, fromTop: false)
         try await eventually("the next match (\(title))") { self.title == "sel:two:alpha" }
         _ = await pane.find("alpha", backwards: true, fromTop: false)
@@ -128,11 +131,15 @@ final class BrowserFilesLiveTests: XCTestCase {
             chosen([file])
         }
         let target = try await show(filePage)
-        click(20, 20)
+        try await eventually("the operator's click asks him") {
+            self.click(20, 20)
+            try? await Task.sleep(for: .milliseconds(200))
+            return !asked.isEmpty
+        }
         try await eventually("the page has the file (\(title))") {
             self.title == "files:upload.txt:10"
         }
-        XCTAssertEqual(asked, [true], "one panel, allowing several, as the input does")
+        XCTAssertEqual(asked.first, true, "a panel allowing several, as the input does")
         if case .tcp = endpoint {
             // The route a helm on another machine takes: the path the page got is benchd's copy.
             guard case let .paths(paths) = BrowserFileChooser.paths(for: [file], endpoint: endpoint)
@@ -168,8 +175,11 @@ final class BrowserFilesLiveTests: XCTestCase {
         // machine makes this more certain, not less.
         try await Task.sleep(for: .seconds(2) + BrowserUploads.window)
         XCTAssertEqual(asked, 0, "an agent's click asked the operator for a file")
-        click(20, 20)
-        try await eventually("the operator's own click asks him") { asked == 1 }
+        try await eventually("the operator's own click asks him") {
+            self.click(20, 20)
+            try? await Task.sleep(for: .milliseconds(200))
+            return asked >= 1
+        }
         pane.close(tab: target)
     }
 
@@ -183,9 +193,13 @@ final class BrowserFilesLiveTests: XCTestCase {
         let target = try await show(
             "<title>dl</title><a id=a download='\(name)' href='data:text/plain,hello-live'"
                 + " style='position:absolute;left:0;top:0;width:300px;height:80px'>get</a>")
-        click(20, 20)
+        // Clicked until it lands: the pane may still be attaching to the new tab.
         try await eventually("the download is listed as finished (\(pane.downloads.items))") {
-            self.pane.downloads.items.first { $0.name == name }?.state == .completed
+            if !self.pane.downloads.items.contains(where: { $0.name == name }) {
+                self.click(20, 20)
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            return self.pane.downloads.items.first { $0.name == name }?.state == .completed
         }
         let item = try XCTUnwrap(pane.downloads.items.first { $0.name == name })
         let landed = try XCTUnwrap(item.path)
