@@ -36,13 +36,21 @@ fn trust_level<'a>(config: &'a toml::Table, path: &Path) -> Option<&'a str> {
         .as_str()
 }
 
+/// The largest git metadata file read, as codex caps it: a `.git` file, `gitdir` or `commondir`
+/// is one line.
+const MAX_GIT_METADATA_BYTES: u64 = 64 * 1024;
+
 /// The git main repository `dir` belongs to, as codex resolves it for trust
-/// (`git-utils/src/trust.rs`, rust-v0.159.3), without running git. The nearest ancestor with a
-/// `.git`: a directory (with `HEAD`) makes that ancestor the root; a `.git` file must point into
-/// `<common>/worktrees/<name>` and be named back by that entry's `gitdir`, and the root is the
-/// parent of `<common>`, spelled as the `.git` file spells it (codex keeps that spelling as the
-/// key). The backlink is what stops a `.git` file anyone can write from borrowing a trusted
-/// repository's trust. Any other `.git` file, a submodule's, has no root, as in codex.
+/// (`git-utils/src/trust.rs`, rust-v0.159.3), without running git, and refusing everything codex
+/// refuses: one check fewer would trust a folder a plain codex asks about. The nearest ancestor
+/// with a `.git`: a directory (with `HEAD`) makes that ancestor the root. A `.git` file (never a
+/// symlink) must point at a real directory `<common>/worktrees/<name>` whose `gitdir` names this
+/// checkout back and whose `commondir` is `<common>`, and the root, the parent of `<common>` as
+/// the `.git` file spells it (codex keeps that spelling as the key), must own `<common>` through
+/// its own `.git`. The backlink stops a `.git` file anyone can write from borrowing a trusted
+/// repository's trust; the ownership check stops a bare repository's worktree from borrowing the
+/// trust of the folder the bare repository sits in. Any other `.git` file, a submodule's, has no
+/// root.
 fn git_main_root(dir: &Path) -> Option<PathBuf> {
     let checkout = dir.ancestors().find(|a| {
         let dot = a.join(".git");
@@ -52,18 +60,55 @@ fn git_main_root(dir: &Path) -> Option<PathBuf> {
     if dot_git.is_dir() {
         return Some(checkout.to_path_buf());
     }
-    let text = std::fs::read_to_string(&dot_git).ok()?;
-    let git_dir = checkout.join(text.trim().strip_prefix("gitdir:")?.trim());
+    let git_dir = gitdir_of(&dot_git)?;
+    let meta = std::fs::symlink_metadata(&git_dir).ok()?;
+    if !meta.is_dir() {
+        return None;
+    }
     let canonical = git_dir.canonicalize().ok()?;
-    if canonical.parent()?.file_name()? != "worktrees" {
+    let worktrees = canonical.parent()?;
+    if worktrees.file_name()? != "worktrees" {
         return None;
     }
-    let backlink = std::fs::read_to_string(canonical.join("gitdir")).ok()?;
-    let registered = canonical.join(backlink.trim()).canonicalize().ok()?;
-    if registered != dot_git.canonicalize().ok()? {
+    let common = worktrees.parent()?;
+    let registered = canonical.join(read_small(&canonical.join("gitdir"))?.trim());
+    if registered.file_name()? != ".git"
+        || registered.parent()?.canonicalize().ok()? != checkout.canonicalize().ok()?
+    {
         return None;
     }
-    Some(git_dir.parent()?.parent()?.parent()?.to_path_buf())
+    let commondir = canonical.join(read_small(&canonical.join("commondir"))?.trim());
+    if commondir.canonicalize().ok()? != common {
+        return None;
+    }
+    let main_root = git_dir.parent()?.parent()?.parent()?;
+    let main_dot_git = main_root.join(".git");
+    let main_git_dir = if main_dot_git.is_dir() {
+        main_dot_git
+    } else {
+        gitdir_of(&main_dot_git)?
+    };
+    (main_git_dir.canonicalize().ok()? == common).then(|| main_root.to_path_buf())
+}
+
+/// Where a `.git` file points (`gitdir: <path>`, relative to its folder). `None` for a symlink, a
+/// file over [`MAX_GIT_METADATA_BYTES`], or anything else.
+fn gitdir_of(dot_git: &Path) -> Option<PathBuf> {
+    let meta = std::fs::symlink_metadata(dot_git).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let text = read_small(dot_git)?;
+    let target = text.trim().strip_prefix("gitdir:")?.trim();
+    (!target.is_empty()).then(|| dot_git.parent().unwrap_or(dot_git).join(target))
+}
+
+/// A git metadata file's text, unless it is over [`MAX_GIT_METADATA_BYTES`].
+fn read_small(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    (meta.len() <= MAX_GIT_METADATA_BYTES)
+        .then(|| std::fs::read_to_string(path).ok())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -170,6 +215,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(git_main_root(&forged), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_bare_repositorys_worktree_borrows_no_trust_from_the_folder_it_sits_in() {
+        // `x/repo.git` is bare and `x/wt` its worktree: the common dir's parent is `x`, which owns
+        // no repository, so a trusted `x` must not reach `wt`. Codex refuses it the same way.
+        let dir = repo("bare");
+        let (x, home) = (dir.join("x"), dir.join("home"));
+        std::fs::create_dir_all(&x).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git").args(args).output().unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        let (bare, wt) = (x.join("repo.git"), x.join("wt"));
+        git(&[
+            "clone",
+            "-q",
+            "--bare",
+            dir.join("repo").to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ]);
+        git(&[
+            "-C",
+            bare.to_str().unwrap(),
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().unwrap(),
+        ]);
+        config(&home, &trusted(&x));
+        assert_eq!(git_main_root(&wt), None);
+        assert!(!operator_trusts(&wt, &home));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
