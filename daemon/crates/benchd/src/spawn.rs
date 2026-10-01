@@ -267,11 +267,11 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             )
         }
         // A fork answers questions about the original's work in the original's worktree, so it
-        // runs read-only: the operator's ruling (#531).
+        // runs read-only: the operator's ruling (#531). codex names the fork itself.
         (None, Some(from)) => (
             Conversation::Fork {
                 from: conversation_id("--fork", from)?,
-                id: mint_session_id(),
+                id: agent.mints_session_id().then(mint_session_id),
             },
             Posture::ReadOnly,
         ),
@@ -292,8 +292,9 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         extra_args: args.args,
         codex_server: None,
     };
-    // `argv` is the one spelling of what each runtime can start as, so it also judges: a fork
-    // codex or pi cannot run is refused here, before anything is reserved.
+    // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
+    // runtime cannot run (a fork of the test agent, say) is refused here, before anything is
+    // reserved.
     bench_session::argv(&spec)?;
     let mut spec = spec;
     if let Some(text) = args.prompt {

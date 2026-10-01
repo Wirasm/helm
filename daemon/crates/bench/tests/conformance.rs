@@ -9700,8 +9700,6 @@ fn a_fork_is_refused_where_it_cannot_run() {
     let ws = workspace(&home.dir).display().to_string();
     let _daemon = DaemonGuard::start_with_fake(&home.dir, "claude");
     for (cmd, rule) in [
-        (vec!["--agent", "codex", "--fork", "x1"], "codex fork"),
-        (vec!["--agent", "pi", "--fork", "x1"], "no read-only mode"),
         (
             vec!["--agent", "claude", "--fork", "x1", "--resume", "x2"],
             "pass one of them",
@@ -9723,6 +9721,139 @@ fn a_fork_is_refused_where_it_cannot_run() {
         serde_json::json!([]),
         "nothing started: {listed}"
     );
+}
+
+#[test]
+fn a_pi_fork_is_its_own_conversation_with_only_read_tools_and_comes_back_so() {
+    // Harness parity G8/G9: pi forks with `--fork <id>` under the id benchd mints, and is
+    // read-only with only its read tools, at spawn and after a restore.
+    let home = TestHome::claim("pifork");
+    let ws = workspace(&home.dir).display().to_string();
+    let (fork_sid, fork_id, pane) = {
+        let _daemon = DaemonGuard::start_with_script(&home.dir, "pi", ARGV_CLAUDE);
+        let run = bench(
+            &home.dir,
+            &["spawn", "--agent", "pi", "--cwd", &ws, "--fork", "p-author"],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let fork = json_of(&run);
+        assert_eq!(fork["forked_from"], "p-author");
+        let fork_id = fork["runtime_session"].as_str().unwrap().to_string();
+        assert_eq!(fork_id.len(), 36, "minted like any spawn's: {fork_id}");
+        let sid = fork["session"].as_str().unwrap().to_string();
+        let argv = stub_argv(&home.dir, &sid);
+        let pos = |flag: &str| argv.iter().position(|a| a == flag);
+        assert_eq!(argv[pos("--fork").unwrap() + 1], "p-author", "{argv:?}");
+        assert_eq!(argv[pos("--session-id").unwrap() + 1], fork_id, "{argv:?}");
+        assert_eq!(
+            argv[pos("--tools").unwrap() + 1],
+            "read,grep,find,ls",
+            "{argv:?}"
+        );
+        (sid, fork_id, fork["pane"].as_str().unwrap().to_string())
+    };
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "pi", ARGV_CLAUDE);
+    let again = json_of(&bench(&home.dir, &["restore", &pane]));
+    assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
+    let restored = again["restored"][0]["session"].as_str().unwrap();
+    assert_ne!(restored, fork_sid);
+    let argv = stub_argv(&home.dir, restored);
+    assert_eq!(
+        argv,
+        [
+            "--approve",
+            "--tools",
+            "read,grep,find,ls",
+            "--session-id",
+            &fork_id
+        ],
+        "a restored pi fork is read-only again"
+    );
+}
+
+#[test]
+fn a_codex_fork_runs_on_a_read_only_app_server_and_comes_back_on_one() {
+    // Harness parity G8/G9: codex forks on its own app-server, whose sandbox is read-only, since
+    // its TUI takes no permission flag there. codex names the fork itself, so its hook's id is the
+    // one the record keeps, marked as a fork, and the restored fork is served read-only again.
+    let home = TestHome::claim("cxfork");
+    let ws = workspace(&home.dir).display().to_string();
+    let (bin, runs) = write_fake_codex(&home.dir);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let with_codex = || {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()));
+        cmd
+    };
+    let root = home.dir.join(".bench");
+    let served = |runs: &[String], session: &str| {
+        let socket = format!(
+            "unix://{}",
+            root.join("codex").join(format!("{session}.sock")).display()
+        );
+        let server = runs
+            .iter()
+            .find(|r| r.starts_with("app-server ") && r.ends_with(&format!(" --listen {socket}")))
+            .unwrap_or_else(|| panic!("{session} runs its own app-server: {runs:?}"))
+            .clone();
+        let tui = runs
+            .iter()
+            .find(|r| r.starts_with(&format!("--remote {socket} ")))
+            .unwrap_or_else(|| panic!("a TUI against {socket}: {runs:?}"))
+            .clone();
+        (server, tui)
+    };
+    let fork_thread = "019b0dde-1128-7572-8528-e0979f7e7071";
+    let pane = {
+        let daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
+        let run = bench(
+            &home.dir,
+            &[
+                "spawn",
+                "--agent",
+                "codex",
+                "--cwd",
+                &ws,
+                "--fork",
+                "019a-author",
+            ],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let fork = json_of(&run);
+        assert_eq!(fork["forked_from"], "019a-author");
+        assert_eq!(fork["runtime_session"], serde_json::Value::Null);
+        let sid = fork["session"].as_str().unwrap().to_string();
+        let (server, tui) = served(&codex_runs(&runs, 2), &sid);
+        assert!(
+            server.contains(r#"-c sandbox_mode="read-only""#),
+            "{server}"
+        );
+        assert!(tui.contains(" fork 019a-author "), "{tui}");
+        assert!(
+            !tui.contains("--dangerously-bypass-approvals-and-sandbox"),
+            "{tui}"
+        );
+        // codex reports the fork's own thread at its first turn.
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": "SessionStart", "session": fork_thread,
+                "cwd": ws, "pid": fork["pid"], "bench_session": sid}),
+        );
+        let pane = fork["pane"].as_str().unwrap().to_string();
+        assert_eq!(pane_agent(&home.dir, &pane)["session"], fork_thread);
+        pane
+    };
+    fs::remove_file(&runs).unwrap();
+    let _daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
+    let again = json_of(&bench(&home.dir, &["restore", &pane]));
+    assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
+    let restored = again["restored"][0]["session"].as_str().unwrap();
+    let (server, tui) = served(&codex_runs(&runs, 2), restored);
+    assert!(
+        server.contains(r#"-c sandbox_mode="read-only""#),
+        "a restored codex fork is served read-only again: {server}"
+    );
+    assert!(tui.contains(&format!(" resume {fork_thread} ")), "{tui}");
 }
 
 #[test]

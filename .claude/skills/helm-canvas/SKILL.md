@@ -46,7 +46,7 @@ echo "$PANE"
   so is his change to an HTML canvas's live file (*A page that holds state*, below).
 - He can also ask a question about a mark without interrupting you: helm starts a read-only fork of
   the conversation that opened the canvas, in a pane of its own. You get nothing for that, and the
-  fork cannot edit your files. It works for Claude Code only.
+  fork cannot edit your files. It works for Claude Code, codex and pi.
 
 The `bench-panes` skill has the rest of the verbs.
 
