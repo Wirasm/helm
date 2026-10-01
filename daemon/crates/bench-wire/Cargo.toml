@@ -10,6 +10,8 @@ serde.workspace = true
 serde_json.workspace = true
 # TCP keepalive on a client's link to a benchd on another machine (`Endpoint::connect`).
 libc = "0.2"
+# A codex rollout line's RFC 3339 timestamp (`usage`).
+time = { workspace = true, features = ["parsing"] }
 
 [lints]
 workspace = true

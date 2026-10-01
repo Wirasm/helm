@@ -29,6 +29,9 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod usage;
+pub use usage::{Usage, UsageWindow};
+
 mod commands;
 pub use commands::{
     COMMAND_OUTPUT_MAX_BYTES, Command, CommandRun, CommandRunArgs, GitRepositories,
@@ -189,6 +192,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     "mail/read",
     "mail/who",
     "hook",
+    // #143: a harness's plan limits, reported by `bench statusline` (Claude's statusline).
+    "usage/report",
     "browser/start",
     "browser/status",
     "browser/stop",
@@ -259,6 +264,8 @@ pub enum Verb {
     MailWho,
     /// The sensor (#358): an agent's hook reports an event; the answer carries its mail.
     Hook,
+    /// A harness's plan limits (#143): what `bench statusline` reads off Claude's statusline.
+    UsageReport,
     BrowserStart,
     BrowserStatus,
     BrowserStop,
@@ -323,6 +330,7 @@ impl Verb {
             "mail/read" => Some(Verb::MailRead),
             "mail/who" => Some(Verb::MailWho),
             "hook" => Some(Verb::Hook),
+            "usage/report" => Some(Verb::UsageReport),
             "browser/start" => Some(Verb::BrowserStart),
             "browser/status" => Some(Verb::BrowserStatus),
             "browser/stop" => Some(Verb::BrowserStop),
@@ -633,6 +641,10 @@ pub enum WaitingSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveSessions {
     pub sessions: Vec<SessionEntry>,
+    /// Each harness's plan limits as benchd last heard them (#143), at most one per harness;
+    /// absent when none has reported since benchd started.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage: Vec<Usage>,
 }
 
 /// `restore`: one terminal pane, or every one (`pane` absent), whose session has ended gets a
@@ -1235,6 +1247,11 @@ mod tests {
             reply.sessions.iter().any(|s| s.report.is_some()),
             "the sample carries a report, so helm's decoder is pinned too"
         );
+        assert_eq!(
+            reply.usage.iter().map(|u| u.harness).collect::<Vec<_>>(),
+            [Harness::Claude, Harness::Codex],
+            "the sample carries both harnesses' limits, one without a reset time"
+        );
     }
 
     /// `fixtures/helm-ask.json` holds what a caller asks, what benchd asks helm, what helm answers
@@ -1313,7 +1330,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            52,
+            53,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

@@ -120,17 +120,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     }
 }
 
-/// Whether Claude has written a transcript for conversation `id`: `<config>/projects/<dir>/<id>.jsonl`,
-/// where the config directory is `CLAUDE_CONFIG_DIR` when set, as Claude reads it, else
-/// `~/.claude`. benchd's environment is what the resumed claude inherits, so both see one place.
+/// Whether Claude has written a transcript for conversation `id`:
+/// `~/.claude/projects/<dir>/<id>.jsonl`. Always the default profile under HOME (#491): benchd
+/// strips `CLAUDE_CONFIG_DIR` from every session it spawns, so the resumed claude reads here too.
 fn has_transcript(id: &str) -> bool {
-    let config = match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) => std::path::PathBuf::from(dir),
-        None => match std::env::var_os("HOME") {
-            Some(home) => std::path::Path::new(&home).join(".claude"),
-            None => return false,
-        },
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
     };
+    let config = std::path::Path::new(&home).join(".claude");
     // An id is a hook's word, and it becomes a file name: nothing that can leave the directory.
     if id.is_empty()
         || !id
