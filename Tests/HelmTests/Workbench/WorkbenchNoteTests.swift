@@ -217,7 +217,7 @@ final class WorkbenchNoteTests: XCTestCase {
 
     // MARK: - When it cannot
 
-    /// A keystroke that silently does nothing is the failure shape `AGENTS.md` records paying for
+    /// A keystroke that silently does nothing is a failure this project has paid for
     /// repeatedly. With no workspace there is no project whose store a note would belong to, and
     /// the operator is told which thing to do about it.
     func testWithNoWorkspaceOpenTheOperatorIsToldRatherThanNothingHappening() async throws {
