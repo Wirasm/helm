@@ -4,14 +4,15 @@ import SwiftUI
 /// the pane will occupy, tinted and outlined; `seam` is a solid bar where it enters — the edge
 /// it splits, or the gap in a tab strip. Nothing is drawn where a drop would change nothing.
 ///
-/// Drawn over the bench in `PaneDrop.space`, the space the frames it reads were measured in.
-/// It takes no part in hit testing: the drag is the tab's gesture, not a drop target's.
+/// Drawn over the workspace bar and the bench in `BenchDrag.space`, the space the frames it reads
+/// were measured in. It takes no part in hit testing: the drag is the tab's gesture, not a drop
+/// target's.
 struct DropZoneOverlay: View {
-    @ObservedObject var drag: PaneDragModel
+    @ObservedObject var drag: BenchDrag
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if let target = drag.drag?.target {
+            if let target = drag.live?.target {
                 place(
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.accent.opacity(0.14))
@@ -19,9 +20,9 @@ struct DropZoneOverlay: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .strokeBorder(Color.accent.opacity(0.7), lineWidth: 1)),
                     at: target.preview.insetBy(dx: 2, dy: 2))
-                place(
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.accent),
-                    at: target.seam)
+                if let seam = target.seam {
+                    place(RoundedRectangle(cornerRadius: 1.5).fill(Color.accent), at: seam)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -35,6 +35,27 @@
     }
   },
   {
+    "id": "v-04m",
+    "verb": "workspace/move",
+    "args": {
+      "before": "/Users/operator/Projects/helm",
+      "path": "/Users/operator/Projects/prp"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-04n",
+    "verb": "workspace/move",
+    "args": {
+      "path": "/Users/operator/Projects/helm"
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
     "id": "v-08",
     "verb": "pane/open",
     "args": {
@@ -167,6 +188,19 @@
           "side": "right",
           "slot": "00000002-0000-4000-8000-000000000002"
         }
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
+    "id": "v-14w",
+    "verb": "pane/move",
+    "args": {
+      "pane": "00000003-0000-4000-8000-000000000003",
+      "to": {
+        "workspace": "/Users/operator/Projects/prp"
       }
     },
     "by": {

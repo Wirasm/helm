@@ -358,13 +358,19 @@ impl Bench {
     /// position**; an emptied slot goes, an emptied column goes; the bench's last pane
     /// refuses.
     pub fn close(&mut self, pane: PaneId) -> Result<(), Refusal> {
+        self.remove(pane).map(|_| ())
+    }
+
+    /// Take a pane off this bench by `close`'s rule and hand it back: what a pane moving to
+    /// another workspace leaves behind is exactly what closing it would.
+    pub fn remove(&mut self, pane: PaneId) -> Result<Pane, Refusal> {
         let a = self.address_of(pane).ok_or(Refusal::UnknownPane(pane))?;
         if !self.can_close(pane) {
             return Err(Refusal::LastPane(pane));
         }
         let closed_slot = self.columns[a.column].slots[a.slot].id;
         let was_selected = self.columns[a.column].slots[a.slot].selected == pane;
-        self.columns[a.column].slots[a.slot].panes.remove(a.pane);
+        let removed = self.columns[a.column].slots[a.slot].panes.remove(a.pane);
 
         let survivors = &self.columns[a.column].slots[a.slot].panes;
         if survivors.is_empty() {
@@ -380,7 +386,7 @@ impl Bench {
             self.columns[a.column].slots[a.slot].selected = next;
         }
         self.normalize();
-        Ok(())
+        Ok(removed)
     }
 
     /// Make a pane its slot's selection. With `Take` its slot is focused too — clicking a tab

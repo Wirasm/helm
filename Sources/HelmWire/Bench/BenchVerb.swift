@@ -68,6 +68,8 @@ package enum BenchMoveTo: Equatable, Sendable {
     /// A slot of its own beside `slot`: above or below it, or a column left or right of its
     /// column.
     case beside(slot: UUID, side: BenchDirection)
+    /// Another workspace's bench, as a tab of its focused slot: a pane dropped on a workspace tab.
+    case workspace(String)
 }
 
 /// Which way a split opens.
@@ -89,6 +91,8 @@ package enum BenchVerb: Equatable, Sendable {
     case workspaceOpen(path: String)
     case workspaceClose(path: String)
     case workspaceActivate(path: String)
+    /// Reorder the workspace bar: `path` goes before `before`, or last.
+    case workspaceMove(path: String, before: String? = nil)
     /// A new pane showing `surface`, placed by benchd's rules; `workspace` nil means the active
     /// one.
     case paneOpen(workspace: String? = nil, surface: Surface)
@@ -120,6 +124,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .workspaceOpen: "workspace/open"
         case .workspaceClose: "workspace/close"
         case .workspaceActivate: "workspace/activate"
+        case .workspaceMove: "workspace/move"
         case .paneOpen, .paneOpenInDrawer: "pane/open"
         case .paneSplit: "pane/split"
         case .paneClose: "pane/close"
@@ -154,12 +159,12 @@ package struct BenchRequest: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case id, verb, args, by, asked }
     private enum ArgKeys: String, CodingKey {
-        case path, workspace, surface, direction, pane, to, name, agent, slot, divider,
+        case path, before, workspace, surface, direction, pane, to, name, agent, slot, divider,
             fraction, drawer
     }
-    fileprivate enum MoveKeys: String, CodingKey { case step, tab, beside }
+    fileprivate enum MoveKeys: String, CodingKey { case step, tab, beside, workspace }
     fileprivate enum PlaceKeys: String, CodingKey { case slot, before, side }
-    private enum DividerKeys: String, CodingKey { case between, member, against }
+    fileprivate enum DividerKeys: String, CodingKey { case between, member, against }
 
     // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 18 (limit 15)
     package func encode(to encoder: any Encoder) throws {
@@ -177,6 +182,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case .get: break
         case let .workspaceOpen(path), let .workspaceClose(path), let .workspaceActivate(path):
             try a.encode(path, forKey: .path)
+        case let .workspaceMove(path, before):
+            try a.encode(path, forKey: .path)
+            try a.encodeIfPresent(before, forKey: .before)
         case let .paneOpen(workspace, surface):
             try a.encodeIfPresent(workspace, forKey: .workspace)
             try a.encode(surface, forKey: .surface)
@@ -202,17 +210,8 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encode(direction, forKey: .direction)
         case .focusWaiting: break
         case let .layoutResize(divider, fraction):
-            var d = a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)
-            switch divider {
-            case let .columns(member, against):
-                try d.encode("columns", forKey: .between)
-                try d.encode(member, forKey: .member)
-                try d.encode(against, forKey: .against)
-            case let .slots(member, against):
-                try d.encode("slots", forKey: .between)
-                try d.encode(member, forKey: .member)
-                try d.encode(against, forKey: .against)
-            }
+            try Self.encode(
+                divider, into: a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider))
             try a.encode(fraction, forKey: .fraction)
         case let .drawerToggle(name, surface):
             try a.encode(name, forKey: .drawer)
@@ -240,6 +239,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "workspace/open": verb = .workspaceOpen(path: try path())
         case "workspace/close": verb = .workspaceClose(path: try path())
         case "workspace/activate": verb = .workspaceActivate(path: try path())
+        case "workspace/move":
+            verb = .workspaceMove(
+                path: try path(), before: try a.decodeIfPresent(String.self, forKey: .before))
         case "pane/open":
             let surface = try a.decode(Surface.self, forKey: .surface)
             if let drawer = try a.decodeIfPresent(String.self, forKey: .drawer) {
@@ -273,14 +275,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 direction: try a.decode(BenchDirection.self, forKey: .direction))
         case "focus/waiting": verb = .focusWaiting
         case "layout/resize":
-            let d = try a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)
-            let member = try d.decode(UUID.self, forKey: .member)
-            let against = try d.decode(UUID.self, forKey: .against)
-            let divider: BenchDivider =
-                try d.decode(String.self, forKey: .between) == "slots"
-                ? .slots(member: member, against: against)
-                : .columns(member: member, against: against)
-            verb = .layoutResize(divider, fraction: try a.decode(Double.self, forKey: .fraction))
+            verb = .layoutResize(
+                try Self.decode(a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider)),
+                fraction: try a.decode(Double.self, forKey: .fraction))
         case "drawer/toggle":
             verb = .drawerToggle(
                 name: try a.decode(String.self, forKey: .drawer),
@@ -312,12 +309,17 @@ extension BenchRequest {
             var place = c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .beside)
             try place.encode(slot, forKey: .slot)
             try place.encode(side, forKey: .side)
+        case let .workspace(path):
+            try c.encode(path, forKey: .workspace)
         }
     }
 
     fileprivate static func decode(_ c: KeyedDecodingContainer<MoveKeys>) throws -> BenchMoveTo {
         if let direction = try c.decodeIfPresent(BenchDirection.self, forKey: .step) {
             return .step(direction)
+        }
+        if let path = try c.decodeIfPresent(String.self, forKey: .workspace) {
+            return .workspace(path)
         }
         if c.contains(.tab) {
             let place = try c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .tab)
@@ -329,6 +331,34 @@ extension BenchRequest {
         return .beside(
             slot: try place.decode(UUID.self, forKey: .slot),
             side: try place.decode(BenchDirection.self, forKey: .side))
+    }
+}
+
+// MARK: - layout/resize's divider
+
+extension BenchRequest {
+    /// `{"between": "columns" | "slots", member, against}`.
+    fileprivate static func encode(
+        _ divider: BenchDivider, into c: KeyedEncodingContainer<DividerKeys>
+    ) throws {
+        var c = c
+        let (between, member, against) =
+            switch divider {
+            case let .columns(member, against): ("columns", member, against)
+            case let .slots(member, against): ("slots", member, against)
+            }
+        try c.encode(between, forKey: .between)
+        try c.encode(member, forKey: .member)
+        try c.encode(against, forKey: .against)
+    }
+
+    fileprivate static func decode(_ d: KeyedDecodingContainer<DividerKeys>) throws -> BenchDivider
+    {
+        let member = try d.decode(UUID.self, forKey: .member)
+        let against = try d.decode(UUID.self, forKey: .against)
+        return try d.decode(String.self, forKey: .between) == "slots"
+            ? .slots(member: member, against: against)
+            : .columns(member: member, against: against)
     }
 }
 

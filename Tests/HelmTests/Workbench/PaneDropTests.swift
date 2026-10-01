@@ -45,7 +45,7 @@ final class PaneDropTests: XCTestCase {
         ]
     }
 
-    private func resolve(_ pane: Pane, _ x: CGFloat, _ y: CGFloat) -> PaneDropTarget? {
+    private func resolve(_ pane: Pane, _ x: CGFloat, _ y: CGFloat) -> DropTarget? {
         PaneDrop.resolve(pane: pane.id, at: CGPoint(x: x, y: y), bench: bench, frames: frames)
     }
 
@@ -55,7 +55,8 @@ final class PaneDropTests: XCTestCase {
         let target = try XCTUnwrap(resolve(a, 600, 150))
         XCTAssertEqual(target.move, .tab(slot: top.id, before: nil))
         XCTAssertEqual(target.preview, frames[top.id]!.body, "the whole slot will show it")
-        XCTAssertGreaterThan(target.seam.minX, frames[top.id]!.tabs[d.id]!.maxX, "after its tabs")
+        XCTAssertGreaterThan(
+            try XCTUnwrap(target.seam).minX, frames[top.id]!.tabs[d.id]!.maxX, "after its tabs")
     }
 
     func testAGapInAStripIsBeforeTheTabRightOfThePointer() {
@@ -69,7 +70,7 @@ final class PaneDropTests: XCTestCase {
         let up = try XCTUnwrap(resolve(a, 600, 40))
         XCTAssertEqual(up.move, .beside(slot: top.id, side: .up))
         XCTAssertEqual(up.preview, CGRect(x: 400, y: 0, width: 400, height: 150))
-        XCTAssertEqual(up.seam.height, 3, "a bar along the top edge")
+        XCTAssertEqual(up.seam?.height, 3, "a bar along the top edge")
 
         let sideways = try XCTUnwrap(resolve(a, 420, 150))
         XCTAssertEqual(sideways.move, .beside(slot: top.id, side: .left))
@@ -158,16 +159,16 @@ final class PaneDropTests: XCTestCase {
                 ],
                 active: "/tmp/helm-pane-drop"))
         let slot = try XCTUnwrap(rig.model.bench?.columns.first?.slots.first)
-        rig.model.paneDrag.frames = [
+        rig.model.drag.slots = [
             slot.id: SlotFrames(
                 body: CGRect(x: 0, y: 0, width: 800, height: 600),
                 strip: CGRect(x: 0, y: 0, width: 800, height: 28))
         ]
         let sent = rig.server.verbs.count
 
-        rig.model.dragPane(second.id, to: CGPoint(x: 780, y: 300))
-        XCTAssertNotNil(rig.model.paneDrag.drag?.target, "the zone is drawn while dragging")
-        rig.model.dropPane(second.id, at: CGPoint(x: 790, y: 300))
+        rig.model.dragTab(.pane(second.id), to: CGPoint(x: 780, y: 300))
+        XCTAssertNotNil(rig.model.drag.live?.target, "the zone is drawn while dragging")
+        rig.model.dropTab(.pane(second.id), at: CGPoint(x: 790, y: 300))
 
         XCTAssertEqual(rig.server.verbs.count, sent + 1, "one verb")
         let verb = try XCTUnwrap(rig.server.verbs.last)
@@ -178,10 +179,17 @@ final class PaneDropTests: XCTestCase {
         XCTAssertEqual(beside["slot"] as? String, slot.id.uuidString)
         XCTAssertEqual(beside["side"] as? String, "right")
         XCTAssertEqual((verb["by"] as? [String: Any])?["kind"] as? String, "operator")
-        XCTAssertNil(rig.model.paneDrag.drag, "the zone is gone after the drop")
+        XCTAssertNil(rig.model.drag.live, "the zone is gone after the drop")
 
-        rig.model.dropPane(second.id, at: CGPoint(x: 400, y: 300))
+        rig.model.dropTab(.pane(second.id), at: CGPoint(x: 400, y: 300))
         XCTAssertEqual(
             rig.server.verbs.count, sent + 1, "a drop that changes nothing sends nothing")
+    }
+}
+
+extension DropTarget {
+    /// The `pane/move` destination this drop sends, for a test that reads like the resolver's rules.
+    fileprivate var move: BenchMoveTo? {
+        if case let .paneMove(_, to) = verb { to } else { nil }
     }
 }

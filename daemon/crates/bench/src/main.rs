@@ -70,7 +70,12 @@ fn usage() -> &'static str {
      \x20     split <right|down> [--surface <s>]  a new column or row beside the focused slot\n\
      \x20     show <pane> [--asked]               make it its slot's visible tab\n\
      \x20     focus <pane> --asked                give it the operator's keyboard\n\
-     \x20     move <pane> <left|right|up|down>    move a pane on its bench\n\
+     \x20     move <pane> <left|right|up|down>    move a pane one step on its bench\n\
+     \x20     move <pane> --tab <slot> [--before <pane>]\n\
+     \x20                                         into a slot as a tab, before a tab or last\n\
+     \x20     move <pane> --beside <slot> --side <left|right|up|down>\n\
+     \x20                                         a slot of its own beside that slot\n\
+     \x20     move <pane> --workspace <path>      into that workspace's focused slot\n\
      \x20     name <pane> <words> [--rename]      name a pane; a chosen name needs --rename\n\
      \x20     close <pane> [--force] [--asked]    close a pane; a terminal needs --force\n\
      \x20     get pane <pane>                     where a pane is, and whether it is seen\n\

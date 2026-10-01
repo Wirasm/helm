@@ -77,6 +77,14 @@ pub enum LayoutVerb {
     WorkspaceClose { path: StandardPath },
     #[serde(rename = "workspace/activate")]
     WorkspaceActivate { path: StandardPath },
+    /// Reorder the workspace bar (#178): `path` goes before `before`, or last. Focus is
+    /// untouched, so anyone may.
+    #[serde(rename = "workspace/move")]
+    WorkspaceMove {
+        path: StandardPath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<StandardPath>,
+    },
     /// A new pane showing `surface`. A terminal gets a fresh id; a canvas or the browser
     /// already showing is brought forward (or, for an agent, left where it is).
     #[serde(rename = "pane/open")]
@@ -207,7 +215,7 @@ impl From<PaneOpen> for EncodedPaneOpen {
 
 /// Where a moved pane goes: one step (the keyboard), or a place named by ids (drag and drop,
 /// #178). Tagged, so a destination is added here rather than as a second verb.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MoveTo {
     Step(Direction),
@@ -223,6 +231,9 @@ pub enum MoveTo {
         slot: SlotId,
         side: Direction,
     },
+    /// Another workspace's bench, where its placement rules put it. The document's to apply,
+    /// since it crosses benches.
+    Workspace(StandardPath),
 }
 
 /// A divider: the member being dragged and the neighbour across it, either two columns or
@@ -241,6 +252,7 @@ pub const LAYOUT_VERBS: &[&str] = &[
     "workspace/open",
     "workspace/close",
     "workspace/activate",
+    "workspace/move",
     "pane/open",
     "pane/split",
     "pane/close",

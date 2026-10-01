@@ -2445,6 +2445,117 @@ fn a_pane_dropped_as_a_tab_or_beside_a_slot_lands_there() {
     );
 }
 
+/// `bench move` reaches every place a drag in helm can drop a pane (#178): a slot's tab strip,
+/// beside a slot, and another workspace. An agent finds the slot with `bench get pane`.
+#[test]
+fn bench_move_reaches_every_drop_destination() {
+    let home = TestHome::claim("m4-move-cli");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    // `canvas` holds the keyboard, so `right` and `first` are the agent's to move.
+    let (first, right, _canvas) = working_bench(&daemon.socket);
+    let pane = |id: &str| {
+        let run = bench(&home.dir, &["get", "pane", id]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)
+    };
+    let first_slot = pane(&first)["slot"].as_str().unwrap().to_string();
+    let moved = |args: &[&str]| {
+        let mut all = vec!["move", right.as_str()];
+        all.extend_from_slice(args);
+        let run = bench(&home.dir, &all);
+        assert_eq!(run.code, 0, "bench {all:?}: {}", run.stderr);
+        pane(&right)
+    };
+
+    let tab = moved(&["--tab", &first_slot, "--before", &first]);
+    assert_eq!(tab["slot"], first_slot.as_str(), "a tab of that slot");
+    let tabs =
+        &document(&daemon.socket)["workspaces"][0]["bench"]["columns"][0]["slots"][0]["panes"];
+    assert_eq!(tabs[0]["id"], right.as_str(), "before the pane named");
+
+    let beside = moved(&["--beside", &first_slot, "--side", "down"]);
+    assert_ne!(beside["slot"], first_slot.as_str(), "a slot of its own");
+    let column = &document(&daemon.socket)["workspaces"][0]["bench"]["columns"][0]["slots"];
+    assert_eq!(
+        column[1]["panes"][0]["id"],
+        right.as_str(),
+        "below that slot"
+    );
+
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m4-proof/other" }),
+        None,
+        false,
+    ));
+    let elsewhere = moved(&["--workspace", "/tmp/m4-proof/other"]);
+    assert_eq!(elsewhere["workspace"], "/tmp/m4-proof/other");
+    assert_eq!(
+        document(&daemon.socket)["active"],
+        "/tmp/m4-proof",
+        "an agent's move leaves the operator where he is"
+    );
+
+    for wrong in [
+        vec!["move", &first, "left", "--tab", &first_slot],
+        vec!["move", &first, "--before", &right],
+        vec!["move", &first, "--beside", &first_slot],
+        vec!["move", &first],
+    ] {
+        let run = bench(&home.dir, &wrong);
+        assert_eq!(run.code, 3, "bench {wrong:?} is refused: {}", run.stderr);
+        assert!(
+            run.stderr.contains("one destination"),
+            "names the forms: {}",
+            run.stderr
+        );
+    }
+}
+
+/// `workspace/move` reorders the document's workspaces, which is the order helm's bar draws.
+#[test]
+fn a_workspace_moves_before_another_through_the_socket() {
+    let home = TestHome::claim("m4-move-ws");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    working_bench(&daemon.socket);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": "/tmp/m4-proof/other" }),
+        None,
+        false,
+    ));
+    let order = || -> Vec<String> {
+        document(&daemon.socket)["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(order(), ["/tmp/m4-proof", "/tmp/m4-proof/other"]);
+
+    let report = ok_data(layout(
+        &daemon.socket,
+        "workspace/move",
+        serde_json::json!({ "path": "/tmp/m4-proof/other", "before": "/tmp/m4-proof" }),
+        operator(),
+        false,
+    ));
+    assert_eq!(report["changed"], true);
+    assert_eq!(order(), ["/tmp/m4-proof/other", "/tmp/m4-proof"]);
+
+    let again = ok_data(layout(
+        &daemon.socket,
+        "workspace/move",
+        serde_json::json!({ "path": "/tmp/m4-proof/other", "before": "/tmp/m4-proof" }),
+        None,
+        false,
+    ));
+    assert_eq!(again["changed"], false, "where it already is");
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");

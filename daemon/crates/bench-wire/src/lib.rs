@@ -227,6 +227,7 @@ pub const KNOWN_VERBS: &[&str] = &[
     "workspace/open",
     "workspace/close",
     "workspace/activate",
+    "workspace/move",
     "pane/open",
     "pane/split",
     "pane/close",
@@ -1330,7 +1331,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            53,
+            54,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());
