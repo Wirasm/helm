@@ -26,6 +26,7 @@
 //! sits behind one mutex held only for map and log operations — never across a ready
 //! wait, a prompt delivery, or an attach pump.
 
+mod agents;
 mod ask;
 mod cdp;
 mod codex;
@@ -44,6 +45,7 @@ mod sessions;
 mod shell_env;
 mod shells;
 mod spawn;
+mod uploads;
 mod usage;
 mod waiting;
 
@@ -621,6 +623,7 @@ fn boot(
             )
             .map_err(StartError::Failed)?;
         }
+        uploads::clear(&c.root);
         // Ghostty's shell integration, for the shells terminal panes run (M5b). A failure is
         // logged and the shells start without it: prompt marks are missing, nothing else.
         if let Err(why) = shell_env::install(&c.root) {
@@ -843,8 +846,8 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         Err(_) => return,
     });
     let mut line = String::new();
-    // Read up to the larger cap `file/write`, `file/append` and `helm/answer` get; every other verb is held to
-    // `MAX_REQUEST_BYTES` once the line says which verb it is.
+    // Read up to the larger cap `file/write`, `file/append`, `helm/answer` and `browser/upload`
+    // get; every other verb is held to `MAX_REQUEST_BYTES` once the line says which verb it is.
     let mut limited = (&mut reader).take(FILE_REQUEST_MAX_BYTES as u64 + 1);
     if limited.read_line(&mut line).is_err() {
         respond(
@@ -894,7 +897,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
 
     let carries_a_document = matches!(
         Verb::parse(&request.verb),
-        Some(Verb::FileWrite | Verb::FileAppend | Verb::HelmAnswer)
+        Some(Verb::FileWrite | Verb::FileAppend | Verb::HelmAnswer | Verb::BrowserUpload)
     );
     if line.len() > MAX_REQUEST_BYTES && !carries_a_document {
         oversized(MAX_REQUEST_BYTES);
@@ -1046,6 +1049,8 @@ fn dispatch(
 
     match Verb::parse(&req.verb) {
         Some(Verb::Status) => {
+            // Outside the lock: a binary's first `--version` runs here.
+            let agents = agents::report();
             let mut c = core.lock().unwrap();
             layout::refresh_rules(&mut c);
             let live = c.sessions.values().filter(|s| s.is_live()).count();
@@ -1061,6 +1066,9 @@ fn dispatch(
                     "events": c.next_seq,
                     "sessions": { "total": c.sessions.len(), "live": live },
                     "rules": { "placement": c.placement.status() },
+                    // The claude, codex and pi a spawn would run: benchd's PATH, not the
+                    // caller's (helm parity G4).
+                    "agents": agents,
                     // The attach client beside this daemon: what helm runs in a pane that
                     // shows a session, so viewer and daemon are always the same build.
                     "bench": std::env::current_exe()
@@ -1499,6 +1507,11 @@ fn dispatch(
         }
 
         Some(Verb::BrowserConnect) => browser_connect(core, req),
+
+        Some(Verb::BrowserUpload) => {
+            let root = core.lock().unwrap().root.clone();
+            answered(req, uploads::upload(&root, &req.args))
+        }
 
         Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
             Ok(pid) => (

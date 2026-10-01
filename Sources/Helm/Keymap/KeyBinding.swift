@@ -199,4 +199,6 @@ enum BrowserCommand: Equatable {
     case showTab(index: Int)
     /// ⌘+, ⌘− and ⌘0 on the page, as Chrome's own zoom (#544).
     case zoom(FontSizeStep)
+    /// ⌘F: the pane's find field (#549). Headless Chrome has no find bar of its own.
+    case find
 }

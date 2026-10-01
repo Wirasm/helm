@@ -198,6 +198,7 @@ extension BrowserCommand {
         case .zoom(.increase): "Zoom Page In"
         case .zoom(.decrease): "Zoom Page Out"
         case .zoom(.reset): "Reset Page Zoom"
+        case .find: "Find in Page"
         }
     }
 }
