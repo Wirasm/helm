@@ -1,6 +1,21 @@
 import Foundation
 
-/// One selection and the operator's comment. An anchor carries source identity, never pixels.
+/// One thing the operator marked on a canvas, and what they said about it.
+///
+/// The anchor is a DOM element id where the page has one, because the ASYMMETRY that
+/// decides this is that the agent AUTHORED the page (#33): it knows its own ids, so
+/// `#phase-2` is directly editable rather than merely descriptive. Markdown selections without an authored id carry a literal source
+/// excerpt; unsupported targets explain their refusal instead of inventing a name.
+///
+/// **The anchor carries no image**, and there is deliberately no field here that could
+/// carry one: an anchor made of pixels is not something the agent can edit, which is the
+/// same reason the anchor is an id rather than a rect.
+///
+/// That is a fact about this payload and nothing wider. #39 asks only for "no screenshots
+/// in the payload", as one acceptance checkbox — helm has no rule against screenshots as
+/// such, and could not: a canvas is *validated* by screenshotting the rendered page, which
+/// is exactly why #39's own load-bearing constraint is that canvases stay self-contained
+/// rather than render as "a blank page in playwright".
 struct CanvasAnnotation: Equatable {
     enum Anchor: Equatable {
         case element(id: String, text: String)
@@ -146,7 +161,11 @@ extension CanvasAnnotation.Mark {
 }
 
 extension CanvasAnnotation {
-    /// The page declares provenance; an authored HTML id is never guessed to be Mermaid.
+    /// One target, carrying its source identity and selected words.
+    ///
+    /// **The one place a DOM id becomes an anchor.** The page declares provenance;
+    /// an authored HTML id is never guessed to be Mermaid. Renderer bookkeeping that
+    /// carries no author identifier cannot name anything an agent can grep (#113).
     fileprivate static func decodedAnchor(_ raw: Any?) -> Anchor? {
         guard let payload = raw as? [String: Any],
             let text = sanitizedText(payload["text"]),
@@ -175,8 +194,9 @@ extension CanvasAnnotation {
             return .excerpt(source: source, text: text)
         case .mermaid:
             if let id = payload["id"] as? String,
-                let identifier = MermaidAnchor.sourceIdentifier(
-                    in: id, elementClass: payload["elementClass"] as? String ?? ""),
+                let rawRole = payload["rendererRole"] as? String,
+                let role = MermaidAnchor.RendererRole(rawValue: rawRole),
+                let identifier = MermaidAnchor.sourceIdentifier(in: id, role: role),
                 let valid = validID(identifier)
             {
                 return .element(id: valid, text: text)

@@ -307,14 +307,16 @@ Four things follow, and they are the whole of what you need to know:
 
 **Mermaid nodes are addressable in flowchart, class, state and er diagrams.** helm hands
 back the identifier from your fence: a node named `phase2` comes back as `phase2`. Flowchart
-subgraphs also preserve their authored identifier: `subgraph zone[The Zone]` anchors to `zone`.
+subgraphs, state composites and class namespaces also preserve their authored identifier:
+`subgraph zone[The Zone]` anchors to `zone`, even with a CSS class named `node`.
 Selections in mindmap, sequenceDiagram, gitGraph, pie and other unsupported diagram elements
 say they are not anchorable. They do not become notes with renderer ids or guessed quotes.
 
 **Markdown marks carry literal source excerpts.** A selection over rendered bold text names
 the enclosing source block, including `**` markers. Nested lists and blockquotes name their
-whole top-level block. The note heading is `source "..."`, with JSON escapes for newlines,
-quotes and backslashes. Decode that string before matching it against the source file.
+whole top-level block. The note heading is `source "..." text "..."`; both values are JSON
+strings with escapes for newlines, quotes and backslashes. The second value retains the
+selected words. Decode the source string before matching it against the source file.
 Blocks over 2,000 characters and selections across separate blocks cannot be anchored.
 An authored `<div id="phase">` remains an identifier anchor; id-less raw HTML needs an id.
 

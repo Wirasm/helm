@@ -41,7 +41,8 @@ final class CanvasAnnotationTests: XCTestCase {
         // the part that appears in the ```mermaid fence, so the agent can grep it (#113).
         let annotation = decode(
             [
-                "anchorKind": "mermaid", "id": "mermaid-0-flowchart-phase2-1",
+                "anchorKind": "mermaid", "rendererRole": "node",
+                "id": "mermaid-0-flowchart-phase2-1",
                 "text": "Phase 2: Ship",
             ])
 

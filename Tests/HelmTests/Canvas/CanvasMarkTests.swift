@@ -15,7 +15,8 @@ final class CanvasMarkTests: XCTestCase {
 
     func testAMermaidNodeReducesToTheIdentifierInTheSource() {
         let annotation = decode([
-            "kind": "selection", "anchorKind": "mermaid", "id": "mermaid-0-flowchart-phase2-1",
+            "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node",
+            "id": "mermaid-0-flowchart-phase2-1",
             "text": "Phase 2: Ship",
         ])
 
@@ -77,7 +78,8 @@ final class CanvasMarkTests: XCTestCase {
         // anchor that survives a re-render and matches nothing in the source — the exact
         // anchor #113 abolished. This is the behaviour that used to fall through.
         let annotation = decode([
-            "kind": "selection", "anchorKind": "mermaid", "id": "mermaid-0-node_1",
+            "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node",
+            "id": "mermaid-0-node_1",
             "text": "branchA",
         ])
 
@@ -87,7 +89,8 @@ final class CanvasMarkTests: XCTestCase {
     func testAnEdgeAndAMarkerDefAreRefusedToo() {
         for id in ["mermaid-0-L_phase1_phase2_0", "mermaid-0_flowchart-v2-pointEnd"] {
             let annotation = decode([
-                "kind": "selection", "anchorKind": "mermaid", "id": id, "text": "x",
+                "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node", "id": id,
+                "text": "x",
             ])
             XCTAssertNil(annotation, "\(id) is renderer bookkeeping, not an anchor")
         }

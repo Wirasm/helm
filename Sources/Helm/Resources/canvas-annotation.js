@@ -40,7 +40,32 @@
   // `CanvasAnnotationScriptTests.testTheScriptAndSwiftStillAgreeOnEveryMessageKind` fails: a
   // JavaScript file cannot compile against a Swift enum, so that test is the gate.
 
-  // A marked wrapper distinguishes helm's shell from an authored id="content".
+  // helm's own document wrapper — helm's chrome, marked as such by the Swift that writes it.
+  //
+  // `CanvasHTML.documentPage` puts every rendered markdown artifact inside
+  // `<article id="content" data-helm-frame>`, so `#content` is an id helm wrote and no
+  // operator's `.md` file contains. An anchor naming it is a grep that finds nothing, printed
+  // in exactly the form that means "grep for this", which is #215's second half: a degradation
+  // that announced itself would be fine, and this one asserts.
+  //
+  // **Why a marker and not a look at the wrapper itself.** The first cut recognised the frame
+  // by its id and its position directly under the body, which is true by construction of the
+  // page above — and equally true of an agent-authored wrapper using the same landmark id,
+  // which is among the commonest in hand-written HTML. **This script does not only meet helm's
+  // generated page**: an `.html` artifact is read straight from disk (`CanvasFileViews`, "the
+  // artifact IS the document here"), never passes through `documentPage`, and gets this same
+  // script — so that guess silently discarded an id the agent really did write and really
+  // could grep for, and did it indistinguishably from a block that has no id at all. An
+  // attribute helm itself writes cannot be wrong in either direction.
+  //
+  // Spelled out here rather than interpolated, exactly like the handler name and the tool
+  // global above, and held to `CanvasHTML.documentPage` by
+  // `CanvasAnchorTests.testTheScriptAndTheGeneratedPageStillAgreeOnHelmsWrapper`: JavaScript
+  // cannot compile against a Swift constant, so the gate is a test that reads both halves.
+  //
+  // An attribute and never `tagName` — a browser reports `ARTICLE` where the test stub reports
+  // `article`, and a comparison that holds in the harness and not in WebKit is the failure
+  // that suite exists to prevent.
   function helmFrame(node) {
     return node.getAttribute("data-helm-frame") !== null;
   }
@@ -63,15 +88,36 @@
 
   // Diagram provenance must be known before an id leaves the DOM. In particular,
   // actor0 is renderer bookkeeping inside Mermaid and an authored name outside it.
+  function rendererRole(node) {
+    // Authored CSS classes can be named node or cluster. Mermaid's direct label group
+    // and SVG diagram type distinguish structural groups without consulting those classes.
+    var cluster = Array.from(node.children || []).some(function (child) {
+      return child.localName === "g" && child.classList.contains("cluster-label");
+    });
+    if (!cluster) { return "node"; }
+    var svg = node.closest("svg");
+    var diagram = svg && svg.getAttribute("aria-roledescription");
+    if (diagram === "flowchart-v2" || diagram === "class") { return "cluster"; }
+    if (diagram === "stateDiagram") { return "stateCluster"; }
+    return "unknown";
+  }
+
+  // What a mark can be NAMED by: the nearest id on the marked element or an ancestor, because
+  // a name can belong to a container and still name what is inside it (#215).
+  //
+  // **The walk is what lets a marked word inside `<h2 id="phase-2">` anchor to the heading**,
+  // and it is the whole of #113: a mark on a mermaid node lands on the `<text>` or `<p>` inside
+  // the `<g>` that carries the id, so reading only the marked element's own id would anchor no
+  // diagram at all.
   function anchorFor(node, text) {
     if (node && node.closest && node.closest(".mermaid")) {
       for (var up = node; up && up !== document.body; up = up.parentNode) {
         if (up.id) {
           return { anchorKind: "mermaid", id: up.id,
-                   elementClass: up.getAttribute("class") || "" };
+                   rendererRole: rendererRole(up) };
         }
       }
-      return { anchorKind: "mermaid", id: null };
+      return { anchorKind: "mermaid", id: null, rendererRole: "unknown" };
     }
     var source = null;
     for (var up = node; up && up !== document.body; up = up.parentNode) {

@@ -69,10 +69,13 @@ enum CanvasNotes {
         switch anchor {
         case let .element(id, text): "`#\(id)` — \"\(singleLine(text))\""
         case let .quote(text): "\"\(singleLine(text))\""
-        case let .excerpt(source, _): "source \(CanvasHTML.jsString(source))"
-        case let .unanchored(reason, _): "Not anchorable: \(singleLine(reason))"
+        case let .excerpt(source, text): "source \(jsonString(source)) text \(jsonString(text))"
+        case .unanchored: preconditionFailure("Unanchored selections cannot become notes")
         }
     }
+
+    /// The shared string encoding for source and selected words in a note heading.
+    static func jsonString(_ text: String) -> String { CanvasHTML.jsString(text) }
 
     /// What goes on the clipboard when a comment is written, so it can be pasted straight
     /// into an agent that helm cannot reach.

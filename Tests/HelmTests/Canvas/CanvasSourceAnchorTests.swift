@@ -9,7 +9,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
         let note = try XCTUnwrap(
             CanvasAnnotation.decode(
                 posted: [
-                    "kind": "selection", "anchorKind": "mermaid", "elementClass": "cluster",
+                    "kind": "selection", "anchorKind": "mermaid", "rendererRole": "cluster",
                     "id": "mermaid-0-zone", "text": "The Zone",
                 ], comment: "change this boundary"))
         XCTAssertEqual(note.mark, .selection(.element(id: "zone", text: "The Zone")))
@@ -17,7 +17,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
 
     func testUnsupportedDiagramCannotPersistAQuote() throws {
         let body: [String: Any] = [
-            "kind": "selection", "anchorKind": "mermaid", "id": "mermaid-0",
+            "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node", "id": "mermaid-0",
             "text": "40%",
         ]
         guard case let .selected(selection) = try CanvasPageSelection.decode(body).get() else {
@@ -32,6 +32,15 @@ final class CanvasSourceAnchorTests: XCTestCase {
             CanvasAnnotation.decode(
                 posted: [
                     "kind": "selection", "anchorKind": "unknown", "id": "phase", "text": "Phase",
+                ], comment: "change this"))
+    }
+
+    func testUnknownMermaidRendererRoleCannotBecomeAnAuthoredID() {
+        XCTAssertNil(
+            CanvasAnnotation.decode(
+                posted: [
+                    "kind": "selection", "anchorKind": "mermaid", "rendererRole": "unknown",
+                    "id": "mermaid-0-flowchart-phase-0", "text": "Phase",
                 ], comment: "change this"))
     }
 
@@ -57,7 +66,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
 
             A [reference][ref].
             """
-        let page = try Page(markdown: source)
+        let page = try CanvasSourceAnchorPage(markdown: source)
         defer { page.close() }
         let messages = try await page.select([
             "h1", "p", "blockquote p", "li li", "td", "p:last-child",
@@ -78,7 +87,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
     func testCRLFAndBareCRSourceRemainLiteral() async throws {
         for separator in ["\r\n", "\r"] {
             let source = "First **formatted** line." + separator + "Second `line`." + separator
-            let page = try Page(markdown: source)
+            let page = try CanvasSourceAnchorPage(markdown: source)
             defer { page.close() }
             let messages = try await page.select(["p"])
             let message = try XCTUnwrap(messages.first)
@@ -114,7 +123,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
               "Beta": 60
             ```
             """
-        let page = try Page(markdown: source)
+        let page = try CanvasSourceAnchorPage(markdown: source)
         defer { page.close() }
         let messages = try await page.select([
             ".cluster .nodeLabel", ".node .nodeLabel",
@@ -140,56 +149,73 @@ final class CanvasSourceAnchorTests: XCTestCase {
 
     func testSourceExcerptHeadingRoundTripsNewlinesQuotesAndBackslashes() throws {
         let source = "> **quoted** \"text\" and \\code\r\n"
+        let selected = "quoted \"text\"\nand \\code"
         let annotation = try XCTUnwrap(
             CanvasAnnotation.decode(
                 posted: [
                     "kind": "selection", "anchorKind": "excerpt", "source": source,
-                    "text": "quoted text",
+                    "text": selected,
                 ], comment: "change"))
         let heading = try XCTUnwrap(
             CanvasNotes.headings(in: CanvasNotes.entry(annotation, at: Date())).first)
-        let json = String(heading.dropFirst("source ".count))
-        let decoded = try JSONDecoder().decode(String.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded, source)
+        let values = String(heading.dropFirst("source ".count)).components(separatedBy: " text ")
+        XCTAssertEqual(values.count, 2, "the heading must retain source and selected words")
+        guard values.count == 2 else { return }
+        XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(values[0].utf8)), source)
+        XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(values[1].utf8)), selected)
     }
 
+    private let styledMermaidCases = [
+        (
+            "flowchart TD\nphase[Ship]:::cluster\nclassDef cluster fill:red",
+            ".node.cluster", "phase"
+        ),
+        (
+            "stateDiagram-v2\nidle --> running\nclassDef cluster fill:red\nclass idle cluster",
+            ".node.cluster", "idle"
+        ),
+        (
+            "classDiagram\nclass Animal\ncssClass \"Animal\" cluster",
+            ".node.cluster", "Animal"
+        ),
+        (
+            "erDiagram\nCUSTOMER ||--o{ ORDER : places\nclassDef cluster fill:red\nclass CUSTOMER cluster",
+            ".node.cluster", "CUSTOMER"
+        ),
+        (
+            "flowchart TD\nsubgraph flowchart-phase-0[Zone]\nphase[Ship]\nend",
+            ".cluster", "flowchart-phase-0"
+        ),
+        (
+            "flowchart TD\nsubgraph zone[Zone]\nphase[Ship]\nend\nclass zone node",
+            ".cluster", "zone"
+        ),
+        (
+            "flowchart TD\nsubgraph state-phase-0[Zone]\nphase[Ship]\nend\nclass state-phase-0 node",
+            ".cluster", "state-phase-0"
+        ),
+        (
+            "stateDiagram-v2\nstate Composite {\nidle --> running\n}\nclass Composite node",
+            ".statediagram-cluster", "Composite"
+        ),
+        (
+            "stateDiagram-v2\nstate Composite {\nidle --> running\n}\nclass Composite cluster",
+            ".statediagram-cluster", "Composite"
+        ),
+        (
+            "classDiagram\nnamespace Namespace {\nclass Animal\n}",
+            ".cluster", "Namespace"
+        ),
+    ]
+
     func testMermaidClusterClassOnNodesDoesNotHideTheirSourceIdentifiers() async throws {
-        let cases = [
-            (
-                "flowchart TD\nphase[Ship]:::cluster\nclassDef cluster fill:red",
-                ".node.cluster", "phase"
-            ),
-            (
-                "stateDiagram-v2\nidle --> running\nclassDef cluster fill:red\nclass idle cluster",
-                ".node.cluster", "idle"
-            ),
-            (
-                "classDiagram\nclass Animal\ncssClass \"Animal\" cluster",
-                ".node.cluster", "Animal"
-            ),
-            (
-                "erDiagram\nCUSTOMER ||--o{ ORDER : places\nclassDef cluster fill:red\nclass CUSTOMER cluster",
-                ".node.cluster", "CUSTOMER"
-            ),
-            (
-                "flowchart TD\nsubgraph flowchart-phase-0[Zone]\nphase[Ship]\nend",
-                ".cluster", "flowchart-phase-0"
-            ),
-            (
-                "stateDiagram-v2\nstate Composite {\nidle --> running\n}",
-                ".statediagram-cluster", "Composite"
-            ),
-            (
-                "classDiagram\nnamespace Namespace {\nclass Animal\n}",
-                ".cluster", "Namespace"
-            ),
-        ]
-        for (diagram, selector, identifier) in cases {
-            let page = try Page(markdown: "```mermaid\n\(diagram)\n```\n")
+        for (diagram, selector, identifier) in styledMermaidCases {
+            let page = try CanvasSourceAnchorPage(markdown: "```mermaid\n\(diagram)\n```\n")
             defer { page.close() }
             let messages = try await page.select([selector])
-            let note = try XCTUnwrap(
-                CanvasAnnotation.decode(posted: messages[0], comment: "change"))
+            guard let note = CanvasAnnotation.decode(posted: messages[0], comment: "change") else {
+                XCTFail("must anchor \(identifier)"); continue
+            }
             guard case let .selection(.element(id, _)) = note.mark else {
                 return XCTFail("expected an authored Mermaid identifier for \(identifier)")
             }
@@ -215,7 +241,7 @@ final class CanvasSourceAnchorTests: XCTestCase {
     }
 
     func testAnAuthoredMarkdownContainerIDIsPreferredToItsParagraphExcerpt() async throws {
-        let page = try Page(
+        let page = try CanvasSourceAnchorPage(
             markdown: "<div id=\"phase\">\n\nFirst **formatted** paragraph.\n\n</div>\n")
         defer { page.close() }
         let messages = try await page.select(["p"])
@@ -237,99 +263,12 @@ final class CanvasSourceAnchorTests: XCTestCase {
             CanvasAnnotation.decode(posted: try XCTUnwrap(stub.lastPosted), comment: "change"))
         XCTAssertEqual(stub.lastPosted?["anchorKind"] as? String, "unanchored")
 
-        let page = try Page(markdown: "First **paragraph**.\n\nSecond `paragraph`.\n")
+        let page = try CanvasSourceAnchorPage(
+            markdown: "First **paragraph**.\n\nSecond `paragraph`.\n")
         defer { page.close() }
         let messages = try await page.select(["#content"])
         XCTAssertNil(CanvasAnnotation.decode(posted: messages[0], comment: "change"))
         XCTAssertEqual(messages[0]["anchorKind"] as? String, "unanchored")
     }
 
-    private final class Page: NSObject, WKScriptMessageHandler {
-        private var webView: WKWebView!
-        private var messages: [[String: Any]] = []
-        private var loaded = false
-
-        init(markdown: String) throws {
-            super.init()
-            let controller = WKUserContentController()
-            controller.add(
-                self, contentWorld: CanvasFileCoordinator.bridgeWorld, name: "helmCanvas")
-            controller.add(self, name: "ready")
-            controller.addUserScript(
-                WKUserScript(
-                    source: try XCTUnwrap(CanvasHTML.vendoredMarked()),
-                    injectionTime: .atDocumentStart,
-                    forMainFrameOnly: true))
-            if markdown.contains("```mermaid") {
-                controller.addUserScript(
-                    WKUserScript(
-                        source: try XCTUnwrap(CanvasHTML.vendoredMermaid()),
-                        injectionTime: .atDocumentStart,
-                        forMainFrameOnly: true))
-            }
-            controller.addUserScript(
-                WKUserScript(
-                    source: CanvasHTML.annotationScript(), injectionTime: .atDocumentEnd,
-                    forMainFrameOnly: true, in: CanvasFileCoordinator.bridgeWorld))
-            controller.addUserScript(
-                WKUserScript(
-                    source: "window.webkit.messageHandlers.ready.postMessage('ready');",
-                    injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = .nonPersistent()
-            config.userContentController = controller
-            webView = WKWebView(
-                frame: CGRect(x: 0, y: 0, width: 900, height: 700), configuration: config)
-            webView.loadHTMLString(
-                CanvasHTML.documentPage(markdown: markdown, theme: .light), baseURL: nil)
-        }
-
-        func userContentController(
-            _ controller: WKUserContentController, didReceive message: WKScriptMessage
-        ) {
-            if message.name == "ready" { loaded = true }
-            if let body = message.body as? [String: Any] { messages.append(body) }
-        }
-
-        func select(_ selectors: [String]) async throws -> [[String: Any]] {
-            try await wait { self.loaded }
-            for selector in selectors {
-                let count = messages.count
-                webView.evaluateJavaScript(
-                    """
-                    (function() {
-                      \(CanvasHTML.setMarkTool(.text, theme: .light))
-                      var deadline = Date.now() + 10000;
-                      function markWhenReady() {
-                      var node = document.querySelector(\(CanvasHTML.jsString(selector)));
-                      if (!node) {
-                        if (Date.now() < deadline) { setTimeout(markWhenReady, 10); }
-                        return;
-                      }
-                      var range = document.createRange(); range.selectNodeContents(node);
-                      var selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-                      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                      }
-                      markWhenReady();
-                    })();
-                    """, in: nil, in: CanvasFileCoordinator.bridgeWorld, completionHandler: { _ in }
-                )
-                try await wait { self.messages.count > count }
-            }
-            return messages
-        }
-
-        // Poll an observable with a deadline; elapsed time alone never passes an assertion.
-        private func wait(_ ready: () -> Bool) async throws {
-            let deadline = Date().addingTimeInterval(15)
-            while !ready() && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-            XCTAssertTrue(ready(), "WebKit did not report within the deadline")
-            if !ready() { throw NSError(domain: "CanvasSourceAnchorTests", code: 1) }
-        }
-
-        func close() {
-            webView.stopLoading()
-            webView.configuration.userContentController.removeAllScriptMessageHandlers()
-        }
-    }
 }

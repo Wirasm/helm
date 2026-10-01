@@ -31,6 +31,12 @@ import Foundation
 /// with the source name nowhere in the DOM, so there is nothing to recover and this
 /// returns nil rather than inventing one.
 enum MermaidAnchor {
+    /// Renderer-owned group structure, not the author's CSS classes. State composites
+    /// use the same family/counter ID shape as nodes; other clusters carry a direct suffix.
+    enum RendererRole: String {
+        case node, cluster, stateCluster
+    }
+
     /// Diagram families whose node ids carry the source identifier, in the shape
     /// `mermaid-<diagram>-<family>-<identifier>-<counter>`. Verified by rendering each
     /// family in a WKWebView against the vendored build.
@@ -42,7 +48,7 @@ enum MermaidAnchor {
     /// is not anchorable.
     ///
     /// Pure: no WebKit, no page, no I/O.
-    static func sourceIdentifier(in renderedID: String, elementClass: String = "") -> String? {
+    static func sourceIdentifier(in renderedID: String, role: RendererRole = .node) -> String? {
         guard renderedID.hasPrefix("mermaid-") else { return nil }
         var rest = renderedID.dropFirst("mermaid-".count)
 
@@ -53,15 +59,15 @@ enum MermaidAnchor {
         guard !diagramIndex.isEmpty, diagramIndex.allSatisfy(\.isNumber) else { return nil }
         rest = rest[rest.index(after: indexEnd)...]
 
-        // Cluster groups omit the family and counter. Ordinary nodes can also carry
-        // an authored CSS class named `cluster`; their `node` class keeps normal reduction.
-        let classes = elementClass.split(whereSeparator: \.isWhitespace)
-        if classes.contains("cluster"), !classes.contains("node") {
+        // Flowchart subgraphs and class namespaces omit the family and counter.
+        // Their authored suffix may itself resemble a node ID, so never reduce it further.
+        if role == .cluster {
             return rest.isEmpty ? nil : String(rest)
         }
 
         // <family>
         guard let family = families.first(where: { rest.hasPrefix("\($0)-") }) else { return nil }
+        guard role != .stateCluster || family == "state" else { return nil }
         rest = rest.dropFirst(family.count + 1)
 
         // <identifier>-<counter>, taking the LAST dash: an identifier may itself contain
