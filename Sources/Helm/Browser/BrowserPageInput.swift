@@ -21,22 +21,21 @@ final class BrowserPageInput {
     var isCurrent: (Destination) -> Bool = { _ in false }
     var failed: (String) -> Void = { _ in }
     private var pending: [(Event, Destination)] = []
-    private var draining = false
+    private var drain: Task<Void, Never>?
     private var revision = 0
     private var swallowedPress = false
 
     func send(_ event: Event, to destination: Destination) {
         pending.append((event, destination))
-        guard !draining else { return }
-        draining = true
+        guard drain == nil else { return }
         let generation = revision
-        Task {
+        drain = Task {
             while revision == generation, !pending.isEmpty {
                 let (event, destination) = pending.removeFirst()
                 guard isCurrent(destination) else { continue }
                 await deliver(event, to: destination, revision: generation)
             }
-            if revision == generation { draining = false }
+            if revision == generation { drain = nil }
         }
     }
 
@@ -45,13 +44,28 @@ final class BrowserPageInput {
         revision += 1
         // A dialog can suspend an old CDP call until its page is answered. New tabs must
         // drain independently; the old generation can neither take nor stop their input.
-        draining = false
+        drain = nil
         swallowedPress = false
         forms.dismiss()
     }
 
     private func current(_ dest: Destination, revision: Int) -> Bool {
         self.revision == revision && isCurrent(dest)
+    }
+
+    func caret(to dest: Destination) async -> CGRect? {
+        let generation = revision
+        // The caret depends on preceding paste/composition, just as committed text does.
+        await drain?.value
+        guard current(dest, revision: generation), forms.current == nil else { return nil }
+        let result = try? await dest.connection.call(
+            "Runtime.evaluate",
+            Evaluate(expression: BrowserTextInput.caretExpression, returnByValue: true),
+            session: dest.session, returning: Evaluated<TextCaret>.self)
+        guard current(dest, revision: generation), let caret = result?.result.value else {
+            return nil
+        }
+        return CGRect(x: caret.x, y: caret.y, width: caret.width, height: caret.height)
     }
 
     private func deliver(_ event: Event, to dest: Destination, revision: Int) async {
@@ -159,6 +173,12 @@ final class BrowserPageInput {
 }
 
 private struct Text: Encodable { let text: String }
+private struct TextCaret: Decodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
 private struct PasteEvaluation: Encodable {
     let expression: String
     var returnByValue = true
