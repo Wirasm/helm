@@ -2370,6 +2370,81 @@ fn the_reply_fixture_is_what_a_live_daemon_answers() {
     serde_json::from_value::<bench_wire::DocumentAt>(get).expect("a DocumentAt");
 }
 
+/// A drop (#178) is `pane/move` with a place named by ids: `tab` into a slot before a pane, and
+/// `beside` a slot. Driven through the socket so the arm in benchd's `layout.rs` is the one
+/// tested, not only `bench-doc`'s rules.
+#[test]
+fn a_pane_dropped_as_a_tab_or_beside_a_slot_lands_there() {
+    let home = TestHome::claim("m4-drop");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, _, canvas) = working_bench(&daemon.socket);
+    let bench = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]["workspaces"][0]["bench"]
+            .clone()
+    };
+    let slot_of = |bench: &serde_json::Value, pane: &str| -> serde_json::Value {
+        bench["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|c| c["slots"].as_array().unwrap().iter())
+            .find(|s| {
+                s["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["id"] == pane)
+            })
+            .unwrap()
+            .clone()
+    };
+    let target = slot_of(&bench(&daemon.socket), &first)["id"].clone();
+
+    ok_data(layout(
+        &daemon.socket,
+        "pane/move",
+        serde_json::json!({ "pane": canvas, "to": { "tab": { "slot": target, "before": first } } }),
+        operator(),
+        false,
+    ));
+    let ids: Vec<_> = slot_of(&bench(&daemon.socket), &first)["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![canvas.clone(), first.clone()],
+        "a tab, before the pane named"
+    );
+
+    ok_data(layout(
+        &daemon.socket,
+        "pane/move",
+        serde_json::json!({ "pane": canvas, "to": { "beside": { "slot": target, "side": "down" } } }),
+        operator(),
+        false,
+    ));
+    let after = bench(&daemon.socket);
+    let column = after["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["slots"][0]["id"] == target)
+        .unwrap();
+    assert_eq!(
+        column["slots"][1]["panes"][0]["id"], canvas,
+        "a row of its own below"
+    );
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");
