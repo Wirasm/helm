@@ -17,7 +17,8 @@ import SwiftUI
 /// there. What stays helm's in a browser pane does something to the bench or helm itself, which
 /// is as useful from a page as from anywhere: ⌘J (zoom the slot), the ⌘⇧ drawers and toggles (⌘⇧B
 /// is how the browser drawer closes), and ⌃1–9 and ⌃←/→ (workspaces). The page surface keeps
-/// the menu's mirror of a page key from firing too (`bindsElsewhere`).
+/// the menu's mirror of a page key from firing too (`bindsElsewhere`), which also gives ⌘↑/⌘↓
+/// back to pages; the prompt-jump menu items used to take them.
 enum KeyBindings {
     /// In hint order: the key pop-up shows hints in the order their label first appears here,
     /// and the menu lists items in this order. Match order would only matter where two rows

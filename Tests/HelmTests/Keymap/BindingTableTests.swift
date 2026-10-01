@@ -181,6 +181,8 @@ final class BindingTableTests: XCTestCase {
         for (key, modifiers) in [
             ("w", NSEvent.ModifierFlags.command), ("j", .command), ("b", [.command, .shift]),
             ("q", .command), ("c", .command),
+            // The font-size chords zoom the page there (#544), so they are the monitor's.
+            ("=", .command), ("+", .command), ("-", .command), ("0", .command),
         ] {
             XCTAssertFalse(
                 KeyBindings.bindsElsewhere(

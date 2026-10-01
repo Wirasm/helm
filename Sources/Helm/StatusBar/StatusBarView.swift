@@ -33,6 +33,8 @@ struct StatusBarView: View {
     /// The manage key to name, and why the operator's keymap file was refused, if it was.
     @ObservedObject private var keymap = Keymap.shared
     @ObservedObject private var keepAwake = KeepAwake.shared
+    /// Where the keyboard is, so the palette's key named is one that fires there.
+    @StateObject private var focus = KeyFocusWatch()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -59,7 +61,7 @@ struct StatusBarView: View {
             Text(KeyGlyph.modifiers(keymap.manage.modifiers)).foregroundStyle(Color.textMuted)
             Text("for keys").foregroundStyle(Color.textFaint)
             if let palette = KeyGlyph.binding(
-                for: .local(.toggleCommandPalette), in: keymap.table)
+                for: .local(.toggleCommandPalette), in: keymap.table, focus: focus.focus)
             {
                 Text(palette).foregroundStyle(Color.textMuted).padding(.leading, 9)
                 Text("commands").foregroundStyle(Color.textFaint)
