@@ -148,6 +148,9 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     // Under the lock: who this is, and what it is doing now. No mailbox is read here.
     let (handle, rule, idle, root) = {
         let mut c = core.lock().unwrap();
+        if let Some(usage) = args.usage.take().filter(|u| u.harness == args.harness) {
+            crate::usage::record(&mut c, usage);
+        }
         if transition.is_none()
             && c.unknown_hook_events
                 .insert((args.harness.name(), args.event.clone()))

@@ -59,6 +59,17 @@ package enum BenchDirection: String, Codable, Equatable, Sendable, CaseIterable 
     case left, right, up, down
 }
 
+/// Where a moved pane goes (`bench-wire`'s `MoveTo`): one step, the keyboard's, or a place
+/// named by ids, a drop's (#178).
+package enum BenchMoveTo: Equatable, Sendable {
+    case step(BenchDirection)
+    /// Into `slot` as a tab, before `before` or last. Within its own slot, a reorder.
+    case tab(slot: UUID, before: UUID?)
+    /// A slot of its own beside `slot`: above or below it, or a column left or right of its
+    /// column.
+    case beside(slot: UUID, side: BenchDirection)
+}
+
 /// Which way a split opens.
 package enum BenchSplit: String, Codable, Equatable, Sendable {
     case right, down
@@ -89,7 +100,7 @@ package enum BenchVerb: Equatable, Sendable {
     case paneSplit(workspace: String? = nil, direction: BenchSplit, surface: Surface? = nil)
     case paneClose(UUID)
     case paneShow(UUID)
-    case paneMove(UUID, BenchDirection)
+    case paneMove(UUID, BenchMoveTo)
     case paneName(UUID, PaneName)
     /// `agent: nil` records that no agent is in the pane.
     case focusSlot(UUID)
@@ -146,7 +157,8 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case path, workspace, surface, direction, pane, to, name, agent, slot, divider,
             fraction, drawer
     }
-    private enum StepKeys: String, CodingKey { case step }
+    fileprivate enum MoveKeys: String, CodingKey { case step, tab, beside }
+    fileprivate enum PlaceKeys: String, CodingKey { case slot, before, side }
     private enum DividerKeys: String, CodingKey { case between, member, against }
 
     // swiftlint:disable:next cyclomatic_complexity - legacy (#418): 18 (limit 15)
@@ -177,10 +189,9 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try a.encodeIfPresent(surface, forKey: .surface)
         case let .paneClose(pane), let .paneShow(pane):
             try a.encode(pane, forKey: .pane)
-        case let .paneMove(pane, direction):
+        case let .paneMove(pane, to):
             try a.encode(pane, forKey: .pane)
-            var to = a.nestedContainer(keyedBy: StepKeys.self, forKey: .to)
-            try to.encode(direction, forKey: .step)
+            try Self.encode(to, into: a.nestedContainer(keyedBy: MoveKeys.self, forKey: .to))
         case let .paneName(pane, name):
             try a.encode(pane, forKey: .pane)
             try a.encode(name, forKey: .name)
@@ -251,8 +262,8 @@ package struct BenchRequest: Codable, Equatable, Sendable {
         case "pane/close": verb = .paneClose(try pane())
         case "pane/show": verb = .paneShow(try pane())
         case "pane/move":
-            let to = try a.nestedContainer(keyedBy: StepKeys.self, forKey: .to)
-            verb = .paneMove(try pane(), try to.decode(BenchDirection.self, forKey: .step))
+            verb = .paneMove(
+                try pane(), try Self.decode(a.nestedContainer(keyedBy: MoveKeys.self, forKey: .to)))
         case "pane/name":
             verb = .paneName(try pane(), try a.decode(PaneName.self, forKey: .name))
         case "focus/slot": verb = .focusSlot(try a.decode(UUID.self, forKey: .slot))
@@ -278,6 +289,46 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .verb, in: c, debugDescription: "not a layout verb: \(name)")
         }
+    }
+}
+
+// MARK: - pane/move's destination
+
+extension BenchRequest {
+    /// `{"step": dir}`, `{"tab": {slot, before?}}` or `{"beside": {slot, side}}`: serde's
+    /// externally tagged `MoveTo`.
+    fileprivate static func encode(
+        _ to: BenchMoveTo, into c: KeyedEncodingContainer<MoveKeys>
+    ) throws {
+        var c = c
+        switch to {
+        case let .step(direction):
+            try c.encode(direction, forKey: .step)
+        case let .tab(slot, before):
+            var place = c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .tab)
+            try place.encode(slot, forKey: .slot)
+            try place.encodeIfPresent(before, forKey: .before)
+        case let .beside(slot, side):
+            var place = c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .beside)
+            try place.encode(slot, forKey: .slot)
+            try place.encode(side, forKey: .side)
+        }
+    }
+
+    fileprivate static func decode(_ c: KeyedDecodingContainer<MoveKeys>) throws -> BenchMoveTo {
+        if let direction = try c.decodeIfPresent(BenchDirection.self, forKey: .step) {
+            return .step(direction)
+        }
+        if c.contains(.tab) {
+            let place = try c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .tab)
+            return .tab(
+                slot: try place.decode(UUID.self, forKey: .slot),
+                before: try place.decodeIfPresent(UUID.self, forKey: .before))
+        }
+        let place = try c.nestedContainer(keyedBy: PlaceKeys.self, forKey: .beside)
+        return .beside(
+            slot: try place.decode(UUID.self, forKey: .slot),
+            side: try place.decode(BenchDirection.self, forKey: .side))
     }
 }
 

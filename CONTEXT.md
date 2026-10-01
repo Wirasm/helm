@@ -227,6 +227,13 @@ remembers the choice across relaunches; quitting helm lets the Mac sleep again. 
 set it.
 _Avoid_: caffeinate (the command-line tool), insomnia, no-sleep
 
+**plan limits**:
+How close the operator's Claude and codex subscriptions are to their limits: per window (Claude's
+five hours and seven days, codex's week), the share used and when it resets, as the harness itself
+published it. benchd holds them (`usage` in `sessions`); the status bar shows one capsule with
+each harness's fullest window, faint once 15 minutes old.
+_Avoid_: quota, rate limit (that is an API key's throughput), usage (spend)
+
 **keymap file**:
 `~/.helm/bench/keymap.toml` (helm's own directory, `~/.helm/bench-<suite>` for an isolated
 helm), the operator's keys. Its rows overlay helm's built-in table (`KeyBindings.all`): a row

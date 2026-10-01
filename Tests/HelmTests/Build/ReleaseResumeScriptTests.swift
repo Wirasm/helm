@@ -274,7 +274,7 @@ final class ReleaseResumeScriptTests: XCTestCase {
     /// `BENCH_ASKED` would ask for the operator. `BENCH_NOT_YET_INVENTED` stands for the next one,
     /// which a list of names would miss. The survivors are the control: a scrub that cleared
     /// everything would also pass the first half, and would lose where the build announces
-    /// itself and where the fallback claude finds its session.
+    /// itself. `CLAUDE_CONFIG_DIR` goes too: every claude runs the default profile (#491).
     func testTheCallersSessionIdentityDoesNotReachTheResume() throws {
         let bin = scratch.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -291,12 +291,12 @@ final class ReleaseResumeScriptTests: XCTestCase {
             "BENCH_SESSION", "BENCH_HANDLE", "BENCH_ASKED", "BENCH_DIR", "BENCH_SUITE",
             "BENCH_BROWSER_ENDPOINT", "BENCH_NOT_YET_INVENTED", "HELM_PANE",
             "HELM_DEFAULTS_SUITE", "HELM_BENCH_DIR", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT",
+            "CLAUDE_CONFIG_DIR",
             "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
             "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SSE_PORT",
         ]
         let kept = [
-            "HELM_BUILD_DIR": "/tmp/stamps", "CLAUDE_CONFIG_DIR": "/tmp/claude",
-            "RELEASE_RESUME_UNRELATED": "yes",
+            "HELM_BUILD_DIR": "/tmp/stamps", "RELEASE_RESUME_UNRELATED": "yes",
         ]
         var environment = kept
         for name in identity { environment[name] = "caller" }

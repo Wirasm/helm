@@ -193,6 +193,16 @@ package struct BenchLiveSessionsRequest: Encodable, Equatable, Sendable {
 /// `sessions`' answer, reduced to what helm reads.
 package struct BenchLiveSessions: Decodable, Equatable, Sendable {
     package var sessions: [Entry]
+    /// Each harness's plan limits as benchd last heard them (#143); empty when none has reported.
+    package var usage: [BenchUsage]
+
+    private enum CodingKeys: String, CodingKey { case sessions, usage }
+
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessions = try c.decode([Entry].self, forKey: .sessions)
+        usage = try c.decodeIfPresent([BenchUsage].self, forKey: .usage) ?? []
+    }
 
     package struct Entry: Decodable, Equatable, Sendable {
         package var session: String
@@ -307,5 +317,55 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
                 entry.pane.map { ($0, entry) }
             },
             uniquingKeysWith: { first, _ in first })
+    }
+}
+
+/// `bench_wire::Usage` (#143): how close one harness's plan is to its limits, as the harness
+/// itself published it (Claude's statusline, codex's rollout) and benchd last heard it.
+package struct BenchUsage: Decodable, Equatable, Sendable {
+    /// `claude` or `codex`, as benchd spells it.
+    package var harness: String
+    package var windows: [Window]
+
+    package init(harness: String, windows: [Window]) {
+        self.harness = harness
+        self.windows = windows
+    }
+
+    /// One limit window (`bench_wire::UsageWindow`).
+    package struct Window: Decodable, Equatable, Sendable {
+        /// Its length: 300 is five hours, 10080 seven days.
+        package var minutes: Int
+        /// How much of its allowance is used, 0-100.
+        package var usedPercent: Double
+        /// When it resets; nil when the harness did not say.
+        package var resetsAt: Date?
+        /// When the harness last showed this figure: what makes it stale.
+        package var at: Date
+
+        private enum CodingKeys: String, CodingKey {
+            case minutes
+            case usedPercent = "used_percent"
+            case resetsAtMs = "resets_at_ms"
+            case atMs = "at_ms"
+        }
+
+        package init(minutes: Int, usedPercent: Double, resetsAt: Date?, at: Date) {
+            self.minutes = minutes
+            self.usedPercent = usedPercent
+            self.resetsAt = resetsAt
+            self.at = at
+        }
+
+        package init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            minutes = try c.decode(Int.self, forKey: .minutes)
+            usedPercent = try c.decode(Double.self, forKey: .usedPercent)
+            resetsAt = try c.decodeIfPresent(UInt64.self, forKey: .resetsAtMs).map {
+                Date(timeIntervalSince1970: Double($0) / 1000)
+            }
+            at = Date(
+                timeIntervalSince1970: Double(try c.decode(UInt64.self, forKey: .atMs)) / 1000)
+        }
     }
 }

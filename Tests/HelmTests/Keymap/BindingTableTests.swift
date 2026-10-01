@@ -372,7 +372,7 @@ final class BindingTableTests: XCTestCase {
         XCTAssertEqual(resolve(.closeFocused), .paneClose(second))
         XCTAssertEqual(resolve(.showTab(index: 0)), .paneShow(first))
         XCTAssertEqual(resolve(.stepFocus(.left)), .focusStep(direction: .left))
-        XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .up))
+        XCTAssertEqual(resolve(.moveFocused(.up)), .paneMove(second, .step(.up)))
         XCTAssertEqual(
             resolve(.toggleDrawer(name: "browser", surface: .browser)),
             .drawerToggle(name: "browser", surface: .browser))
