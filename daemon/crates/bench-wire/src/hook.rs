@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 /// `hook`'s payload: the typed fields `bench hook` takes out of the harness's own hook
 /// payload, plus what only the hook process can see (its parent pid, its environment).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HookArgs {
     pub harness: Harness,
     /// The harness's own event name, verbatim (`PostToolUse`, `agent_settled`).
@@ -37,6 +37,10 @@ pub struct HookArgs {
     /// inbox, which Claude exports to its hooks. Where benchd starts a turn when it is idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messaging_socket: Option<String>,
+    /// codex only: its plan limits (#143), the newest the rollout named by the payload's
+    /// `transcript_path` holds. Read by `bench hook`, which runs on the agent's machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::Usage>,
 }
 
 /// `hook`'s answer. Both fields are absent for a session that has no mailbox.

@@ -54,8 +54,6 @@ const INHERITED: &[&str] = &[
     "BENCH_LISTEN",
     "HELM_PANE",
     "PLAYWRIGHT_BROWSERS_PATH",
-    // Where Claude keeps its transcripts, which `restore` reads: the test's HOME decides it.
-    "CLAUDE_CONFIG_DIR",
     // prp's store home, which `prp/*` reads and writes: the test's HOME decides it, never the
     // operator's `~/.prp`.
     "PRP_HOME",
@@ -3931,6 +3929,150 @@ fn a_hook_never_fails_its_agent() {
     assert_eq!(unknown, 1);
 }
 
+/// `bench statusline <command>` exactly as Claude Code runs it: the payload on stdin.
+fn bench_statusline(home: &Path, command: &[&str], payload: &serde_json::Value) -> CliRun {
+    let mut child = isolated(bench_bin())
+        .env("HOME", home)
+        .arg("statusline")
+        .args(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run bench statusline");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    CliRun {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// `sessions`' `usage` for one harness, with each window's `at_ms` set aside: Claude's is the
+/// moment `bench statusline` ran.
+fn usage_of(home: &Path, harness: &str) -> Option<serde_json::Value> {
+    let run = bench(home, &["sessions"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let mut usage = json_of(&run)["usage"]
+        .as_array()?
+        .iter()
+        .find(|u| u["harness"] == harness)?
+        .clone();
+    for w in usage["windows"].as_array_mut().unwrap() {
+        w.as_object_mut().unwrap().remove("at_ms");
+    }
+    Some(usage)
+}
+
+/// #143: Claude's plan limits reach `sessions` through `bench statusline`, which runs the
+/// operator's own statusline on the same input whether or not benchd is there; codex's reach it
+/// through its hook, from the rollout the payload names. A lower reading of the same window
+/// never replaces a higher one.
+#[test]
+fn plan_limits_reach_sessions_from_claudes_statusline_and_codexs_hook() {
+    let home = TestHome::claim("usage");
+    let h = &home.dir;
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/usage.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // The fixture's windows, moved to reset an hour and a day from now: a window that has
+    // already reset is replaced by any later report, which is not what this test is about.
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut payload = fixture["claude_statusline"].clone();
+    payload["rate_limits"]["five_hour"]["resets_at"] = serde_json::json!(now_s + 3600);
+    payload["rate_limits"]["seven_day"]["resets_at"] = serde_json::json!(now_s + 86400);
+    let payload = &payload;
+    let mine = write_agent_script(h, "statusline", "printf 'mine:'; wc -c | tr -d ' '; exit 3")
+        .join("statusline");
+    let mine = mine.to_str().unwrap();
+    let expected_out = format!("mine:{}\n", payload.to_string().len());
+
+    let alone = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (alone.code, alone.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        alone.stderr
+    );
+
+    let daemon = DaemonGuard::start(h, None);
+    assert_eq!(usage_of(h, "claude"), None, "nothing reported yet");
+    let (pi, _) = raw_request(
+        &daemon.socket,
+        "usage/report",
+        serde_json::json!({"harness": "pi", "windows": []}),
+    );
+    assert_eq!(pi["status"], "refused", "pi publishes no plan limits: {pi}");
+    let run = bench_statusline(h, &[mine], payload);
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (3, expected_out.as_str()),
+        "{}",
+        run.stderr
+    );
+    let mut want = fixture["claude_usage"].clone();
+    for (w, resets) in want["windows"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip([now_s + 3600, now_s + 86400])
+    {
+        w.as_object_mut().unwrap().remove("at_ms");
+        w["resets_at_ms"] = serde_json::json!(resets * 1000);
+    }
+    assert_eq!(usage_of(h, "claude"), Some(want.clone()));
+
+    let mut lower = payload.clone();
+    lower["rate_limits"]["five_hour"]["used_percentage"] = serde_json::json!(10);
+    assert_eq!(
+        bench_statusline(h, &[], &lower).code,
+        0,
+        "no command is an empty statusline"
+    );
+    assert_eq!(usage_of(h, "claude"), Some(want), "an older, lower reading");
+
+    let rollout = h.join("rollout.jsonl");
+    let lines: Vec<String> = fixture["codex_rollout"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    fs::write(&rollout, lines.join("\n") + "\n").unwrap();
+    let hook = bench_hook(
+        h,
+        "codex",
+        serde_json::json!({"session_id": "c1", "hook_event_name": "Stop", "cwd": "/tmp",
+                           "transcript_path": rollout}),
+    );
+    assert_eq!(hook.code, 0);
+    let run = bench(h, &["sessions"]);
+    let codex = json_of(&run)["usage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["harness"] == "codex")
+        .cloned();
+    assert_eq!(
+        codex,
+        Some(fixture["codex_usage"].clone()),
+        "the line's own time, the plan's limit"
+    );
+}
+
 #[test]
 fn a_shell_string_hook_reports_the_agent_not_the_shell() {
     // codex runs its hook command as a shell string. bash and macOS's sh exec a single
@@ -4692,6 +4834,11 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     assert_eq!(plan.code, 0, "stderr: {}", plan.stderr);
     let plan = json_of(&plan);
     assert_eq!(plan["bench"], bench_path.as_str());
+    assert_eq!(
+        plan["claude_statusline"]["statusLine"]["command"],
+        format!("{bench_path} statusline <your current statusLine command>"),
+        "the operator's own statusline goes after `statusline`, never away"
+    );
 
     let unwired = bench(h, &["wiring", "--check"]);
     assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
@@ -4736,6 +4883,19 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     write(".claude/settings.json", &claude);
     let wired = bench(h, &["wiring", "--check"]);
     assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
+    assert_eq!(
+        json_of(&wired)["claude"]["statusline_reports_limits"],
+        false,
+        "the statusline is optional: reported, not required"
+    );
+    claude["statusLine"] = serde_json::json!({"type": "command",
+        "command": format!("{bench_path} statusline ~/.claude/statusline.py")});
+    write(".claude/settings.json", &claude);
+    let limits = json_of(&bench(h, &["wiring", "--check"]));
+    assert_eq!(
+        limits["claude"]["statusline_reports_limits"], true,
+        "{limits}"
+    );
     assert!(
         !h.join(".bench").exists(),
         "wiring needs no daemon and writes nothing"
@@ -6451,6 +6611,90 @@ fn the_helm_canvas_skills_snippets_execute_against_a_real_daemon() {
     assert_eq!(written["reply"], "on it", "the agent's change landed");
 }
 
+#[test]
+fn the_helm_orchestrate_skills_snippets_execute_against_a_real_daemon() {
+    // The orchestration skill's two snippets run here, in order, as an orchestrator would run
+    // them: spawn a workstream and append its launch to the run file, then read the fleet.
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.claude/skills/helm-orchestrate/SKILL.md"),
+    )
+    .expect("helm-orchestrate SKILL.md readable");
+    let mut snippets: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in skill.lines() {
+        match (&mut current, line.trim()) {
+            (None, "```bash") => current = Some(String::new()),
+            (Some(buf), "```") => {
+                snippets.push(std::mem::take(buf));
+                current = None;
+            }
+            (Some(buf), _) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(snippets.len(), 2, "spawn and record, then read the fleet");
+
+    let home = TestHome::claim("orch-skill");
+    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let ws = workspace(&home.dir);
+    let brief = artifact(&home.dir, "ws1.md");
+    let run = home.dir.join("run.md");
+    fs::write(&run, "## Event log\n\n- 10:00 run started\n").unwrap();
+    let mut outputs = Vec::new();
+    for (i, snippet) in snippets.iter().enumerate() {
+        let out = isolated("bash")
+            .args(["-euo", "pipefail", "-c", snippet])
+            .current_dir(&ws)
+            .env("HOME", &home.dir)
+            .env("BENCH_DIR", home.dir.join(".bench"))
+            .env("BENCH", bench_bin())
+            .env("AGENT", "pi")
+            .env("MODEL", "openai-codex/gpt-6-luna")
+            .env("EFFORT", "low")
+            .env("WORKTREE", &ws)
+            .env("WS", "ws1")
+            .env("BRIEF", &brief)
+            .env("RUN", &run)
+            .output()
+            .expect("run snippet");
+        assert!(
+            out.status.success(),
+            "SKILL.md snippet {} failed (exit {:?}):\n{}\n--- stderr:\n{}",
+            i + 1,
+            out.status.code(),
+            snippet,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let log = fs::read_to_string(&run).unwrap();
+    let launch = log.lines().last().unwrap();
+    assert!(
+        launch.contains("launched ws1: pi openai-codex/gpt-6-luna, session s"),
+        "the launch is the run file's last line: {log}"
+    );
+    assert!(
+        !launch.contains("runtime -,"),
+        "pi's conversation id is recorded for --resume: {launch}"
+    );
+    assert_eq!(
+        outputs[0].trim(),
+        launch,
+        "the snippet echoes what it recorded"
+    );
+    assert!(
+        outputs[1]
+            .lines()
+            .any(|l| l.starts_with("ws1 pi unknown ") && l.ends_with(" unread=0")),
+        "the fleet lists the workstream by handle: {}",
+        outputs[1]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // M5b: every terminal pane is a benchd session (#359)
 // ---------------------------------------------------------------------------
@@ -7140,12 +7384,34 @@ fn a_claude_conversation_with_a_transcript_is_resumed_after_a_restart() {
 }
 
 #[test]
-fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
+fn an_alternate_profile_is_neither_read_nor_passed_on() {
+    // The operator's ruling (#491): benchd and its agents always use the default profile under
+    // HOME. A transcript that exists only where CLAUDE_CONFIG_DIR points is not a transcript,
+    // and no session benchd spawns inherits CLAUDE_CONFIG_DIR, CODEX_HOME or PI_CODING_AGENT_DIR.
     let home = TestHome::claim("m5b-claudecfg");
     let ws = workspace(&home.dir).display().to_string();
     let config = home.dir.join("elsewhere-claude");
+    let projects = config.join("projects/ws");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("c-9a1f.jsonl"), "{}\n").unwrap();
+    let seen = home.dir.join("agent-env");
+    let bin = write_agent_script(
+        &home.dir,
+        "pi",
+        &format!("env > '{}'; exec cat", seen.display()),
+    );
+    write_fake_agent(&home.dir, "claude");
+    let path = std::env::var("PATH").unwrap_or_default();
+    let with_alternates = || {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("PATH", format!("{}:{path}", bin.display()))
+            .env("CLAUDE_CONFIG_DIR", &config)
+            .env("CODEX_HOME", home.dir.join("elsewhere-codex"))
+            .env("PI_CODING_AGENT_DIR", home.dir.join("elsewhere-pi"));
+        cmd
+    };
     let pane = {
-        let daemon = DaemonGuard::start(&home.dir, None);
+        let daemon = DaemonGuard::start_with(&home.dir, None, with_alternates());
         ok_data(layout(
             &daemon.socket,
             "workspace/open",
@@ -7165,17 +7431,27 @@ fn a_claude_transcript_is_looked_for_where_claude_config_dir_puts_it() {
         );
         pane
     };
-    let projects = config.join("projects/ws");
-    fs::create_dir_all(&projects).unwrap();
-    fs::write(projects.join("c-9a1f.jsonl"), "{}\n").unwrap();
-    let bin = write_fake_agent(&home.dir, "claude");
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()))
-        .env("CLAUDE_CONFIG_DIR", &config);
-    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let _daemon = DaemonGuard::start_with(&home.dir, None, with_alternates());
     let restored = json_of(&bench(&home.dir, &["restore", &pane]));
-    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    assert_ne!(restored["restored"][0]["how"], "resumed", "{restored}");
+
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(&seen).is_ok_and(|e| e.contains("BENCH_SESSION=")) {
+        assert!(
+            Instant::now() < deadline,
+            "the spawned agent never wrote its environment"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let env = fs::read_to_string(&seen).unwrap();
+    for name in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR"] {
+        assert!(
+            !env.lines().any(|l| l.starts_with(&format!("{name}="))),
+            "{name} reached the spawned agent:\n{env}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
