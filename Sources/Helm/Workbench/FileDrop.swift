@@ -14,21 +14,20 @@ import UniformTypeIdentifiers
 /// **benchd decides what opening there does** (`pane/open` with `at`): one verb per file, as the
 /// operator's gesture. A file that bench already shows is moved there rather than opened twice.
 extension WorkbenchModel {
-    /// Files are held over the bench at `point`, in `PaneDrop.space`. Answers whether letting go
-    /// here does anything: opens them, or says why it cannot.
+    /// Files are held over the bench at `point`, in `BenchDrag.space`. Answers whether letting
+    /// go here does anything: opens them, or says why it cannot.
     func dragFiles(at point: CGPoint) -> Bool {
-        let target =
-            remoteEndpoint == nil
-            ? bench.flatMap {
-                PaneDrop.resolve(pane: nil, at: point, bench: $0, frames: paneDrag.frames)
-            } : nil
-        paneDrag.update(nil, target: target)
-        return target != nil || remoteEndpoint != nil
+        if remoteEndpoint == nil {
+            dragTab(.files, to: point)
+        } else {
+            drag.update(.files, target: nil)
+        }
+        return drag.live?.target != nil || remoteEndpoint != nil
     }
 
     /// The files left the bench without being dropped.
     func endFileDrag() {
-        _ = paneDrag.end()
+        _ = drag.end(.files)
     }
 
     /// Files were dropped at `point`. Each markdown or HTML file opens as a canvas: the first at
@@ -41,14 +40,14 @@ extension WorkbenchModel {
     /// drop is refused, saying so, rather than sent.
     func dropFiles(_ urls: [URL], at point: CGPoint) {
         _ = dragFiles(at: point)
-        let target = paneDrag.end()
+        let target = drag.end(.files)
         if let remote = remoteEndpoint {
             verbFailed(
                 "\(Self.names(urls)) is on this Mac, and benchd at \(remote) reads its own disk; "
                     + "copy it there and `bench open` it")
             return
         }
-        guard let target else { return }
+        guard let place = target?.place else { return }
         let files = urls.filter(RenderableFile.isRenderable)
         let skipped = urls.filter { !RenderableFile.isRenderable($0) }
         if !skipped.isEmpty {
@@ -56,7 +55,7 @@ extension WorkbenchModel {
         }
         guard let first = files.first,
             let landed = send(
-                .paneOpenAt(target.place, surface: .canvas(path: first.path)),
+                .paneOpenAt(place, surface: .canvas(path: first.path)),
                 by: .operatorGesture)
         else { return }
         let rest = files.dropFirst()
@@ -90,7 +89,7 @@ extension WorkbenchModel {
 
 /// The drop's AppKit half: reads where the pointer is and which files it carries, and hands both
 /// to `WorkbenchModel`, which is where a test reaches it. Attached to the view that names
-/// `PaneDrop.space`, so `DropInfo.location` is already in it.
+/// `BenchDrag.space`, so `DropInfo.location` is already in it.
 struct FileDropDelegate: DropDelegate {
     let model: WorkbenchModel
 

@@ -32,7 +32,7 @@ final class FileDropTests: XCTestCase {
         ]
     }
 
-    private func resolve(_ x: CGFloat, _ y: CGFloat) -> PaneDropTarget? {
+    private func resolve(_ x: CGFloat, _ y: CGFloat) -> DropTarget? {
         PaneDrop.resolve(pane: nil, at: CGPoint(x: x, y: y), bench: bench, frames: frames)
     }
 
@@ -64,7 +64,7 @@ final class FileDropTests: XCTestCase {
     private func rig() throws -> (ToyRig, Slot) {
         let rig = try toyRig(path)
         let slot = try XCTUnwrap(rig.model.bench?.columns.first?.slots.first)
-        rig.model.paneDrag.frames = [
+        rig.model.drag.slots = [
             slot.id: SlotFrames(
                 body: CGRect(x: 0, y: 0, width: 800, height: 600),
                 strip: CGRect(x: 0, y: 0, width: 800, height: 28))
@@ -87,7 +87,7 @@ final class FileDropTests: XCTestCase {
         let sent = rig.server.verbs.count
 
         XCTAssertTrue(rig.model.dragFiles(at: CGPoint(x: 780, y: 300)))
-        XCTAssertNotNil(rig.model.paneDrag.drag?.target, "the zone is drawn while dragging")
+        XCTAssertNotNil(rig.model.drag.live?.target, "the zone is drawn while dragging")
         rig.model.dropFiles(
             [URL(fileURLWithPath: "/tmp/plan.md")], at: CGPoint(x: 790, y: 300))
 
@@ -101,7 +101,7 @@ final class FileDropTests: XCTestCase {
         XCTAssertEqual(path(of: args), "/tmp/plan.md")
         XCTAssertNil(args["workspace"], "the place's slot names its bench")
         XCTAssertEqual((verb["by"] as? [String: Any])?["kind"] as? String, "operator")
-        XCTAssertNil(rig.model.paneDrag.drag, "the zone is gone after the drop")
+        XCTAssertNil(rig.model.drag.live, "the zone is gone after the drop")
     }
 
     /// The rest are tabbed into the first file's slot, read off the drawn document. When that
@@ -164,7 +164,7 @@ final class FileDropTests: XCTestCase {
         XCTAssertFalse(rig.model.dragFiles(at: CGPoint(x: 400, y: 300)))
         rig.model.dropFiles([URL(fileURLWithPath: "/tmp/plan.md")], at: CGPoint(x: 400, y: 300))
         XCTAssertEqual(rig.server.verbs.count, sent, "a body's middle is the pane's")
-        XCTAssertNil(rig.model.paneDrag.drag)
+        XCTAssertNil(rig.model.drag.live)
 
         rig.model.dropFiles(
             [URL(fileURLWithPath: "/tmp/photo.png")], at: CGPoint(x: 790, y: 300))
@@ -188,7 +188,7 @@ final class FileDropTests: XCTestCase {
         let model = WorkbenchModel(terminals: TerminalManager(), client: client)
         XCTAssertNotNil(client.document(atLeast: 1, within: 5), "the first document never came")
         let slot = try XCTUnwrap(model.bench?.columns.first?.slots.first)
-        model.paneDrag.frames = [
+        model.drag.slots = [
             slot.id: SlotFrames(
                 body: CGRect(x: 0, y: 0, width: 800, height: 600),
                 strip: CGRect(x: 0, y: 0, width: 800, height: 28))
@@ -196,7 +196,7 @@ final class FileDropTests: XCTestCase {
         let sent = server.verbs.count
 
         XCTAssertTrue(model.dragFiles(at: CGPoint(x: 790, y: 300)), "taken, to say why")
-        XCTAssertNil(model.paneDrag.drag?.target, "but no zone: nothing will open there")
+        XCTAssertNil(model.drag.live?.target, "but no zone: nothing will open there")
         model.dropFiles([URL(fileURLWithPath: "/tmp/plan.md")], at: CGPoint(x: 790, y: 300))
 
         XCTAssertEqual(server.verbs.count, sent)

@@ -10,9 +10,9 @@
 //! bring something forward. Pass it only when the operator asked (bench-architecture.md).
 
 use crate::{Cli, exchange, print_response, record_root, refuse};
-use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Split, Surface};
+use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
-    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, OpenInto, PaneOpen, ScreenGetArgs,
+    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, MoveTo, OpenInto, PaneOpen, ScreenGetArgs,
     ScreenSendArgs, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
@@ -43,6 +43,10 @@ const VALUED: &[&str] = &[
     "--arg",
     "--out",
     "--window",
+    "--tab",
+    "--before",
+    "--beside",
+    "--side",
 ];
 
 /// Whether `raw` (the arguments after `bench`) is one of these verbs. `close <pane uuid>` is,
@@ -202,7 +206,7 @@ fn layout(verb: &str, p: &Parsed) -> Result<(String, Value), String> {
         "focus" => LayoutVerb::PaneShow { pane: pane()? },
         "move" => LayoutVerb::PaneMove {
             pane: pane()?,
-            to: bench_wire::MoveTo::Step(direction(p.words.get(2))?),
+            to: move_to(p, workspace()?)?,
         },
         "name" => LayoutVerb::PaneName {
             pane: pane()?,
@@ -271,6 +275,39 @@ fn surface(raw: &str) -> Result<Surface, String> {
         "browser" => Ok(Surface::Browser),
         "terminal" => Ok(Surface::terminal()),
         path => renderable_file(path.strip_prefix("file:").unwrap_or(path)),
+    }
+}
+
+/// `move`'s one destination: a step, a slot's tab strip, beside a slot, or another workspace —
+/// every place a drag in helm can drop a pane (#178).
+fn move_to(p: &Parsed, workspace: Option<bench_doc::StandardPath>) -> Result<MoveTo, String> {
+    const FORMS: &str = "move takes one destination: <left|right|up|down>, --tab <slot> [--before <pane>], --beside <slot> --side <left|right|up|down>, or --workspace <path> — `bench get pane` names a pane's slot";
+    let before = p.value("--before");
+    let side = p.value("--side");
+    if before.is_some() && p.value("--tab").is_none() {
+        return Err(format!("--before goes with --tab; {FORMS}"));
+    }
+    if side.is_some() && p.value("--beside").is_none() {
+        return Err(format!("--side goes with --beside; {FORMS}"));
+    }
+    match (
+        p.words.get(2),
+        p.value("--tab"),
+        p.value("--beside"),
+        workspace,
+    ) {
+        (Some(_), None, None, None) => Ok(MoveTo::Step(direction(p.words.get(2))?)),
+        (None, Some(slot), None, None) => Ok(MoveTo::Place(Place::Tab {
+            slot: SlotId::parse(&slot)?,
+            before: before.as_deref().map(PaneId::parse).transpose()?,
+        })),
+        (None, None, Some(slot), None) => Ok(MoveTo::Place(Place::Beside {
+            slot: SlotId::parse(&slot)?,
+            side: direction(side.as_ref())
+                .map_err(|_| format!("--beside needs --side; {FORMS}"))?,
+        })),
+        (None, None, None, Some(path)) => Ok(MoveTo::Workspace(path)),
+        _ => Err(FORMS.into()),
     }
 }
 
@@ -468,6 +505,7 @@ fn describe(doc: &Document, id: PaneId) -> Option<Value> {
     Some(json!({
         "pane": pane,
         "workspace": workspace.path,
+        "slot": workspace.bench.slot_for(id).map(|s| s.id),
         "active_workspace": active,
         "visible": active && doc.open_drawer().is_none() && workspace.bench.visible_pane_ids().contains(&id),
         "focused": focused,

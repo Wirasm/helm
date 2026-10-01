@@ -1,3 +1,4 @@
+import AppKit
 import HelmWire
 import SwiftUI
 
@@ -14,10 +15,6 @@ import SwiftUI
 /// terminal pastes a dropped string), and a gesture in a named space hands the point over
 /// directly.
 enum PaneDrop {
-    /// The space every frame and every pointer location here is measured in: the bench's
-    /// viewport, which a drag cannot move (`SplitStack`'s gesture says what a moving one cost).
-    static let space = "helm.pane-drop"
-
     /// How deep, as a share of the slot, the band on each edge that splits rather than tabs.
     static let edgeBand: CGFloat = 0.25
 
@@ -34,7 +31,7 @@ enum PaneDrop {
     /// `changed: false`.
     static func resolve(
         pane: Pane.ID?, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
-    ) -> PaneDropTarget? {
+    ) -> DropTarget? {
         let from = Address.of(pane, in: bench)
         let standing = from.map {
             Standing(
@@ -92,21 +89,21 @@ enum PaneDrop {
         private var isOwn: Bool { slot.panes.contains { $0.id == pane } }
 
         /// Over the tab strip: the gap before the first tab whose middle is right of the pointer.
-        func tab(at x: CGFloat) -> PaneDropTarget? {
+        func tab(at x: CGFloat) -> DropTarget? {
             let tabs = slot.panes.compactMap { p in drawn.tabs[p.id].map { (id: p.id, frame: $0) } }
             let before = tabs.first { $0.frame.midX > x }
             guard !isNoOpTab(before: before?.id) else { return nil }
             let seamX =
                 before.map { $0.frame.minX - 2 } ?? (tabs.last?.frame.maxX ?? drawn.strip.minX) + 2
-            return PaneDropTarget(
-                place: .tab(slot: slot.id, before: before?.id), preview: drawn.body,
+            return DropTarget(
+                to: .place(.tab(slot: slot.id, before: before?.id)), preview: drawn.body,
                 seam: CGRect(
                     x: seamX - 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
         }
 
         /// Over the body: an edge band splits beside the slot, the middle joins it as a tab.
-        func body(at point: CGPoint, columnFrame: CGRect) -> PaneDropTarget? {
+        func body(at point: CGPoint, columnFrame: CGRect) -> DropTarget? {
             let b = drawn.body
             let u = (point.x - b.minX) / max(b.width, 1)
             let v = (point.y - b.minY) / max(b.height, 1)
@@ -120,23 +117,23 @@ enum PaneDrop {
 
         /// The middle of a slot is "as its last tab". Its own slot's middle is nowhere: dropping
         /// a tab back onto the body it came from should not reorder it. A file's is nowhere too.
-        private func middle() -> PaneDropTarget? {
+        private func middle() -> DropTarget? {
             guard pane != nil, !isOwn else { return nil }
             let end = slot.panes.compactMap { drawn.tabs[$0.id]?.maxX }.max() ?? drawn.strip.minX
-            return PaneDropTarget(
-                place: .tab(slot: slot.id, before: nil), preview: drawn.body,
+            return DropTarget(
+                to: .place(.tab(slot: slot.id, before: nil)), preview: drawn.body,
                 seam: CGRect(
                     x: end + 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
         }
 
-        private func beside(_ side: BenchDirection, columnFrame: CGRect) -> PaneDropTarget? {
+        private func beside(_ side: BenchDirection, columnFrame: CGRect) -> DropTarget? {
             let vertical = side == .up || side == .down
             if landsWhereItIs(side) { return nil }
             let region = vertical ? drawn.body : columnFrame
             let preview = region.half(side)
-            return PaneDropTarget(
-                place: .beside(slot: slot.id, side: side), preview: preview,
+            return DropTarget(
+                to: .place(.beside(slot: slot.id, side: side)), preview: preview,
                 seam: preview.edgeBar(side, thickness: 3))
         }
 
@@ -166,15 +163,33 @@ enum PaneDrop {
     }
 }
 
-/// Where a drop would go, and the drop zone that says so: `preview` is the region the pane will
-/// occupy and `seam` the bar where it enters — the edge it splits, or the gap in a tab strip.
-struct PaneDropTarget: Equatable {
-    let place: BenchPlace
+/// Where a drop would go, and the drop zone that says so: `to` is where the release sends the
+/// dragged thing, `preview` the region it will occupy, and `seam` the bar where it enters — the
+/// edge it splits, or a gap in a tab strip or the workspace bar. A drop onto a workspace tab has
+/// no seam: the tab itself is where it goes.
+struct DropTarget: Equatable {
+    let to: DropDestination
     let preview: CGRect
-    let seam: CGRect
+    var seam: CGRect?
+
+    /// The place on the bench, when it is one.
+    var place: BenchPlace? {
+        if case let .place(place) = to { place } else { nil }
+    }
 }
 
-/// Where one slot is drawn, in `PaneDrop.space`: the whole slot, its tab strip, and each tab.
+/// Where a release sends the dragged thing, in the terms of the verb it becomes
+/// (`WorkbenchModel.verb(dropping:on:)`).
+enum DropDestination: Equatable {
+    /// A place on the bench: where a pane moves to, or a file opens (`BenchPlace`).
+    case place(BenchPlace)
+    /// Another workspace, by path: a pane dropped on its tab.
+    case workspace(String)
+    /// A gap in the workspace bar: before that workspace, or last.
+    case bar(before: String?)
+}
+
+/// Where one slot is drawn, in `BenchDrag.space`: the whole slot, its tab strip, and each tab.
 struct SlotFrames: Equatable {
     var body: CGRect = .null
     var strip: CGRect = .null
@@ -203,46 +218,116 @@ extension CGRect {
 
 // MARK: - The live drag
 
+/// What is being dragged: a pane's tab on the bench, a workspace's tab in the bar, or files from
+/// outside helm (`FileDrop`).
+enum DragItem: Equatable {
+    case pane(Pane.ID)
+    case workspace(WorkspacePath)
+    case files
+}
+
 /// The drag in progress and the frames it is resolved against. Its own object so that only the
 /// drop-zone overlay redraws as the pointer moves; the frames are not published at all, because
 /// every layout reports them and a redraw per report would be a redraw per frame.
+///
+/// **Escape cancels a drag** (#178): while one is live, a local key monitor takes Escape — and
+/// only Escape — so it never reaches the pane under the keyboard. The drag's own gesture keeps
+/// reporting until the button comes up, so a cancelled item is remembered until then, and its
+/// release sends nothing.
 @MainActor
-final class PaneDragModel: ObservableObject {
-    var frames: [Slot.ID: SlotFrames] = [:]
-    /// The pane being dragged, or nil for a file from outside, and what the pointer is over.
-    /// nil between drags.
-    @Published private(set) var drag: (pane: Pane.ID?, target: PaneDropTarget?)?
+final class BenchDrag: ObservableObject {
+    /// The space every frame and every pointer location here is measured in: helm's window
+    /// content, named once over the workspace bar and the bench so both report into it, and which
+    /// a drag cannot move (`SplitStack`'s gesture says what a moving one cost).
+    nonisolated static let space = "helm.drag"
 
-    func update(_ pane: Pane.ID?, target: PaneDropTarget?) {
-        drag = (pane, target)
+    var slots: [Slot.ID: SlotFrames] = [:]
+    var bar = BarFrames()
+    /// What is being dragged and what the pointer is over. nil between drags.
+    @Published private(set) var live: (item: DragItem, target: DropTarget?)? {
+        didSet { live == nil ? stopEscape() : startEscape() }
+    }
+    /// A drag Escape ended, whose gesture has not yet.
+    private var cancelled: DragItem?
+    private var escapeMonitor: Any?
+
+    func update(_ item: DragItem, target: DropTarget?) {
+        guard cancelled != item else { return }
+        live = (item, target)
     }
 
-    /// Ends the drag, answering where it was dropped.
-    func end() -> PaneDropTarget? {
-        defer { drag = nil }
-        return drag?.target
+    /// The button came up: where `item` was dropped, or nil when that drag was cancelled.
+    func end(_ item: DragItem) -> DropTarget? {
+        if cancelled == item {
+            cancelled = nil
+            return nil
+        }
+        defer { live = nil }
+        return live?.item == item ? live?.target : nil
     }
 
-    /// The tab being dragged left the screen mid-drag, so no end will come for it.
-    func cancel(_ pane: Pane.ID) {
-        if drag?.pane == pane { drag = nil }
+    /// Escape: the drag ends here, and its release will send nothing.
+    func cancel() {
+        guard let item = live?.item else { return }
+        cancelled = item
+        live = nil
+    }
+
+    /// The dragged tab left the screen mid-drag, so no end will come for it.
+    func abandon(_ item: DragItem) {
+        if live?.item == item { live = nil }
+        if cancelled == item { cancelled = nil }
+    }
+
+    private func startEscape() {
+        guard escapeMonitor == nil else { return }
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53, let self else { return event }
+            MainActor.assumeIsolated { self.cancel() }
+            return nil
+        }
+    }
+
+    private func stopEscape() {
+        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+        escapeMonitor = nil
     }
 }
 
 extension WorkbenchModel {
-    /// The pointer moved with `pane`'s tab held, at `point` in `PaneDrop.space`.
-    func dragPane(_ pane: Pane.ID, to point: CGPoint) {
-        guard let bench else { return }
-        paneDrag.update(
-            pane,
-            target: PaneDrop.resolve(pane: pane, at: point, bench: bench, frames: paneDrag.frames))
+    /// The pointer moved with `item`'s tab held, at `point` in `BenchDrag.space`. The workspace
+    /// bar is drawn over the bench, so it answers first wherever it is.
+    func dragTab(_ item: DragItem, to point: CGPoint) {
+        let target: DropTarget?
+        if drag.bar.strip.contains(point), let document {
+            target = WorkspaceDrop.resolve(item, at: point, document: document, frames: drag.bar)
+        } else if case let .pane(pane) = item, let bench {
+            target = PaneDrop.resolve(pane: pane, at: point, bench: bench, frames: drag.slots)
+        } else if item == .files, let bench {
+            target = PaneDrop.resolve(pane: nil, at: point, bench: bench, frames: drag.slots)
+        } else {
+            target = nil
+        }
+        drag.update(item, target: target)
     }
 
-    /// `pane`'s tab was released at `point`: one `pane/move` there, as the operator's gesture,
-    /// or nothing where the drop would change nothing.
-    func dropPane(_ pane: Pane.ID, at point: CGPoint) {
-        dragPane(pane, to: point)
-        guard let target = paneDrag.end() else { return }
-        send(.paneMove(pane, .place(target.place)), by: .operatorGesture)
+    /// `item`'s tab was released at `point`: one verb there, as the operator's gesture, or
+    /// nothing where the drop would change nothing or the drag was cancelled.
+    func dropTab(_ item: DragItem, at point: CGPoint) {
+        dragTab(item, to: point)
+        guard let target = drag.end(item), let verb = Self.verb(dropping: item, on: target.to)
+        else { return }
+        send(verb, by: .operatorGesture)
+    }
+
+    /// The verb a tab dropped on `to` sends. nil for a pairing no resolver produces; files are
+    /// `FileDrop`'s, which opens each one.
+    static func verb(dropping item: DragItem, on to: DropDestination) -> BenchVerb? {
+        switch (item, to) {
+        case let (.pane(pane), .place(place)): .paneMove(pane, .place(place))
+        case let (.pane(pane), .workspace(path)): .paneMove(pane, .workspace(path))
+        case let (.workspace(path), .bar(before)): .workspaceMove(path: path.value, before: before)
+        default: nil
+        }
     }
 }

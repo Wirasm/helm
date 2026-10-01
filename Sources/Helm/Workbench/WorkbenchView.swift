@@ -119,13 +119,6 @@ extension WorkbenchView {
         .offset(x: -camera.pan.x, y: -camera.pan.y)
         .frame(width: viewport.width, height: viewport.height, alignment: .topLeading)
         .clipped()
-        // Over the bench and in the space every slot and tab reports its frame in, so a drop
-        // zone is drawn exactly where the views are (`PaneDrop`).
-        .overlay(alignment: .topLeading) { DropZoneOverlay(drag: model.paneDrag) }
-        .coordinateSpace(name: PaneDrop.space)
-        // A file from Finder, opened where it is dropped (`FileDrop`). On the view that names
-        // the space, so the drop's location is measured in it.
-        .onDrop(of: [.fileURL], delegate: FileDropDelegate(model: model))
         // Keyed on the move, not on the camera: a window being resized changes the camera
         // every frame and must follow the pointer, not ease after it.
         .animation(
@@ -298,9 +291,9 @@ private struct SlotView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGRect.self) {
-            $0.frame(in: .named(PaneDrop.space))
+            $0.frame(in: .named(BenchDrag.space))
         } action: {
-            model.paneDrag.frames[slot.id, default: SlotFrames()].body = $0
+            model.drag.slots[slot.id, default: SlotFrames()].body = $0
         }
         .enableInjection()
     }
