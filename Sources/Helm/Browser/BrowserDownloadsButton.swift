@@ -82,7 +82,12 @@ private struct BrowserDownloadsList: View {
     }
 
     private func actionTitle(_ item: BrowserDownloads.Download) -> String {
-        if downloads.onOneMachine { return "Open" }
+        if downloads.onOneMachine {
+            let runnable = item.path.map {
+                BrowserDownloads.openAction(for: URL(fileURLWithPath: $0)) == .reveal
+            }
+            return runnable == true ? "Show in Finder" : "Open"
+        }
         return item.copied == nil ? "Copy to Mac" : "Show in Finder"
     }
 
@@ -91,7 +96,9 @@ private struct BrowserDownloadsList: View {
         Task {
             switch await downloads.onMac(item.id) {
             case let .success(url):
-                if downloads.onOneMachine {
+                if downloads.onOneMachine,
+                    BrowserDownloads.openAction(for: url) == .open
+                {
                     NSWorkspace.shared.open(url)
                 } else {
                     NSWorkspace.shared.activateFileViewerSelecting([url])

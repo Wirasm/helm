@@ -77,6 +77,36 @@ final class BrowserDownloadsTests: XCTestCase {
         XCTAssertEqual(url.path, "/Users/op/Downloads/r.pdf")
     }
 
+    /// Open never runs what an agent could have downloaded: an app, a script, an installer or a
+    /// file with the exec bit is shown in Finder. A document opens.
+    func testOpenRevealsAnythingRunnableAndOpensADocument() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-open-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        func file(_ name: String, executable: Bool = false) throws -> URL {
+            let url = folder.appendingPathComponent(name)
+            try Data("x".utf8).write(to: url)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: executable ? 0o755 : 0o644], ofItemAtPath: url.path)
+            return url
+        }
+        for name in [
+            "run.command", "install.sh", "Setup.PKG", "image.dmg", "shell.terminal", "x.tool",
+            "auto.workflow",
+        ] {
+            XCTAssertEqual(BrowserDownloads.openAction(for: try file(name)), .reveal, name)
+        }
+        let app = folder.appendingPathComponent("Thing.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        XCTAssertEqual(BrowserDownloads.openAction(for: app), .reveal, "an app bundle")
+        XCTAssertEqual(
+            BrowserDownloads.openAction(for: try file("tool", executable: true)), .reveal,
+            "a file with the exec bit, whatever its name")
+        XCTAssertEqual(BrowserDownloads.openAction(for: try file("report.pdf")), .open)
+        XCTAssertEqual(BrowserDownloads.openAction(for: try file("notes.txt")), .open)
+    }
+
     /// A copy never replaces a file already on the Mac: `r.pdf`, then `r (2).pdf`, `r (3).pdf`.
     func testACopyTakesTheFirstFreeName() throws {
         let folder = FileManager.default.temporaryDirectory

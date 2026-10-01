@@ -72,6 +72,29 @@ final class BrowserDownloads: ObservableObject {
 
     func clear() { items.removeAll { $0.state != .inProgress } }
 
+    /// What Open does with a file already on the Mac. **Nothing an agent could have downloaded
+    /// is run by it**: an agent drives the same browser, so a `.command` or an installer in the
+    /// list may be its, and the operator's click must not execute it. Those, and any file with
+    /// the exec bit, are shown in Finder; every other file opens in its app.
+    enum OpenAction: Equatable {
+        case open
+        case reveal
+    }
+
+    nonisolated static let runnableExtensions: Set<String> = [
+        "app", "command", "sh", "pkg", "dmg", "terminal", "tool", "workflow",
+    ]
+
+    nonisolated static func openAction(for file: URL) -> OpenAction {
+        if runnableExtensions.contains(file.pathExtension.lowercased()) { return .reveal }
+        var isFolder: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: file.path, isDirectory: &isFolder)
+        if exists, isFolder.boolValue || FileManager.default.isExecutableFile(atPath: file.path) {
+            return .reveal
+        }
+        return .open
+    }
+
     /// The file on the Mac: in place on one machine, else copied into `macFolder` (once; a second
     /// ask answers the copy). A sentence when it cannot be had.
     func onMac(_ id: String) async -> Result<URL, DownloadFailure> {
