@@ -140,10 +140,9 @@ class WorkbenchHarness {
         settle()
     }
 
-    /// ANSI US virtual key codes for the letters these suites type. ghostty translates the
-    /// physical key, so a wrong code produces a wrong byte rather than none — which surfaces as
-    /// "the terminal received nothing", reading as a focus bug when it is a typo. Unknown
-    /// characters fail here rather than defaulting to a code that happens to mean `a`.
+    /// ANSI US virtual key codes for the letters these suites type, so each event carries the
+    /// physical key a real keyboard sends with that character. Unknown characters fail here
+    /// rather than defaulting to `0`, which is the code for `a`.
     private static func keyCode(for character: Character) -> UInt16 {
         let codes: [Character: UInt16] = [
             "k": 40, "q": 12, "w": 13, "x": 7, "y": 16, "z": 6,
