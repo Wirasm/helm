@@ -494,6 +494,13 @@ final class CanvasModel: ObservableObject {
     /// for bytes the page already has is the page's own write coming back, and is not offered.
     fileprivate var liveSeen: CanvasFileRead?
 
+    /// The live file, when the last read found one there. A mark's note points the agent at it
+    /// rather than at the artifact (`CanvasNoteCourier.body`): the page is derived from it.
+    var liveFileIfPresent: URL? {
+        guard case .bytes = liveSeen else { return nil }
+        return liveFile
+    }
+
     /// Where this canvas's notes accumulate — beside it, never inside it.
     var sidecarURL: URL? { fileURL.map(CanvasNotes.sidecarURL(for:)) }
 

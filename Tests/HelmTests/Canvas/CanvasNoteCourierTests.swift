@@ -46,7 +46,7 @@ final class CanvasNoteCourierTests: XCTestCase {
         let courier = CanvasNoteCourier(mail: mailbox(recording: sends))
         let annotation = try annotation()
 
-        let delivery = courier.send(annotation, on: canvas, along: .mailbox(handle))
+        let delivery = courier.send(annotation, on: canvas, liveFile: nil, along: .mailbox(handle))
 
         XCTAssertEqual(delivery, .sent(handle))
         XCTAssertEqual(sends.calls.count, 1, "one mark is one message")
@@ -54,7 +54,7 @@ final class CanvasNoteCourierTests: XCTestCase {
         XCTAssertEqual(call.to, handle)
         XCTAssertEqual(call.from, "operator")
         XCTAssertEqual(call.subject, CanvasNoteCourier.subject(for: canvas))
-        XCTAssertEqual(call.body, CanvasNoteCourier.body(annotation, on: canvas))
+        XCTAssertEqual(call.body, CanvasNoteCourier.body(annotation, on: canvas, liveFile: nil))
     }
 
     /// The anchor is the acceptance criterion — an agent handed *"this shouldn't talk to that"*
@@ -63,7 +63,7 @@ final class CanvasNoteCourierTests: XCTestCase {
     /// to reply.
     func testTheBodyIsTheClipboardEntryPlusWhereToAnswer() throws {
         let annotation = try annotation()
-        let body = CanvasNoteCourier.body(annotation, on: canvas)
+        let body = CanvasNoteCourier.body(annotation, on: canvas, liveFile: nil)
 
         XCTAssertTrue(body.hasPrefix(CanvasNotes.clipboardEntry(annotation, for: canvas)))
         XCTAssertTrue(body.contains("`#bridge`"))
@@ -75,6 +75,26 @@ final class CanvasNoteCourierTests: XCTestCase {
         XCTAssertTrue(
             body.contains("no mailbox at \"operator\""),
             "…and that replying to the sender address goes nowhere")
+    }
+
+    /// **On a page with a live file, the answer belongs in the file, not the artifact.** The page
+    /// is derived and the file is what it shows, so "edit the artifact" sent the live review
+    /// prototype's reviewer to the wrong place. Whether a file is there is the canvas's to say
+    /// (`WorkbenchCanvasOriginTests`); with none, the old advice stands.
+    func testANoteNamingALiveFileSaysToAnswerInIt() throws {
+        let annotation = try annotation()
+        let page = URL(fileURLWithPath: "/work/artifacts/review.html")
+        let live = URL(fileURLWithPath: "/work/artifacts/review.data.json")
+
+        let with = CanvasNoteCourier.body(annotation, on: page, liveFile: live)
+        let without = CanvasNoteCourier.body(annotation, on: page, liveFile: nil)
+
+        XCTAssertTrue(
+            with.contains(
+                "answer by writing /work/artifacts/review.data.json with `bench file write --expect`"),
+            with)
+        XCTAssertFalse(with.contains("edit the artifact"), with)
+        XCTAssertTrue(without.hasSuffix("answer in your own pane, or edit the artifact."), without)
     }
 
     /// The subject is all a recipient's notice shows of a message
@@ -95,7 +115,7 @@ final class CanvasNoteCourierTests: XCTestCase {
 
         for fallback in [CanvasNoteRoute.Fallback.noOrigin, .originGone] {
             XCTAssertEqual(
-                courier.send(annotation, on: canvas, along: .clipboard(fallback)),
+                courier.send(annotation, on: canvas, liveFile: nil, along: .clipboard(fallback)),
                 .notSent(fallback))
         }
         XCTAssertEqual(sends.calls.count, 0, "not a message to a handle helm made up")
@@ -109,7 +129,7 @@ final class CanvasNoteCourierTests: XCTestCase {
         let courier = CanvasNoteCourier(
             mail: mailbox(recording: sends, refusing: "no mailbox at sild-611a"))
 
-        let delivery = try courier.send(annotation(), on: canvas, along: .mailbox(handle))
+        let delivery = try courier.send(annotation(), on: canvas, liveFile: nil, along: .mailbox(handle))
 
         guard case let .failed(named, why) = delivery else {
             return XCTFail("expected a failure, got \(delivery)")

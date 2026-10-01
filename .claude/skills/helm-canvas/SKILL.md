@@ -184,6 +184,12 @@ It names the file and the pointers, never what they mean: read the file for the 
 mailed because you opened the canvas; the newest agent to `bench open` it is the one mailed, and
 that holds across a helm restart. A canvas nobody opened with `bench open` mails nobody.
 
+**Claude Code labels this mail as another Claude session's, "not typed by your user"**, even when
+the operator's own click on your page caused it. That wording is the harness's, not benchd's: mail
+`from: operator` is his, so act on it as his. A mark he makes on the page reaches you the same way,
+and on a canvas with a live file its note says to answer by writing that file with
+`bench file write --expect`, not by editing the page.
+
 **To change the data, read it, change it, and write it naming what you read:**
 
 ```bash
@@ -207,6 +213,27 @@ rm -f "$READ" "$NEW"
 - **The open page gets your write in about a fifth of a second**, through `helmCanvasUpdate` with
   `file: "tasks.data.json"`; a page that defines no handler is reloaded, which is also how a plain
   page shows your data.
+
+**The worked example is a review page with a status per finding** (prp-companion's live mode).
+Each finding is a card whose `id` is the finding's (`R1`, `R2`); the live file holds only what
+changes after the review was written, keyed by the same ids:
+
+```json
+{
+  "review": "pr-534-review.md",
+  "findings": {
+    "R1": { "status": "fixed", "reply": "Is this fixed on development now?", "note": "Yes: files.rs:118 refuses an empty write." },
+    "R2": { "status": "question", "reply": "Which of the two fixes is simpler?" }
+  }
+}
+```
+
+The operator clicks Open / Fixed / Won't fix / Question on a card or types a one-line `reply`; the
+page writes the file, and you get one mail naming `/findings/R2/status` and `/findings/R2/reply`.
+You answer in `note`, one sentence, with the read-change-write above; the card shows it without a
+reload, scroll and all. Each field has one writer, which keeps the two sides from fighting:
+`reply` is his, `note` is yours, and a `question` stays open until he closes it. The id is the whole
+join: card id, file key and mail pointer are the same name, so nothing maps one to another.
 
 Neither exists on a **markdown** canvas: helm generates that page, so there is no script of yours
 on it to register a handler or write a file.

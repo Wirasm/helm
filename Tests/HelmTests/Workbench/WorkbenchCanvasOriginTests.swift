@@ -25,6 +25,7 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
     private final class Bench: @unchecked Sendable {
         var agents: [UUID: Handle] = [:]
         var sent: [Handle] = []
+        var bodies: [String] = []
     }
     private var bench = Bench()
 
@@ -65,7 +66,10 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
                                     pid: 1)
                             }
                         },
-                        send: { to, _, _, _ in bench.sent.append(to) })),
+                        send: { to, _, _, body in
+                            bench.sent.append(to)
+                            bench.bodies.append(body)
+                        })),
                 client: client)
         }
         server = rig.server
@@ -131,6 +135,29 @@ final class WorkbenchCanvasOriginTests: XCTestCase {
 
         XCTAssertEqual(messages(in: handle).count, 1)
         XCTAssertEqual(messages(in: otherHandle), [])
+    }
+
+    /// A canvas with a live file beside it points its opener at the file. The page is derived from
+    /// it, so "edit the artifact" sent the live review prototype's reviewer to the wrong place.
+    /// Whether the file is there is what benchd answered when the canvas opened.
+    func testAMarkOnACanvasWithALiveFileTellsTheOpenerToAnswerInIt() async throws {
+        canvas = artifacts.appendingPathComponent("review.html")
+        try "<p id=\"intro\">Why this exists</p>\n".write(
+            to: canvas, atomically: true, encoding: .utf8)
+        try "{}\n".write(
+            to: artifacts.appendingPathComponent("review.data.json"), atomically: true,
+            encoding: .utf8)
+        let (model, manager) = try mounted()
+        let terminal = try XCTUnwrap(manager.sessions(for: workspace).first)
+        bench.agents[terminal.id] = handle
+
+        try await open(from: terminal, model: model)
+        try mark("is this fixed?", on: try pushedCanvas(of: model))
+
+        let body = try XCTUnwrap(bench.bodies.last, "the mark sent nothing")
+        XCTAssertTrue(
+            body.contains("review.data.json with `bench file write --expect`"), body)
+        XCTAssertFalse(body.contains("edit the artifact"), body)
     }
 
     /// #349: the canvas is pushed while its workspace is in the background, and the mark is made

@@ -35,7 +35,8 @@ struct CanvasNoteCourier {
     ///
     /// **A `.clipboard` route sends nothing at all** — not a message to a handle helm made up.
     func send(
-        _ annotation: CanvasAnnotation, on canvas: URL, along route: CanvasNoteRoute
+        _ annotation: CanvasAnnotation, on canvas: URL, liveFile: URL?,
+        along route: CanvasNoteRoute
     ) -> CanvasNoteDelivery {
         switch route {
         case let .clipboard(fallback):
@@ -44,7 +45,7 @@ struct CanvasNoteCourier {
             do {
                 try mail.send(
                     handle, Self.sender, Self.subject(for: canvas),
-                    Self.body(annotation, on: canvas))
+                    Self.body(annotation, on: canvas, liveFile: liveFile))
                 return .sent(handle)
             } catch {
                 // Never swallowed: a note the operator believes reached an agent and did not is
@@ -87,10 +88,20 @@ struct CanvasNoteCourier {
     /// arrives with a `from` its reader is invited to reply to, and this one has no mailbox behind
     /// it. Saying so costs a line; not saying so costs a turn spent writing into a directory that
     /// does not exist.
-    nonisolated static func body(_ annotation: CanvasAnnotation, on canvas: URL) -> String {
-        CanvasNotes.clipboardEntry(annotation, for: canvas)
+    ///
+    /// **On a canvas with a live file the answer goes in that file.** The page is derived and the
+    /// file is what it shows, so "edit the artifact" sends the agent to the one place an answer
+    /// cannot be seen (found in the live review prototype, where the reviewer needed telling).
+    /// `liveFile` is the file when one exists, which only the canvas knows (`CanvasModel`).
+    nonisolated static func body(
+        _ annotation: CanvasAnnotation, on canvas: URL, liveFile: URL?
+    ) -> String {
+        let answer =
+            liveFile.map { "answer by writing \($0.path) with `bench file write --expect`." }
+            ?? "answer in your own pane, or edit the artifact."
+        return CanvasNotes.clipboardEntry(annotation, for: canvas)
             + "\n\n"
             + "— marked by the operator in helm, on the canvas above. There is no mailbox at "
-            + "\"\(sender)\": answer in your own pane, or edit the artifact."
+            + "\"\(sender)\": \(answer)"
     }
 }
