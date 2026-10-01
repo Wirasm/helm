@@ -180,6 +180,19 @@ pub struct SpawnSpec {
 }
 
 impl SpawnSpec {
+    /// Whether the app-server holds this codex session's permissions, so its TUI must carry
+    /// none: a served resume or fork, where codex exits on a permission flag ("Permission
+    /// overrides are not supported when resuming a remote task", measured on 0.157.0, and
+    /// "…when forking…" on 0.159.3). A new thread accepts them, and they agree with the server.
+    pub fn server_holds_permissions(&self) -> bool {
+        self.agent == AgentKind::Codex
+            && self.codex_server.is_some()
+            && matches!(
+                self.conversation,
+                Conversation::Resume(_) | Conversation::Fork { .. }
+            )
+    }
+
     /// The thread a served codex re-enters: a resume against its own app-server, which takes
     /// its permissions from that server ([`CODEX_SERVED`]) and fires no hook until a turn runs.
     pub fn served_resume(&self) -> Option<&str> {
@@ -258,6 +271,16 @@ pub fn login_shell() -> String {
 /// model-selection spike; resume flags from the session-state spike; the fork from the
 /// fork-author-session spike (#531).
 pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
+    // A runtime that takes its id from benchd needs one for a fork as for a new conversation:
+    // without it the fork would run under an id nobody recorded, and could never be resumed.
+    if let Conversation::Fork { id: None, .. } = spec.conversation
+        && spec.agent.mints_session_id()
+    {
+        return Err(format!(
+            "a {} fork needs the id benchd mints for it",
+            spec.agent.name()
+        ));
+    }
     let mut args: Vec<String> = Vec::new();
     let program = match spec.agent {
         AgentKind::Claude => {
@@ -268,22 +291,12 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             // codex names its session after the fact, a fork's too; the id comes from its own
             // hook, which is how a pane's record knows it (M5b). `codex resume <id>` and `codex
             // fork <id>` take every flag below.
-            let carried = match &spec.conversation {
-                Conversation::New(_) => false,
-                Conversation::Resume(id) => {
-                    args.extend(["resume".into(), id.clone()]);
-                    true
-                }
-                Conversation::Fork { from, .. } => {
-                    args.extend(["fork".into(), from.clone()]);
-                    true
-                }
-            };
-            // A served resume or fork takes its permissions from the app-server
-            // ([`CODEX_SERVED`]): the TUI exits on a permission flag there ("Permission overrides
-            // are not supported when resuming a remote task", measured on 0.157.0, and "…when
-            // forking…" on 0.159.3). A new thread accepts them, and they agree with the server.
-            if !(carried && spec.codex_server.is_some()) {
+            match &spec.conversation {
+                Conversation::New(_) => {}
+                Conversation::Resume(id) => args.extend(["resume".into(), id.clone()]),
+                Conversation::Fork { from, .. } => args.extend(["fork".into(), from.clone()]),
+            }
+            if !spec.server_holds_permissions() {
                 match spec.posture {
                     Posture::Unattended => {
                         args.push("--dangerously-bypass-approvals-and-sandbox".into())
@@ -1158,6 +1171,20 @@ mod tests {
             ],
             "a pi fork resumed later still has only its read tools"
         );
+    }
+
+    #[test]
+    fn a_claude_or_pi_fork_without_a_minted_id_is_refused() {
+        for agent in [AgentKind::Claude, AgentKind::Pi] {
+            let mut s = spec(agent);
+            s.conversation = Conversation::Fork {
+                from: "author-1".into(),
+                id: None,
+            };
+            s.posture = Posture::ReadOnly;
+            let err = argv(&s).unwrap_err();
+            assert!(err.contains("needs the id benchd mints"), "{err}");
+        }
     }
 
     #[test]
