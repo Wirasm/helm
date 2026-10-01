@@ -5,14 +5,15 @@
 //! cannot read is skipped and named as a [`Problem`], never guessed at. Records outside the
 //! conversation (Claude's `attachment`, `mode`, `pr-link`, … and pi's `model_change`, …) are
 //! metadata by design and skipped without a report: the conversation is Claude's `user` and
-//! `assistant` records and pi's `message` records, and inside those every field and block
-//! type is named below.
+//! `assistant` records, pi's `message` records and codex's `item_completed` events, and inside
+//! those every field, block and item type is named below.
 //!
-//! Codex rollouts are found but not read. Current rollouts (0.157) put injected context
-//! (AGENTS.md, `<environment_context>`, plugin lists) in the same `role: user` messages as the
-//! real prompt, and telling them apart would take guesswork.
+//! A codex rollout is read from its typed items (codex 0.144 on), never from its
+//! `response_item` messages: those put injected context (AGENTS.md, `<environment_context>`,
+//! hook context) in the same `role: user` messages as the prompt, while a `UserMessage` item
+//! holds only what was typed or sent as a turn.
 
-use crate::pi;
+use crate::{codex, pi};
 use bench_wire::Harness;
 use serde::Serialize;
 use serde_json::Value;
@@ -82,20 +83,8 @@ fn pi_sessions(home: &Path) -> PathBuf {
     home.join(".pi/agent/sessions")
 }
 
-fn codex_sessions(home: &Path) -> PathBuf {
-    home.join(".codex/sessions")
-}
-
-fn codex_refusal(path: &Path) -> String {
-    format!(
-        "{} is a codex rollout, and bench log reads only Claude and pi transcripts: codex puts \
-         injected context in the same user messages as the prompt, so its log would mislead",
-        path.display()
-    )
-}
-
 /// Finds the transcript for `arg`: a session id as `bench sessions --all` shows it (a Claude
-/// session or subagent id, or a pi session id), or a transcript path (it contains a `/`),
+/// session or subagent id, a pi session id or a codex thread id), or a transcript path (it contains a `/`),
 /// such as a subagent row's `open.path`. `Err` says why nothing can be read.
 pub fn locate(home: &Path, arg: &str) -> Result<Located, String> {
     if arg.contains('/') {
@@ -172,35 +161,19 @@ pub fn locate(home: &Path, arg: &str) -> Result<Located, String> {
     if let Some(r) = one(Harness::Pi, pi_files) {
         return r;
     }
-    if let Some(rollout) = find_codex(&codex_sessions(home), &format!("-{arg}.jsonl"), 4) {
-        return Err(codex_refusal(&rollout));
+    if let Some(path) = codex::rollout(home, arg) {
+        return Ok(Located {
+            harness: Harness::Codex,
+            id: arg.to_string(),
+            path,
+        });
     }
     Err(format!(
         "no transcript for {arg} under {}, {} or {}",
         claude_projects(home).display(),
         pi_sessions(home).display(),
-        codex_sessions(home).display()
+        codex::sessions_dir(home).display()
     ))
-}
-
-/// Codex keeps rollouts under `YYYY/MM/DD/`.
-fn find_codex(dir: &Path, suffix: &str, depth: u8) -> Option<PathBuf> {
-    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if depth > 0
-                && let Some(found) = find_codex(&path, suffix, depth - 1)
-            {
-                return Some(found);
-            }
-        } else if path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().ends_with(suffix))
-        {
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn located_path(home: &Path, path: &Path) -> Result<Located, String> {
@@ -227,19 +200,29 @@ fn located_path(home: &Path, path: &Path) -> Result<Located, String> {
             path: path.to_path_buf(),
         });
     }
-    if path.starts_with(codex_sessions(home)) {
-        return Err(codex_refusal(path));
+    if path.starts_with(codex::sessions_dir(home)) {
+        // `rollout-<local time>-<thread id>`, and a thread id is a 36-character UUID.
+        let at = stem.len().saturating_sub(36);
+        return Ok(Located {
+            harness: Harness::Codex,
+            id: stem.get(at..).unwrap_or(&stem).to_string(),
+            path: path.to_path_buf(),
+        });
     }
     Err(format!(
-        "{} is not under {} or {}, so bench log does not know whose transcript it is",
+        "{} is not under {}, {} or {}, so bench log does not know whose transcript it is",
         path.display(),
         claude_projects(home).display(),
-        pi_sessions(home).display()
+        pi_sessions(home).display(),
+        codex::sessions_dir(home).display()
     ))
 }
 
-/// Reads the whole file. `Err` only when the file cannot be read at all, or (pi) its header
-/// is a format this build does not read; a bad line is a [`Problem`] and the rest still reads.
+/// A harness's check of a transcript's first line against the id it was located by.
+type HeaderCheck = fn(&str, &str) -> Result<(), String>;
+
+/// Reads the whole file. `Err` only when the file cannot be read at all, or (pi, codex) its
+/// header is not one this build reads; a bad line is a [`Problem`] and the rest still reads.
 pub fn read(located: &Located) -> Result<Transcript, String> {
     let file = fs::File::open(&located.path)
         .map_err(|e| format!("cannot open {}: {e}", located.path.display()))?;
@@ -247,15 +230,19 @@ pub fn read(located: &Located) -> Result<Transcript, String> {
     let mut out = Transcript::default();
     let mut tools: HashMap<String, String> = HashMap::new();
     let mut n = 0;
-    if located.harness == Harness::Pi {
+    let header: Option<HeaderCheck> = match located.harness {
+        Harness::Claude => None,
+        Harness::Pi => Some(pi::header),
+        Harness::Codex => Some(codex::header),
+    };
+    if let Some(header) = header {
         let first = lines
             .next()
             .transpose()
             .map_err(|e| format!("cannot read {}: {e}", located.path.display()))?
             .unwrap_or_default();
         n = 1;
-        pi::header(&first, &located.id)
-            .map_err(|why| format!("{}: {why}", located.path.display()))?;
+        header(&first, &located.id).map_err(|why| format!("{}: {why}", located.path.display()))?;
     }
     for line in lines {
         n += 1;
@@ -268,7 +255,7 @@ pub fn read(located: &Located) -> Result<Transcript, String> {
             .and_then(|v| match located.harness {
                 Harness::Claude => claude(&v, &mut tools),
                 Harness::Pi => pi_record(&v),
-                Harness::Codex => Err("codex rollouts are not read".into()),
+                Harness::Codex => codex_record(&v),
             });
         match parsed {
             Ok(entries) => out.entries.extend(entries),
@@ -560,6 +547,186 @@ fn pi_record(record: &Value) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// One codex rollout line after `session_meta`. Its conversation is the `item_completed`
+/// events, a turn the operator interrupted, and a message another codex agent sent this one
+/// (a `response_item` with no item of its own); everything else (`turn_context`,
+/// `token_count`, the other `response_item`s, …) is metadata or a second copy of an item.
+fn codex_record(record: &Value) -> Result<Vec<Entry>, String> {
+    let payload = &record["payload"];
+    match record["type"].as_str().ok_or("no \"type\"")? {
+        "event_msg" => {}
+        "response_item" if payload["type"] == "agent_message" => {
+            return codex_agent_message(&Stamp::of(record)?, payload);
+        }
+        _ => return Ok(Vec::new()),
+    }
+    match payload["type"].as_str() {
+        Some("item_completed") => codex_item(&Stamp::of(record)?, &payload["item"]),
+        Some("turn_aborted") => Ok(vec![Stamp::of(record)?.entry(
+            Kind::Error,
+            None,
+            "aborted".into(),
+        )]),
+        // Written by codex before it wrote items (0.116), never beside them.
+        Some(old @ ("user_message" | "agent_message")) => Err(format!(
+            "{old}: an event from a rollout older than codex's items; this build reads item_completed"
+        )),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// One completed codex item: the prompt, a reply, or a tool call (an error when it failed).
+fn codex_item(stamp: &Stamp, item: &Value) -> Result<Vec<Entry>, String> {
+    let kind = item["type"].as_str().ok_or("item without a type")?;
+    // `Extension` says so in `failure` rather than in `status`.
+    let failed = item["status"] == "failed" || !item["failure"].is_null();
+    let tool = |name: &str, arg: String| stamp.entry(Kind::Tool, Some(name.into()), arg);
+    let call = match kind {
+        "UserMessage" => return codex_prompt(stamp, &item["content"]),
+        "AgentMessage" => return codex_reply(stamp, &item["content"]),
+        // Thinking, and the marker a compaction leaves.
+        "Reasoning" | "ContextCompaction" => return Ok(Vec::new()),
+        "CommandExecution" => tool("shell", codex_command(&item["command"])),
+        "FileChange" => {
+            let paths = item["changes"]
+                .as_object()
+                .ok_or("FileChange without changes")?
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+            tool("apply_patch", one_line(&paths, TOOL_ARG_CHARS))
+        }
+        "McpToolCall" => {
+            let (server, name) = (item["server"].as_str(), item["tool"].as_str());
+            let (Some(server), Some(name)) = (server, name) else {
+                return Err("McpToolCall without a server and tool".into());
+            };
+            tool(&format!("{server}.{name}"), tool_arg(&item["arguments"]))
+        }
+        "WebSearch" => tool("web_search", tool_arg(item)),
+        "ImageView" => tool("view_image", tool_arg(item)),
+        // A tool of codex's own (`web.search`, `clock.sleep`, `image_gen.generation`).
+        "Extension" => {
+            let name = item["kind"].as_str().ok_or("Extension without a kind")?;
+            tool(name, tool_arg(&json_without(item, &["id", "type", "kind"])))
+        }
+        "CollabAgentToolCall" => {
+            let name = item["tool"]
+                .as_str()
+                .ok_or("CollabAgentToolCall without a tool")?;
+            tool(name, String::new())
+        }
+        // A subagent's lifecycle: only its start is a call the agent made.
+        "SubAgentActivity" => match item["kind"].as_str() {
+            Some("started") => tool("spawn_agent", tool_arg(&item["agent_path"])),
+            Some(_) => return Ok(Vec::new()),
+            None => return Err("SubAgentActivity without a kind".into()),
+        },
+        other => return Err(format!("item type {other:?}")),
+    };
+    Ok(with_failure(stamp, call, failed, item))
+}
+
+/// A tool call, then its failure as an error when it failed: what it printed, else its exit.
+fn with_failure(stamp: &Stamp, call: Entry, failed: bool, item: &Value) -> Vec<Entry> {
+    if !failed {
+        return vec![call];
+    }
+    let said = ["stderr", "aggregated_output", "error", "failure"]
+        .iter()
+        .map(|k| match &item[*k] {
+            Value::Object(o) => o.get("message").map(plain_text).unwrap_or_default(),
+            other => plain_text(other),
+        })
+        .chain(std::iter::once(plain_text(&item["result"]["content"])))
+        .find(|t| !t.trim().is_empty())
+        .or_else(|| item["exit_code"].as_i64().map(|c| format!("exit {c}")))
+        .unwrap_or_else(|| "failed".into());
+    let error = stamp.entry(Kind::Error, call.tool.clone(), one_line(&said, ERROR_CHARS));
+    vec![call, error]
+}
+
+fn json_without(item: &Value, keys: &[&str]) -> Value {
+    let mut v = item.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.retain(|k, _| !keys.contains(&k.as_str()));
+    }
+    v
+}
+
+/// A command codex ran: the script of `[shell, -lc, script]`, else the words joined.
+fn codex_command(command: &Value) -> String {
+    let words: Vec<&str> = command
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let line = match words.as_slice() {
+        [_, flag, script] if flag.starts_with('-') => (*script).to_string(),
+        _ => command
+            .as_str()
+            .map_or_else(|| words.join(" "), String::from),
+    };
+    one_line(&line, TOOL_ARG_CHARS)
+}
+
+fn codex_prompt(stamp: &Stamp, content: &Value) -> Result<Vec<Entry>, String> {
+    let mut text: Vec<String> = Vec::new();
+    for b in content
+        .as_array()
+        .ok_or("UserMessage content is not blocks")?
+    {
+        match b["type"].as_str() {
+            Some("text") => text.push(b["text"].as_str().ok_or("text block without text")?.into()),
+            Some("local_image" | "image") => text.push("[image]".into()),
+            Some("skill") => text.push(format!("[skill {}]", b["name"].as_str().unwrap_or("?"))),
+            other => return Err(format!("UserMessage block type {other:?}")),
+        }
+    }
+    let text = text.join("\n");
+    Ok(if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![stamp.entry(Kind::User, None, text)]
+    })
+}
+
+/// A message from another codex agent (a parent's task, a subagent's report), delivered to
+/// this one as a turn. Its payload is mostly encrypted; the readable header names the sender.
+fn codex_agent_message(stamp: &Stamp, payload: &Value) -> Result<Vec<Entry>, String> {
+    let mut text: Vec<&str> = Vec::new();
+    for b in payload["content"]
+        .as_array()
+        .ok_or("agent_message content is not blocks")?
+    {
+        match b["type"].as_str() {
+            Some("input_text") => text.push(b["text"].as_str().ok_or("input_text without text")?),
+            Some("encrypted_content") => text.push("[encrypted]"),
+            other => return Err(format!("agent_message block type {other:?}")),
+        }
+    }
+    Ok(vec![stamp.entry(Kind::User, None, text.join("\n"))])
+}
+
+fn codex_reply(stamp: &Stamp, content: &Value) -> Result<Vec<Entry>, String> {
+    let mut out = Vec::new();
+    for b in content
+        .as_array()
+        .ok_or("AgentMessage content is not blocks")?
+    {
+        match b["type"].as_str() {
+            Some("Text") => {
+                let text = b["text"].as_str().ok_or("Text block without text")?;
+                if !text.trim().is_empty() {
+                    out.push(stamp.entry(Kind::Agent, None, text.to_string()));
+                }
+            }
+            other => return Err(format!("AgentMessage block type {other:?}")),
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn an_id_is_found_as_a_claude_session_a_subagent_or_refused() {
+    fn an_id_is_found_as_a_claude_session_a_subagent_a_codex_thread_or_refused() {
         let home = Home::new();
         let top = home.write(".claude/projects/-r/abc.jsonl", &[user(json!("x"))]);
         let sub = home.write(
@@ -765,7 +932,7 @@ mod tests {
             &[user(json!("x"))],
         );
         let rollout = home.write(
-            ".codex/sessions/2026/09/25/rollout-2026-09-25T19-49-25-c9.jsonl",
+            ".codex/sessions/2026/09/25/rollout-2026-09-25T19-49-25-01a0c9aa-0000-7000-8000-000000000000.jsonl",
             &[json!({})],
         );
         assert_eq!(locate(&home.0, "abc").unwrap().path, top);
@@ -774,10 +941,14 @@ mod tests {
         let by_path = locate(&home.0, &sub.display().to_string()).unwrap();
         assert_eq!(by_path.id, "a123");
 
-        let codex = locate(&home.0, "c9").unwrap_err();
-        assert!(codex.contains("codex rollout"), "{codex}");
-        let codex_path = locate(&home.0, &rollout.display().to_string()).unwrap_err();
-        assert!(codex_path.contains("codex rollout"), "{codex_path}");
+        let thread = "01a0c9aa-0000-7000-8000-000000000000";
+        let codex = locate(&home.0, thread).unwrap();
+        assert_eq!((codex.harness, &codex.path), (Harness::Codex, &rollout));
+        let by_path = locate(&home.0, &rollout.display().to_string()).unwrap();
+        assert_eq!(
+            by_path.id, thread,
+            "the id is the file name's last 36 characters"
+        );
         assert!(
             locate(&home.0, "nope")
                 .unwrap_err()
@@ -788,6 +959,83 @@ mod tests {
                 .unwrap_err()
                 .contains("not a session id")
         );
+    }
+
+    fn codex_event(item: Value) -> Value {
+        json!({"timestamp": AT, "type": "event_msg",
+            "payload": {"type": "item_completed", "thread_id": "t1", "turn_id": "u", "item": item}})
+    }
+
+    /// Record shapes copied from real codex 0.157 rollouts, cut down.
+    #[test]
+    fn a_codex_rollout_reads_its_items_and_never_its_injected_context() {
+        let home = Home::new();
+        let id = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+        let rel = format!(".codex/sessions/2026/10/01/rollout-2026-10-01T10-34-56-{id}.jsonl");
+        let meta = json!({"timestamp": AT, "type": "session_meta",
+            "payload": {"id": id, "cli_version": "0.157.0", "cwd": "/r"}});
+        let injected = json!({"timestamp": AT, "type": "response_item", "payload": {"type": "message",
+            "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions"}]}});
+        let path = home.write(
+            &rel,
+            &[
+                meta.clone(),
+                json!({"timestamp": AT, "type": "event_msg", "payload": {"type": "task_started"}}),
+                injected,
+                json!({"timestamp": AT, "type": "turn_context", "payload": {}}),
+                codex_event(json!({"type": "UserMessage", "id": "item-1", "content": [
+                    {"type": "text", "text": "fix the build"},
+                    {"type": "skill", "name": "prp-spike", "path": "/s/SKILL.md"}]})),
+                codex_event(json!({"type": "Reasoning", "id": "r", "summary_text": [], "raw_content": []})),
+                codex_event(json!({"type": "AgentMessage", "id": "a", "phase": "commentary",
+                    "content": [{"type": "Text", "text": "Looking."}]})),
+                codex_event(json!({"type": "CommandExecution", "id": "c1",
+                    "command": ["/bin/zsh", "-lc", "cargo build\n--release"], "status": "completed", "exit_code": 0})),
+                codex_event(json!({"type": "CommandExecution", "id": "c2",
+                    "command": ["/bin/zsh", "-lc", "cargo test"], "status": "failed", "exit_code": 101,
+                    "stderr": "", "aggregated_output": "error[E0425]: cannot find value"})),
+                codex_event(json!({"type": "FileChange", "id": "f", "status": "completed",
+                    "changes": {"/r/a.rs": {"type": "update", "unified_diff": "@@"}}})),
+                codex_event(json!({"type": "McpToolCall", "id": "m", "server": "gh", "tool": "search",
+                    "arguments": {"query": "is:open"}, "status": "failed",
+                    "result": {"content": [{"type": "text", "text": "422 Validation Failed"}]}})),
+                codex_event(json!({"type": "SubAgentActivity", "id": "s", "kind": "interacted",
+                    "agent_thread_id": "t2", "agent_path": "/root/x"})),
+                codex_event(json!({"type": "Hologram", "id": "h"})),
+                json!({"timestamp": AT, "type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}}),
+            ],
+        );
+        let located = locate(&home.0, id).unwrap();
+        assert_eq!(located.path, path);
+        let t = read(&located).unwrap();
+        assert_eq!(
+            shape(&t),
+            [
+                (Kind::User, None, "fix the build\n[skill prp-spike]"),
+                (Kind::Agent, None, "Looking."),
+                (Kind::Tool, Some("shell"), "cargo build"),
+                (Kind::Tool, Some("shell"), "cargo test"),
+                (
+                    Kind::Error,
+                    Some("shell"),
+                    "error[E0425]: cannot find value"
+                ),
+                (Kind::Tool, Some("apply_patch"), "/r/a.rs"),
+                (Kind::Tool, Some("gh.search"), "is:open"),
+                (Kind::Error, Some("gh.search"), "422 Validation Failed"),
+                (Kind::Error, None, "aborted"),
+            ]
+        );
+        assert_eq!(t.unreadable.len(), 1);
+        assert_eq!(t.unreadable[0].line, 13);
+        assert!(t.unreadable[0].why.contains("Hologram"));
+
+        // A rollout whose session_meta names another thread is refused whole.
+        let mut other = meta;
+        other["payload"]["id"] = json!("01a0f663-0000-7000-8000-000000000000");
+        home.write(&rel, &[other]);
+        let err = read(&located).unwrap_err();
+        assert!(err.contains("session_meta id"), "{err}");
     }
 
     #[test]

@@ -4427,6 +4427,115 @@ fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
     );
 }
 
+/// A benchd-spawned codex is listed by its thread, as its hooks report it, and once it ends by
+/// its rollout; `bench log` reads that rollout. The rollout's lines are real codex 0.157 shapes.
+#[test]
+fn a_spawned_codex_is_listed_by_its_thread_and_its_rollout_reads_as_a_log() {
+    let home = TestHome::claim("cxrow");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start_with_fake(h, "codex");
+    let ws = workspace(h);
+    let ws_arg = ws.display().to_string();
+    let run = bench(
+        h,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws_arg, "--name", "cx",
+        ],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let (session, pid) = {
+        let v = json_of(&run);
+        (
+            v["session"].as_str().unwrap().to_string(),
+            v["pid"].as_i64().unwrap() as i32,
+        )
+    };
+    // Until its `/bin/sh` has exec'd, a hook from it would be read as its parent's.
+    wait_until("the stand-in has exec'd", Duration::from_secs(5), || {
+        bench_sessions::process::hook_caller(pid as u32) == pid as u32
+    });
+    let thread = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": event, "session": thread,
+                "cwd": ws_arg, "pid": pid, "bench_session": session}),
+        );
+    }
+    fs::create_dir_all(h.join(".codex")).unwrap();
+    fs::write(
+        h.join(".codex/session_index.jsonl"),
+        serde_json::json!({"id": thread, "thread_name": "Fix the build", "updated_at": "2026-10-01T07:35:00Z"})
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let rows = || {
+        let run = bench(h, &["sessions", "--all", "--workspace", &ws_arg]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["rows"].as_array().unwrap().clone()
+    };
+    let live = rows();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(live[0]["id"], thread, "the thread, not {session}");
+    assert_eq!(live[0]["name"], "Fix the build");
+    assert_eq!(live[0]["state"]["activity"]["kind"], "busy");
+
+    let at = "2026-10-01T07:34:57.000Z";
+    let event = |payload: serde_json::Value| serde_json::json!({"timestamp": at, "type": "event_msg", "payload": payload});
+    let item = |item: serde_json::Value| {
+        event(
+            serde_json::json!({"type": "item_completed", "thread_id": thread, "turn_id": "u", "item": item}),
+        )
+    };
+    let lines = [
+        serde_json::json!({"timestamp": at, "type": "session_meta", "payload": {"id": thread, "cli_version": "0.157.0", "cwd": ws_arg}}),
+        serde_json::json!({"timestamp": at, "type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context>injected</environment_context>"}]}}),
+        item(
+            serde_json::json!({"type": "UserMessage", "id": "item-1", "content": [{"type": "text", "text": "fix the build"}]}),
+        ),
+        item(
+            serde_json::json!({"type": "CommandExecution", "id": "c", "command": ["/bin/zsh", "-lc", "cargo build"],
+            "status": "completed", "exit_code": 0}),
+        ),
+        item(
+            serde_json::json!({"type": "AgentMessage", "id": "a", "phase": "final_answer",
+            "content": [{"type": "Text", "text": "Built."}]}),
+        ),
+    ];
+    let dir = h.join(".codex/sessions/2026/10/01");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(format!("rollout-2026-10-01T10-34-56-{thread}.jsonl")),
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let log = bench(h, &["log", thread]);
+    assert_eq!(log.code, 0, "stderr: {}", log.stderr);
+    for line in [
+        "2026-10-01 07:34:57  user   fix the build",
+        "2026-10-01 07:34:57  tool   shell  cargo build",
+        "2026-10-01 07:34:57  agent  Built.",
+    ] {
+        assert!(log.stdout.contains(line), "{line:?} in:\n{}", log.stdout);
+    }
+    assert!(!log.stdout.contains("injected"), "{}", log.stdout);
+
+    // Listed as finished once benchd sees its process gone.
+    libc_kill(pid);
+    wait_until("the codex is finished", Duration::from_secs(5), || {
+        rows()
+            .first()
+            .is_some_and(|r| r["state"]["kind"] == "finished")
+    });
+    let finished = rows();
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    assert_eq!(finished[0]["id"], thread);
+    assert_eq!(finished[0]["state"]["kind"], "finished");
+    assert_eq!(finished[0]["open"]["argv"][1], "resume");
+}
+
 #[test]
 fn a_push_that_starts_no_turn_goes_back_to_the_inbox_and_stops_pushing() {
     // What a session without crossSessionInbound "accept" does: takes the message and holds
