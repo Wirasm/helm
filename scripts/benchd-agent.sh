@@ -37,7 +37,8 @@ agent_crates=(bench benchd)
 # codex's self-updating installers put their binaries, so it goes first: a stale Homebrew codex
 # cask in /opt/homebrew/bin otherwise wins, and every spawned codex ran 0.157.0 while the
 # standalone install had updated itself to 0.159.3. `bench status` names the binary and version
-# each agent resolves to.
+# each agent resolves to. Everything else in ~/.local/bin moves ahead too: on the operator's
+# machine that includes a node (Hermes's), which pi's `#!/usr/bin/env node` then runs under.
 agent_path() {
   local first="$HOME/.local/bin" dir out="$HOME/.local/bin" IFS=:
   for dir in $PATH; do

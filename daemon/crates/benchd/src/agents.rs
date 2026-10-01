@@ -18,10 +18,13 @@ use std::time::{Duration, Instant};
 /// How long `<agent> --version` may take. pi is a node program and takes about 0.2s.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Versions by the binary's resolved path. helm asks `status` before a pane attaches, so the
-/// version is run once per binary rather than once per ask. A self-updating install moves its
-/// symlink to a new release directory, which is a new key.
-static VERSIONS: Mutex<Option<HashMap<PathBuf, Option<String>>>> = Mutex::new(None);
+/// Versions by the binary's resolved path, size and mtime. helm asks `status` before a pane
+/// attaches, so `--version` runs once per binary rather than once per ask. A self-updating
+/// install moves its symlink to a new release directory, and `npm update -g` rewrites pi's file
+/// in place; either is a new key. A failed or overrun `--version` is not kept, so the next ask
+/// tries again.
+type Key = (PathBuf, u64, Option<std::time::SystemTime>);
+static VERSIONS: Mutex<Option<HashMap<Key, String>>> = Mutex::new(None);
 
 /// `{claude: {path, resolves_to, version}, codex: …, pi: …}`, each `null` when benchd's `PATH`
 /// has no such program.
@@ -55,18 +58,23 @@ fn resolve(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
 }
 
 fn version(binary: &Path) -> Option<String> {
-    let mut cache = VERSIONS.lock().unwrap();
-    if let Some(known) = cache.get_or_insert_with(HashMap::new).get(binary) {
-        return known.clone();
+    let meta = std::fs::metadata(binary).ok()?;
+    let key = (binary.to_path_buf(), meta.len(), meta.modified().ok());
+    if let Some(known) = VERSIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .get(&key)
+    {
+        return Some(known.clone());
     }
-    drop(cache);
-    let found = run_version(binary);
+    let found = run_version(binary)?;
     VERSIONS
         .lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
-        .insert(binary.to_path_buf(), found.clone());
-    found
+        .insert(key, found.clone());
+    Some(found)
 }
 
 /// The first line `<binary> --version` prints, or `None` when it fails or overruns.
@@ -127,6 +135,52 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_binary_rewritten_in_place_reports_its_new_version() {
+        let root = std::env::temp_dir().join(format!("benchd-agents-npm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        stub(&root, "pi", "echo 0.84.4");
+        let pi = root.join("pi");
+        assert_eq!(version(&pi).as_deref(), Some("0.84.4"));
+        stub(&root, "pi", "echo 0.99.2   ");
+        assert_eq!(
+            version(&pi).as_deref(),
+            Some("0.99.2"),
+            "npm update -g rewrites the file"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `report` resolves `kind.name()` on PATH; a spawn runs what `argv` names. They must be the
+    /// same program, or `status` reports a binary no spawn runs.
+    #[test]
+    fn the_program_reported_is_the_program_a_spawn_runs() {
+        use bench_session::{Conversation, Posture, SpawnSpec, argv};
+        for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Pi] {
+            let mut spec = SpawnSpec {
+                agent: kind,
+                cwd: "/tmp".into(),
+                model: None,
+                effort: None,
+                conversation: Conversation::New(None),
+                posture: Posture::Unattended,
+                prompt_file: None,
+                settings: None,
+                extra_args: Vec::new(),
+                codex_server: None,
+            };
+            assert_eq!(argv(&spec).unwrap().0, kind.name());
+            if matches!(kind, AgentKind::Codex) {
+                // A served codex is a script that runs both halves by name.
+                spec.codex_server = Some("/tmp/s.sock".into());
+                let (program, args) = argv(&spec).unwrap();
+                assert_eq!(program, "/bin/sh");
+                assert!(args[1].contains("\ncodex app-server "));
+                assert!(args[1].contains("exec codex --remote"));
+            }
+        }
     }
 
     #[test]
