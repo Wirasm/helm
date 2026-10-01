@@ -424,7 +424,6 @@ impl Cache {
         }
     }
 
-    /// Drop every entry this build did not ask about.
     /// A pi session's name ([`crate::pi::name`]), kept between builds like a transcript's tail.
     pub fn pi_name(&mut self, session: &Path) -> Option<String> {
         self.touched.push(session.to_path_buf());
@@ -432,6 +431,7 @@ impl Cache {
         crate::pi::name(session, scan)
     }
 
+    /// Drop every entry this build did not ask about.
     pub fn end_build(&mut self) {
         let touched: std::collections::HashSet<PathBuf> = self.touched.drain(..).collect();
         self.entries.retain(|p, _| touched.contains(p));
