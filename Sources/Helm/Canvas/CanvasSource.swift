@@ -1,4 +1,5 @@
 import Foundation
+import HelmWire
 
 // MARK: - StandardizedPath
 
@@ -13,12 +14,21 @@ import Foundation
 ///
 /// The explicit `init` is the mechanism — it suppresses the synthesized memberwise one, so
 /// there is no `StandardizedPath(value:)` and no way to hold a path that skipped
-/// `standardizedFileURL`. Every route in standardizes.
+/// standardizing. Every route in standardizes.
+///
+/// **benchd's rule, not Foundation's** (`FilesystemPath.standardized`, held to
+/// `bench_doc::StandardPath` by `daemon/fixtures/standard-path.json`). The path is compared
+/// against benchd's too: its document names the canvas, and its live-file mail finds a canvas
+/// by the path helm writes. `standardizedFileURL` dropped `/private` from `/private/tmp/…`, so
+/// the two named one file two ways and the opener was never mailed.
 struct StandardizedPath: Equatable, Hashable, Codable {
     let value: String
 
     init(_ url: URL) {
-        value = URL(fileURLWithPath: url.path).standardizedFileURL.path
+        // A relative path is resolved against the working directory first, as it always was;
+        // `URL(fileURLWithPath:)` makes it absolute, so `standardized` never refuses it.
+        let absolute = URL(fileURLWithPath: url.path).path
+        value = FilesystemPath.standardized(absolute) ?? absolute
     }
 
     init(_ path: String) {
