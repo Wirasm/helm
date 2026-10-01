@@ -557,16 +557,106 @@ impl Bench {
             }
         }
         self.normalize();
+        self.follow(pane, focus);
+        Ok(true)
+    }
 
-        // The whole of "focus follows the pane", in one place, after `normalize()` (which is
-        // what drops an emptied slot or column — an address computed before it can name a
-        // position that no longer exists).
-        if focus == Focus::Take
-            && let Some(landed) = self.address_of(pane)
+    /// Move a pane into `slot` as a tab, before `before` or last (#178, a tab dropped on a slot
+    /// or into a gap of its tab strip). Within its own slot this is a reorder, and `Ok(false)`
+    /// when the pane would end where it is. An emptied slot or column collapses, as a close
+    /// collapses it.
+    ///
+    /// Addressed by ids rather than an index: an index means a different place before and after
+    /// the pane leaves its own slot, and `before` means one.
+    pub fn move_pane_to_tab(
+        &mut self,
+        pane: PaneId,
+        slot: SlotId,
+        before: Option<PaneId>,
+        focus: Focus,
+    ) -> Result<bool, Refusal> {
+        let from = self.address_of(pane).ok_or(Refusal::UnknownPane(pane))?;
+        let to = self
+            .address_of_slot(slot)
+            .ok_or(Refusal::UnknownSlot(slot))?;
+        let target = &self.columns[to.column].slots[to.slot];
+        if let Some(before) = before
+            && !target.holds(before)
         {
-            self.columns[landed.column].slots[landed.slot].selected = pane;
-            self.focused_slot = self.columns[landed.column].slots[landed.slot].id;
+            return Err(Refusal::NotInSlot { pane: before, slot });
         }
+        // Before itself or before the tab already after it (last: before nothing) is where it is.
+        let own = from.column == to.column && from.slot == to.slot;
+        let next = target.panes.get(from.pane + 1).map(|p| p.id);
+        if own && (before == Some(pane) || before == next) {
+            return Ok(false);
+        }
+        // A reorder keeps what the slot shows; `take` would otherwise hand it to a neighbour.
+        let showing = target.selected;
+        let moved = self.take(pane, from);
+        let target = &mut self.columns[to.column].slots[to.slot];
+        let at = before
+            .and_then(|b| target.panes.iter().position(|p| p.id == b))
+            .unwrap_or(target.panes.len());
+        target.panes.insert(at, moved);
+        if own {
+            target.selected = showing;
+        }
+        self.normalize();
+        self.follow(pane, focus);
+        Ok(true)
+    }
+
+    /// Move a pane beside `slot` (#178, a tab dropped on a slot's edge): `up`/`down` give it a
+    /// new slot above or below `slot` in that column, `left`/`right` a new column either side of
+    /// `slot`'s column. Against its own slot this is how a tab becomes a pane of its own.
+    ///
+    /// `Ok(false)` for a pane alone in `slot` itself where the move could only put it back:
+    /// above or below itself, and sideways when its column holds nothing else. Sideways out of a
+    /// column that holds more, the slot leaves for a column of its own.
+    pub fn move_pane_beside(
+        &mut self,
+        pane: PaneId,
+        slot: SlotId,
+        side: Direction,
+        focus: Focus,
+    ) -> Result<bool, Refusal> {
+        let from = self.address_of(pane).ok_or(Refusal::UnknownPane(pane))?;
+        let to = self
+            .address_of_slot(slot)
+            .ok_or(Refusal::UnknownSlot(slot))?;
+        let vertical = matches!(side, Direction::Up | Direction::Down);
+        let own = from.column == to.column && from.slot == to.slot;
+        let alone = self.columns[from.column].slots[from.slot].panes.len() == 1;
+        if own && alone && (vertical || self.columns[from.column].slots.len() == 1) {
+            return Ok(false);
+        }
+        // `take` removes no slot, so `to` still addresses the target until `normalize()`.
+        let moved = self.take(pane, from);
+        if vertical {
+            let at = if side == Direction::Up {
+                to.slot
+            } else {
+                to.slot + 1
+            };
+            let height = equal_share(self.columns[to.column].slots.len());
+            self.columns[to.column]
+                .slots
+                .insert(at, Slot::new(vec![moved], None, height));
+        } else {
+            let at = if side == Direction::Left {
+                to.column
+            } else {
+                to.column + 1
+            };
+            let width = equal_share(self.columns.len());
+            self.columns.insert(
+                at,
+                Column::new(vec![Slot::new(vec![moved], None, 1.0)], width),
+            );
+        }
+        self.normalize();
+        self.follow(pane, focus);
         Ok(true)
     }
 
@@ -654,6 +744,18 @@ impl Bench {
     }
 
     // MARK: move helpers
+
+    /// The whole of "focus follows the pane", for every move, after `normalize()` (which is what
+    /// drops an emptied slot or column — an address computed before it can name a position that
+    /// no longer exists). `Leave` — an agent moving a pane (#287) — skips it and nothing else.
+    fn follow(&mut self, pane: PaneId, focus: Focus) {
+        if focus == Focus::Take
+            && let Some(landed) = self.address_of(pane)
+        {
+            self.columns[landed.column].slots[landed.slot].selected = pane;
+            self.focused_slot = self.columns[landed.column].slots[landed.slot].id;
+        }
+    }
 
     fn column_holds_more_than(&self, pane: PaneId, column: usize) -> bool {
         self.columns[column]

@@ -49,6 +49,10 @@ final class WorkbenchModel: ObservableObject {
     /// turns it off (`apply`).
     @Published var isZoomed = false
 
+    /// A tab being dragged to another place (#178, `PaneDrop`). Its own object, observed only by
+    /// the drop-zone overlay, so the pointer moving does not redraw the bench.
+    let paneDrag = PaneDragModel()
+
     /// ⇧⌘O's sheet (`WorkspacePicker`): the command that opens it is here, so the state is too,
     /// as with `isBrowserOpen`.
     @Published var isWorkspacePickerOpen = false
