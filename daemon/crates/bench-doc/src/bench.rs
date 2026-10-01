@@ -611,9 +611,9 @@ impl Bench {
     /// new slot above or below `slot` in that column, `left`/`right` a new column either side of
     /// `slot`'s column. Against its own slot this is how a tab becomes a pane of its own.
     ///
-    /// `Ok(false)` for a pane alone in `slot` itself where the move could only put it back:
-    /// above or below itself, and sideways when its column holds nothing else. Sideways out of a
-    /// column that holds more, the slot leaves for a column of its own.
+    /// `Ok(false)` where a pane alone in its slot would land where it is: beside itself, or on
+    /// the facing edge of its neighbour, and sideways only when its column holds nothing else.
+    /// Sideways out of a column that holds more, the slot leaves for a column of its own.
     pub fn move_pane_beside(
         &mut self,
         pane: PaneId,
@@ -625,12 +625,10 @@ impl Bench {
         let to = self
             .address_of_slot(slot)
             .ok_or(Refusal::UnknownSlot(slot))?;
-        let vertical = matches!(side, Direction::Up | Direction::Down);
-        let own = from.column == to.column && from.slot == to.slot;
-        let alone = self.columns[from.column].slots[from.slot].panes.len() == 1;
-        if own && alone && (vertical || self.columns[from.column].slots.len() == 1) {
+        if self.lands_where_it_is(from, to, side) {
             return Ok(false);
         }
+        let vertical = matches!(side, Direction::Up | Direction::Down);
         // `take` removes no slot, so `to` still addresses the target until `normalize()`.
         let moved = self.take(pane, from);
         if vertical {
@@ -744,6 +742,28 @@ impl Bench {
     }
 
     // MARK: move helpers
+
+    /// Whether a pane alone in its slot, moved beside the slot at `to`, would land in the place
+    /// it already holds: beside itself, or on the facing edge of its neighbour. Sideways, only a
+    /// pane alone in its column can; one sharing it leaves for a column of its own.
+    fn lands_where_it_is(&self, from: Address, to: Address, side: Direction) -> bool {
+        let column = &self.columns[from.column];
+        if column.slots[from.slot].panes.len() != 1 {
+            return false;
+        }
+        let same_column = from.column == to.column;
+        let column_alone = column.slots.len() == 1;
+        match side {
+            Direction::Up => same_column && (to.slot == from.slot || to.slot == from.slot + 1),
+            Direction::Down => same_column && (to.slot == from.slot || to.slot + 1 == from.slot),
+            Direction::Left => {
+                column_alone && (to.column == from.column || to.column == from.column + 1)
+            }
+            Direction::Right => {
+                column_alone && (to.column == from.column || to.column + 1 == from.column)
+            }
+        }
+    }
 
     /// The whole of "focus follows the pane", for every move, after `normalize()` (which is what
     /// drops an emptied slot or column — an address computed before it can name a position that

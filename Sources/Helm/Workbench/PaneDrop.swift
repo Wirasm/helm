@@ -31,10 +31,18 @@ enum PaneDrop {
     static func resolve(
         pane: Pane.ID, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
     ) -> PaneDropTarget? {
-        for column in bench.columns {
-            for slot in column.slots {
+        let from = Address.of(pane, in: bench)
+        let standing = from.map {
+            Standing(
+                alone: bench.columns[$0.column].slots[$0.slot].panes.count == 1,
+                columnAlone: bench.columns[$0.column].slots.count == 1)
+        }
+        for (c, column) in bench.columns.enumerated() {
+            for (s, slot) in column.slots.enumerated() {
                 guard let drawn = frames[slot.id], drawn.body.contains(point) else { continue }
-                let place = Place(pane: pane, slot: slot, column: column, drawn: drawn)
+                let place = Place(
+                    pane: pane, slot: slot, drawn: drawn, from: from,
+                    standing: standing, to: Address(column: c, slot: s))
                 if drawn.strip.contains(point) { return place.tab(at: point.x) }
                 return place.body(at: point, columnFrame: columnFrame(column, frames))
             }
@@ -46,12 +54,36 @@ enum PaneDrop {
         column.slots.compactMap { frames[$0.id]?.body }.reduce(CGRect.null) { $0.union($1) }
     }
 
+    /// Where a slot sits on the bench, by index: valid only for the bench it was read from.
+    private struct Address: Equatable {
+        let column: Int
+        let slot: Int
+
+        static func of(_ pane: Pane.ID, in bench: Workbench) -> Address? {
+            for (c, column) in bench.columns.enumerated() {
+                if let s = column.slots.firstIndex(where: { $0.panes.contains { $0.id == pane } }) {
+                    return Address(column: c, slot: s)
+                }
+            }
+            return nil
+        }
+    }
+
+    private struct Standing {
+        let alone: Bool
+        let columnAlone: Bool
+    }
+
     /// One slot under the pointer, and the dragged pane's standing in it.
     private struct Place {
         let pane: Pane.ID
         let slot: Slot
-        let column: Column
         let drawn: SlotFrames
+        /// The dragged pane's own slot, whether it is alone there and in its column, and the
+        /// slot under the pointer.
+        let from: Address?
+        let standing: Standing?
+        let to: Address
 
         private var isOwn: Bool { slot.panes.contains { $0.id == pane } }
 
@@ -96,14 +128,29 @@ enum PaneDrop {
 
         private func beside(_ side: BenchDirection, columnFrame: CGRect) -> PaneDropTarget? {
             let vertical = side == .up || side == .down
-            if isOwn && slot.panes.count == 1 && (vertical || column.slots.count == 1) {
-                return nil
-            }
+            if landsWhereItIs(side) { return nil }
             let region = vertical ? drawn.body : columnFrame
             let preview = region.half(side)
             return PaneDropTarget(
                 move: .beside(slot: slot.id, side: side), preview: preview,
                 seam: preview.edgeBar(side, thickness: 3))
+        }
+
+        /// benchd's `lands_where_it_is`: a pane alone in its slot, beside itself or on the facing
+        /// edge of its neighbour; sideways only when it is alone in its column too.
+        private func landsWhereItIs(_ side: BenchDirection) -> Bool {
+            guard let from, let standing, standing.alone else { return false }
+            let sameColumn = from.column == to.column
+            switch side {
+            case .up: return sameColumn && (to.slot == from.slot || to.slot == from.slot + 1)
+            case .down: return sameColumn && (to.slot == from.slot || to.slot + 1 == from.slot)
+            case .left:
+                return standing.columnAlone
+                    && (to.column == from.column || to.column == from.column + 1)
+            case .right:
+                return standing.columnAlone
+                    && (to.column == from.column || to.column + 1 == from.column)
+            }
         }
 
         /// Before itself, or before the tab already after it, is where it is.

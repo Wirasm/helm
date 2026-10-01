@@ -292,3 +292,61 @@ fn a_drop_by_someone_else_keeps_focus_and_every_selection() {
         assert_invariants(&bench, label);
     }
 }
+
+/// Review R1 on #555: a lone pane on the facing edge of its neighbour would land where it is,
+/// and rebuilding the column there would only reset the heights the operator dragged.
+#[test]
+fn a_lone_pane_on_its_neighbours_facing_edge_stays_where_it_is() {
+    let (mut start, t, r) = tabs_and_one();
+    start
+        .move_pane_beside(t[0], slot(&start, 1, 0), Direction::Down, Focus::Take)
+        .unwrap();
+    // Right column: r above t[0], both alone.
+    for (label, pane, target, side) in [
+        (
+            "below onto the upper's bottom edge",
+            t[0],
+            slot(&start, 1, 0),
+            Direction::Down,
+        ),
+        (
+            "above onto the lower's top edge",
+            r,
+            slot(&start, 1, 1),
+            Direction::Up,
+        ),
+    ] {
+        let mut bench = start.clone();
+        assert!(
+            !bench
+                .move_pane_beside(pane, target, side, Focus::Take)
+                .unwrap(),
+            "{label}"
+        );
+        assert_eq!(bench, start, "{label}: untouched");
+    }
+
+    let left = terminal();
+    let right = terminal();
+    let (l, rr) = (left.id, right.id);
+    let mut pair = bench_of(vec![left], None);
+    pair.split(Split::Right, right, Focus::Take).unwrap();
+    let start = pair.clone();
+    assert!(
+        !pair
+            .move_pane_beside(l, slot(&start, 1, 0), Direction::Left, Focus::Take)
+            .unwrap()
+    );
+    assert!(
+        !pair
+            .move_pane_beside(rr, slot(&start, 0, 0), Direction::Right, Focus::Take)
+            .unwrap()
+    );
+    assert_eq!(pair, start);
+    assert!(
+        pair.move_pane_beside(l, slot(&start, 1, 0), Direction::Right, Focus::Take)
+            .unwrap(),
+        "the far edge still moves it"
+    );
+    assert_eq!(shape(&pair), vec![vec![vec![rr]], vec![vec![l]]]);
+}

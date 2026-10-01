@@ -95,6 +95,39 @@ final class PaneDropTests: XCTestCase {
         XCTAssertNil(resolve(a, 900, 300), "off the bench")
     }
 
+    /// A lone pane on the facing edge of its neighbour lands where it is (review R1 on #555):
+    /// benchd answers `changed: false`, so no zone either.
+    func testNoZoneOnTheFacingEdgeOfANeighbour() {
+        XCTAssertNil(resolve(e, 600, 290), "the bottom row onto the top row's bottom edge")
+        XCTAssertNil(resolve(d, 600, 340), "the top row onto the bottom row's top edge")
+        XCTAssertEqual(
+            resolve(d, 600, 590)?.move, .beside(slot: bottom.id, side: .down),
+            "…while the far edge still moves it")
+
+        let pair = Workbench.assembled(
+            columns: [
+                Column(slots: [Slot(panes: [d])], width: 0.5),
+                Column(slots: [Slot(panes: [e])], width: 0.5),
+            ],
+            focusedSlot: UUID())!
+        let frames = Dictionary(
+            uniqueKeysWithValues: pair.columns.enumerated().map { i, column in
+                (
+                    column.slots[0].id,
+                    SlotFrames(
+                        body: CGRect(x: CGFloat(i) * 400, y: 0, width: 400, height: 600),
+                        strip: CGRect(x: CGFloat(i) * 400, y: 0, width: 400, height: 28))
+                )
+            })
+        func move(_ pane: Pane, _ x: CGFloat) -> BenchMoveTo? {
+            PaneDrop.resolve(pane: pane.id, at: CGPoint(x: x, y: 300), bench: pair, frames: frames)?
+                .move
+        }
+        XCTAssertNil(move(d, 410), "onto the right column's left edge")
+        XCTAssertNil(move(e, 390), "onto the left column's right edge")
+        XCTAssertEqual(move(d, 790), .beside(slot: pair.columns[1].slots[0].id, side: .right))
+    }
+
     func testALonePaneLeavesItsColumnSidewaysOnlyWhenTheColumnHoldsMore() {
         XCTAssertEqual(resolve(e, 790, 450)?.move, .beside(slot: bottom.id, side: .right))
         let alone = Workbench(panes: [d])
