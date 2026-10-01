@@ -55,6 +55,8 @@ pub struct SessionRow {
     pub cwd: String,
     /// The worktree root the row was scoped by: the repo or one of its worktrees.
     pub root: String,
+    /// The short branch checked out in `root`, or none when it has no readable branch.
+    pub branch: Option<String>,
     pub state: SessionState,
     pub host: Host,
     pub open: OpenAction,
@@ -401,6 +403,17 @@ mod tests {
                 .iter()
                 .all(|r| r.as_object().unwrap().contains_key("mail")),
             "every row says whether it has a mailbox"
+        );
+        let branches: Vec<Option<&str>> = list.rows.iter().map(|r| r.branch.as_deref()).collect();
+        assert!(branches.contains(&Some("feat/sessions")));
+        assert!(branches.contains(&None));
+        assert!(
+            value["list"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.as_object().unwrap().contains_key("branch")),
+            "every row says whether its worktree has a branch"
         );
         assert_eq!(list.operator.handle, crate::OPERATOR_HANDLE);
 

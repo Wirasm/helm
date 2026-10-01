@@ -3763,6 +3763,7 @@ fn the_bench_sessions_skills_snippets_execute() {
     let home = TestHome::claim("sskill");
     let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
     let ws = workspace(&home.dir);
+    fs::write(ws.join(".git/HEAD"), "ref: refs/heads/feat/skill\n").unwrap();
     let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
     write_claude_transcript(&home.dir, "s-2");
     let mut outputs = Vec::new();
@@ -3786,7 +3787,7 @@ fn the_bench_sessions_skills_snippets_execute() {
         outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     assert!(
-        outputs[0].contains(&format!("pi {pi_session} running")),
+        outputs[0].contains(&format!("pi {pi_session} feat/skill running")),
         "the live session is listed: {}",
         outputs[0]
     );

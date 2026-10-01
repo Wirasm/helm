@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,6 +61,21 @@ fn set_mtime(path: &Path, ms: u64) {
     let f = fs::OpenOptions::new().write(true).open(path).unwrap();
     f.set_modified(UNIX_EPOCH + Duration::from_millis(ms))
         .unwrap();
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 impl Fixture {
@@ -332,6 +348,53 @@ fn rows_are_scoped_to_the_repo_and_every_worktree_including_one_outside_it() {
     let from_outer = f.build_with(&mut Cache::default(), &f.outer().join("src"));
     assert_eq!(from_outer.list.workspace, ws);
     assert_eq!(ids(&from_outer), ids(&built));
+}
+
+#[test]
+fn rows_carry_the_current_branch_of_each_real_worktree_and_none_for_detached_head() {
+    let mut f = Fixture::new();
+    fs::remove_dir_all(f.ws()).unwrap();
+    fs::remove_dir_all(f.outer()).unwrap();
+    fs::create_dir_all(f.ws()).unwrap();
+    git(&f.ws(), &["init", "-b", "main"]);
+    write(&f.ws().join("tracked"), "initial\n");
+    git(&f.ws(), &["add", "tracked"]);
+    git(
+        &f.ws(),
+        &[
+            "-c",
+            "user.name=Bench Sessions",
+            "-c",
+            "user.email=bench-sessions@example.invalid",
+            "commit",
+            "-m",
+            "initial",
+        ],
+    );
+    fs::create_dir_all(f.inner().parent().unwrap()).unwrap();
+    let inner_path = Fixture::s(f.inner());
+    let outer_path = Fixture::s(f.outer());
+    git(&f.ws(), &["worktree", "add", "-b", "feat/x", &inner_path]);
+    git(
+        &f.ws(),
+        &["worktree", "add", "--detach", &outer_path, "HEAD"],
+    );
+    // git records physical worktree paths (`/private/var/...` on macOS), so use the same
+    // spelling a real cwd reports when matching the rows to those roots.
+    let inner = Fixture::s(fs::canonicalize(f.inner()).unwrap());
+    let outer = Fixture::s(fs::canonicalize(f.outer()).unwrap());
+
+    f.claude(101, "named", &inner, json!({}));
+    f.claude(102, "detached", &outer, json!({}));
+    f.pane(PANE, Some(101));
+    f.pane(PANE2, Some(102));
+
+    let built = f.build();
+    assert_eq!(
+        row(&built, "named").unwrap().branch.as_deref(),
+        Some("feat/x")
+    );
+    assert_eq!(row(&built, "detached").unwrap().branch, None);
 }
 
 fn assistant(stop: Value, blocks: &[&str]) -> Value {

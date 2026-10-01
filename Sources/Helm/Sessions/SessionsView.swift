@@ -136,16 +136,18 @@ enum SessionLine {
         if case .running = row.state { true } else { false }
     }
 
-    /// "busy · 2m", "waiting: permission prompt · 40m", "finished 3h ago".
+    /// "feat/x · busy · 2m", "waiting: permission prompt · 40m", "finished 3h ago".
     static func status(_ row: BenchSessionRow, now: Date) -> String {
+        let status: String
         switch row.state {
         case let .running(activity, detail):
             let word = activity.replacingOccurrences(of: "_", with: " ")
             let doing = detail.map { "\(word): \($0)" } ?? word
-            return "\(doing) · \(age(since: row.updatedAtMs, now: now))"
+            status = "\(doing) · \(age(since: row.updatedAtMs, now: now))"
         case let .finished(atMs):
-            return "finished \(age(since: atMs, now: now)) ago"
+            status = "finished \(age(since: atMs, now: now)) ago"
         }
+        return row.branch.map { "\($0) · \(status)" } ?? status
     }
 
     /// What pressing the row does, for its tooltip.

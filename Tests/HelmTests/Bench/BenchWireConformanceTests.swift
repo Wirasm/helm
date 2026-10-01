@@ -242,6 +242,8 @@ final class BenchWireConformanceTests: XCTestCase {
             opens, ["focus_pane", "bench_attach", "claude_attach", "resume", "transcript"])
         XCTAssertTrue(list.rows.contains { $0.parent != nil }, "a subagent row")
         XCTAssertTrue(list.rows.contains { if case .finished = $0.state { true } else { false } })
+        XCTAssertTrue(list.rows.contains { $0.branch == "feat/sessions" })
+        XCTAssertTrue(list.rows.contains { $0.branch == nil })
     }
 
     /// The operator's `just/run`, its answer and the `just/finished` frame, and `just/list` with
