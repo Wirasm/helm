@@ -34,7 +34,7 @@ or a mail), not replaced.
 | default with no `--model` | the operator's Claude Code setting | `~/.codex/config.toml` (`gpt-6-astra`, medium) | `~/.pi/agent/settings.json` (`openai-codex/gpt-5.6-sol`) |
 | `--effort` | `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh`, plus `max` and `ultra` on some models; sent as `-c model_reasoning_effort=` | `off` `minimal` `low` `medium` `high` `xhigh` `max`; appended to the model as `:<level>` |
 | `--resume <id>` | yes | yes, by its thread id, which its hook records | yes |
-| `--fork <id>` | yes, read-only (plan mode), its own new id | no | no |
+| `--fork <id>` | yes, read-only (plan mode), its own new id | yes, read-only (read-only sandbox on its app-server), its own thread, which its hook records | yes, read-only (`--tools read,grep,find,ls`), its own new id |
 | posture | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approve` |
 | mail wake when idle | yes (inbox socket) | yes when benchd spawned it (its app-server) | yes (`bench` extension) |
 | activity in `bench sessions` | busy, shell, idle, waiting with its own words | unknown | unknown |

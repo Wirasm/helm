@@ -40,7 +40,7 @@ Read `references/harnesses.md` before the first spawn of a run. The short versio
 | Delivery (`prp-issue`), and anything touching wire formats, daemon state, isolation or data loss | `--agent claude --model opus --effort high` |
 | Spike, plan, debugging | `--agent claude --model opus --effort high`, or `--agent codex --model gpt-6-sol --effort high` for a second opinion from another model family |
 | Mechanical work: a rebase, conflict catch-up, a doc fix | `--agent claude --model sonnet --effort medium` or `--agent codex --model gpt-6-luna` |
-| A question about a claude agent's work | `--fork <its runtime session>`: a read-only copy, and the author is not disturbed |
+| A question about an agent's work | `--fork <its runtime session>`, with its own `--agent`: a read-only copy, and the author is not disturbed |
 | A model only pi reaches, or work on pi itself | `--agent pi --model <provider/id>` |
 
 Model names change. Verify a name with the one-line check in the reference before spawning a

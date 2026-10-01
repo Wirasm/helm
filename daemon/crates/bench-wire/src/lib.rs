@@ -510,9 +510,9 @@ pub struct SpawnArgs {
     /// started — how `just release-resume` brings the operator's own session back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
-    /// A conversation to fork rather than re-enter (#531): a new conversation, under an id the
-    /// bench mints, that starts as a copy of this one and runs read-only while the original
-    /// carries on. claude only; refused with `resume`.
+    /// A conversation to fork rather than re-enter (#531): a new conversation that starts as a
+    /// copy of this one and runs read-only while the original carries on, under an id the bench
+    /// mints (claude, pi) or codex names (its hook reports it). Refused with `resume`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork: Option<String>,
     /// Flags for the agent, after its posture: added to it, never replacing it.

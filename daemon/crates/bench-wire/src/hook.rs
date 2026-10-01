@@ -264,20 +264,53 @@ pub fn unwired(harness: Harness, settings: &serde_json::Value, bench: &str) -> V
 /// are what put "Hooks need review" in front of the operator at startup; an event codex does not
 /// list at all (another `CODEX_HOME`, hooks turned off) runs nothing either.
 pub fn codex_needs_review(hooks_list: &serde_json::Value, bench: &str) -> Vec<String> {
+    let runs: Vec<&str> = codex_bench_hooks(hooks_list, bench)
+        .filter(|h| matches!(h["trustStatus"].as_str(), Some("trusted" | "managed")))
+        .filter_map(|h| h["eventName"].as_str())
+        .collect();
+    codex_events_in(&runs, false)
+}
+
+/// The events of [`CODEX_EVENTS`] whose `bench hook codex` a trust record outside codex's
+/// `config.toml` covers: `trusted_hash` answers a `hooks/list` entry's `key` with the hash
+/// recorded for it (codex 0.159.3's `[hooks.state."<key>"] trusted_hash`), and the record
+/// counts only when it is the entry's `currentHash`, the hook as it is defined now.
+pub fn codex_trusted_by(
+    hooks_list: &serde_json::Value,
+    bench: &str,
+    trusted_hash: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let trusted: Vec<&str> = codex_bench_hooks(hooks_list, bench)
+        .filter(|h| {
+            h["currentHash"].as_str().is_some_and(|now| {
+                h["key"].as_str().and_then(&trusted_hash).as_deref() == Some(now)
+            })
+        })
+        .filter_map(|h| h["eventName"].as_str())
+        .collect();
+    codex_events_in(&trusted, true)
+}
+
+/// This `bench`'s enabled handlers in a `hooks/list` answer.
+fn codex_bench_hooks<'a>(
+    hooks_list: &'a serde_json::Value,
+    bench: &str,
+) -> impl Iterator<Item = &'a serde_json::Value> {
     let command = codex_command(bench);
-    let runs: Vec<&str> = hooks_list["data"]
+    hooks_list["data"]
         .as_array()
         .into_iter()
         .flatten()
         .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
-        .filter(|h| h["command"] == command.as_str() && h["enabled"] != false)
-        .filter(|h| matches!(h["trustStatus"].as_str(), Some("trusted" | "managed")))
-        .filter_map(|h| h["eventName"].as_str())
-        .collect();
-    // codex names an event in camelCase (`preToolUse`) where hooks.json has `PreToolUse`.
+        .filter(move |h| h["command"] == command.as_str() && h["enabled"] != false)
+}
+
+/// [`CODEX_EVENTS`] that are (`listed`) or are not in `names`, in that order. codex names an
+/// event in camelCase (`preToolUse`) where hooks.json has `PreToolUse`.
+fn codex_events_in(names: &[&str], listed: bool) -> Vec<String> {
     CODEX_EVENTS
         .iter()
-        .filter(|event| !runs.iter().any(|r| r.eq_ignore_ascii_case(event)))
+        .filter(|event| names.iter().any(|n| n.eq_ignore_ascii_case(event)) == listed)
         .map(|event| (*event).to_string())
         .collect()
 }
