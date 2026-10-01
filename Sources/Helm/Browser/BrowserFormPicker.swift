@@ -50,27 +50,39 @@ final class BrowserFormPicker: ObservableObject {
         let object: String
     }
 
-    /// Called only for the operator's plain left press. DOM hit testing reaches closed shadow
-    /// roots too; resolving an object keeps the answer tied to this element, not a later click.
-    func open(at point: CGPoint?, connection: CDPConnection, session: String) async throws -> Bool {
+    /// A plain left press resolves its hit target; keyboard opening resolves the focused leaf.
+    /// Capturing the control keeps the answer tied to this element, not a later click.
+    func open(
+        at point: CGPoint?, connection: CDPConnection, session: String, isCurrent: () -> Bool
+    ) async throws -> Bool {
         var captured: Element?
         do {
-            let object = try await resolve(at: point, connection: connection, session: session)
-            guard let object else { return false }
+            guard
+                let resolved = try await resolve(
+                    at: point, connection: connection, session: session)
+            else { return false }
+            let object = resolved.control
+            defer {
+                connection.send(
+                    "Runtime.releaseObject", ObjectID(objectId: resolved.hit), session: session)
+            }
             let held = Element(connection: connection, session: session, object: object)
             captured = held
+            guard isCurrent() else { release(held); return true }
             if point != nil {
                 let activation = try await connection.call(
                     "Runtime.callFunctionOn",
-                    Function(objectId: object, functionDeclaration: BrowserFormScript.activate),
+                    Function(
+                        objectId: resolved.hit, functionDeclaration: BrowserFormScript.activate),
                     session: session, returning: ValueReply<Bool>.self)
                 guard activation.result.value == true else { release(held); return true }
             }
+            guard isCurrent() else { release(held); return true }
             let reply = try await connection.call(
                 "Runtime.callFunctionOn",
                 Function(objectId: object, functionDeclaration: BrowserFormScript.read),
                 session: session, returning: ValueReply<Control>.self)
-            guard let control = reply.result.value else {
+            guard isCurrent(), let control = reply.result.value else {
                 release(held)
                 return true
             }
@@ -91,7 +103,7 @@ final class BrowserFormPicker: ObservableObject {
     private func resolve(
         at point: CGPoint?, connection: CDPConnection, session: String
     )
-        async throws -> String?
+        async throws -> (control: String, hit: String)?
     {
         let object: String?
         if let point {
@@ -103,22 +115,24 @@ final class BrowserFormPicker: ObservableObject {
                 session: session, returning: Resolved.self)
             object = resolved.object.objectId
         } else {
-            let focused = try await connection.call(
-                "Runtime.evaluate", Focused(expression: "document.activeElement"),
-                session: session, returning: ObjectReply.self)
-            object = focused.result.objectId
+            object = try await BrowserFocusedElement.resolve(
+                connection: connection, session: session)
         }
         guard let object else { return nil }
-        defer {
+        do {
+            let control = try await connection.call(
+                "Runtime.callFunctionOn",
+                Function(
+                    objectId: object, functionDeclaration: BrowserFormScript.control,
+                    returnByValue: false),
+                session: session, returning: ObjectReply.self)
+            if let captured = control.result.objectId { return (captured, object) }
+        } catch {
             connection.send("Runtime.releaseObject", ObjectID(objectId: object), session: session)
+            throw error
         }
-        let control = try await connection.call(
-            "Runtime.callFunctionOn",
-            Function(
-                objectId: object, functionDeclaration: BrowserFormScript.control,
-                returnByValue: false),
-            session: session, returning: ObjectReply.self)
-        return control.result.objectId
+        connection.send("Runtime.releaseObject", ObjectID(objectId: object), session: session)
+        return nil
     }
 
     func dismiss() {
@@ -189,7 +203,6 @@ private struct ObjectID: Encodable { let objectId: String }
 private struct RemoteObject: Decodable { let objectId: String? }
 private struct Resolved: Decodable { let object: RemoteObject }
 private struct ObjectReply: Decodable { let result: RemoteObject }
-private struct Focused: Encodable { let expression: String }
 private struct Answer: Encodable { let index: Int?; let value: String?; let label: String? }
 private struct Argument: Encodable { let value: Answer }
 private struct Function: Encodable {

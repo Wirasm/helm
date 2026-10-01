@@ -88,3 +88,6 @@ there; never try to open the drawer for him.
   produces a trusted page `paste` event on secure pages. When the Clipboard API is unavailable
   or refuses the write, the page gets a cancellable synthetic event instead; that fallback's
   event is untrusted. Typing and composition commits continue to use text insertion.
+- Fallback paste resolves focus inside same-origin frames and open/closed shadow roots before
+  checking cancellation. An unreachable cross-origin editor fails visibly instead of inserting
+  text without asking its paste handler.

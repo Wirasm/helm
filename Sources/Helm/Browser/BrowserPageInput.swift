@@ -28,19 +28,23 @@ final class BrowserPageInput {
         pending.append((event, destination))
         guard !draining else { return }
         draining = true
+        let generation = revision
         Task {
-            while !pending.isEmpty {
+            while revision == generation, !pending.isEmpty {
                 let (event, destination) = pending.removeFirst()
                 guard isCurrent(destination) else { continue }
-                await deliver(event, to: destination, revision: revision)
+                await deliver(event, to: destination, revision: generation)
             }
-            draining = false
+            if revision == generation { draining = false }
         }
     }
 
     func reset() {
         pending.removeAll()
         revision += 1
+        // A dialog can suspend an old CDP call until its page is answered. New tabs must
+        // drain independently; the old generation can neither take nor stop their input.
+        draining = false
         swallowedPress = false
         forms.dismiss()
     }
@@ -67,11 +71,7 @@ final class BrowserPageInput {
             if mouse.type == "mousePressed", mouse.button == "left", mouse.modifiers == 0,
                 await open(at: CGPoint(x: mouse.x, y: mouse.y), to: dest, revision: revision)
             {
-                if current(dest, revision: revision) {
-                    swallowedPress = true
-                } else {
-                    forms.dismiss()
-                }
+                if current(dest, revision: revision) { swallowedPress = true }
                 return
             }
             guard current(dest, revision: revision) else { return }
@@ -80,7 +80,6 @@ final class BrowserPageInput {
             if key.type != "keyUp", [" ", "ArrowDown"].contains(key.key),
                 await open(at: nil, to: dest, revision: revision)
             {
-                if !current(dest, revision: revision) { forms.dismiss() }
                 return
             }
             guard current(dest, revision: revision) else { return }
@@ -95,7 +94,8 @@ final class BrowserPageInput {
     private func open(at point: CGPoint?, to dest: Destination, revision: Int) async -> Bool {
         do {
             return try await forms.open(
-                at: point, connection: dest.connection, session: dest.session)
+                at: point, connection: dest.connection, session: dest.session,
+                isCurrent: { self.current(dest, revision: revision) })
         } catch {
             if current(dest, revision: revision) {
                 failed("The page could not open this picker: \(error)")
@@ -106,10 +106,27 @@ final class BrowserPageInput {
 
     private func paste(_ payload: BrowserPaste, to dest: Destination, revision: Int) async {
         do {
-            let outcome = try await dest.connection.call(
+            var outcome = try await dest.connection.call(
                 "Runtime.evaluate", PasteEvaluation(expression: try payload.expression()),
                 session: dest.session, returning: PasteReply.self)
             guard current(dest, revision: revision) else { return }
+            if outcome.result.value == "fallback" {
+                guard
+                    let object = try await BrowserFocusedElement.resolve(
+                        connection: dest.connection, session: dest.session)
+                else { failed("The page has no focused paste target."); return }
+                defer {
+                    BrowserFocusedElement.release(
+                        object, connection: dest.connection, session: dest.session)
+                }
+                guard current(dest, revision: revision) else { return }
+                outcome = try await dest.connection.call(
+                    "Runtime.callFunctionOn",
+                    PasteFunction(
+                        objectId: object, functionDeclaration: try payload.fallbackFunction()),
+                    session: dest.session, returning: PasteReply.self)
+                guard current(dest, revision: revision) else { return }
+            }
             if let error = outcome.exceptionDetails {
                 failed("The page could not paste: \(error.text)")
                 return
@@ -144,6 +161,11 @@ private struct PasteEvaluation: Encodable {
     var returnByValue = true
     var awaitPromise = true
     var userGesture = true
+}
+private struct PasteFunction: Encodable {
+    let objectId: String
+    let functionDeclaration: String
+    var returnByValue = true
 }
 private struct PasteReply: Decodable {
     struct Remote: Decodable { let value: String? }

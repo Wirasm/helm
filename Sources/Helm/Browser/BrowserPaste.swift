@@ -28,44 +28,62 @@ struct BrowserPaste: Encodable, Equatable {
     }
 
     /// Headless Chrome uses its own in-memory clipboard. A user gesture permits writing it
-    /// without granting a site lasting clipboard permissions. HTTP pages without the API
-    /// still get a cancellable clipboard event; only that fallback's event is untrusted.
+    /// without granting a site lasting clipboard permissions.
     func expression() throws -> String {
+        """
+        (async () => {
+          \(try contents())
+          if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+            try {
+              await navigator.clipboard.write([new ClipboardItem(data)]);
+              return 'native';
+            } catch (_) { /* No paste has happened; use a focused page event instead. */ }
+          }
+          return 'fallback';
+        })()
+        """
+    }
+
+    /// Called on the actual focused leaf, including closed roots. Only this fallback's event
+    /// is untrusted. An unresolved cross-origin frame cannot silently bypass its cancellation.
+    func fallbackFunction() throws -> String {
+        """
+        function() {
+          \(try contents())
+          const a=this;
+          if (a.tagName==='IFRAME' || a.tagName==='FRAME')
+            throw new Error('Fallback paste cannot reach this cross-origin frame');
+          const event = new w.ClipboardEvent('paste',
+            {clipboardData:transfer, bubbles:true, cancelable:true, composed:true});
+          if (!a.dispatchEvent(event)) return 'handled';
+          if (a.isContentEditable && p.html != null) {
+            if (!a.ownerDocument.execCommand('insertHTML', false, p.html))
+              throw new Error('The page could not insert the clipboard HTML');
+            return 'handled';
+          }
+          return p.text != null ? 'text' : 'handled';
+        }
+        """
+    }
+
+    private func contents() throws -> String {
         let payload = String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
         return """
-            (async () => {
-              const p = \(payload), data = {}, transfer = new DataTransfer();
-              if (p.text != null) {
-                data['text/plain'] = new Blob([p.text], {type:'text/plain'});
-                transfer.setData('text/plain', p.text);
-              }
-              if (p.html != null) {
-                data['text/html'] = new Blob([p.html], {type:'text/html'});
-                transfer.setData('text/html', p.html);
-              }
-              if (p.png) {
-                const bytes = Uint8Array.from(atob(p.png), c => c.charCodeAt(0));
-                data['image/png'] = new Blob([bytes], {type:'image/png'});
-                transfer.items.add(new File([bytes], 'image.png', {type:'image/png'}));
-              }
-              if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-                try {
-                  await navigator.clipboard.write([new ClipboardItem(data)]);
-                  return 'native';
-                } catch (_) { /* No paste has happened; use the page event below. */ }
-              }
-              let a = document.activeElement;
-              while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
-              const event = new ClipboardEvent('paste',
-                {clipboardData:transfer, bubbles:true, cancelable:true, composed:true});
-              if (!(a || document.body).dispatchEvent(event)) return 'handled';
-              if (a && a.isContentEditable && p.html != null) {
-                if (!document.execCommand('insertHTML', false, p.html))
-                  throw new Error('The page could not insert the clipboard HTML');
-                return 'handled';
-              }
-              return p.text != null ? 'text' : 'handled';
-            })()
+            const p=\(payload), w=this?.ownerDocument?.defaultView || window;
+            const data={}, transfer=new w.DataTransfer();
+            if (p.text != null) {
+              data['text/plain']=new w.Blob([p.text], {type:'text/plain'});
+              transfer.setData('text/plain',p.text);
+            }
+            if (p.html != null) {
+              data['text/html']=new w.Blob([p.html], {type:'text/html'});
+              transfer.setData('text/html',p.html);
+            }
+            if (p.png) {
+              const bytes=Uint8Array.from(atob(p.png),c=>c.charCodeAt(0));
+              data['image/png']=new w.Blob([bytes], {type:'image/png'});
+              transfer.items.add(new w.File([bytes],'image.png',{type:'image/png'}));
+            }
             """
     }
 }
