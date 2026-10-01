@@ -111,7 +111,7 @@ mod tests {
     use super::*;
 
     /// `fixtures/standard-path.json` is the table helm's `FilesystemPath.standardized` answers
-    /// too (`BenchWireConformanceTests`), so a canvas path benchd's document holds and the path
+    /// too (`StandardizedPathTests`), so a canvas path benchd's document holds and the path
     /// helm writes its live file at are spelled alike. Its `/private` rows are the ones helm got
     /// wrong: it dropped the prefix, and the live file's mail found no canvas.
     #[test]
