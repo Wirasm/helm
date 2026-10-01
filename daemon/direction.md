@@ -121,7 +121,10 @@ to the three files and `bench wiring --check` says what is missing. For codex th
 trust: codex runs a hook only once the operator has trusted it ("Hooks need review" at startup,
 "Trust all and continue"), so `--check` asks the `codex` on PATH (`hooks/list` on a stdio
 app-server of its own) and names each event codex will run no bench hook for: untrusted or
-changed since trusted, disabled, or not listed at all. A codex benchd spawns runs
+changed since trusted, disabled, or not listed at all. codex 0.159.3 saves the trust a
+`codex -p <name>` session accepts in `~/.codex/<name>.config.toml`, which `hooks/list` never reads
+and which covers only that profile, so the trust step is plain `codex`; `--check` names a profile
+that trusts the current hooks (`trusted_only_under_profile`). A codex benchd spawns runs
 its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
 which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
 codex the operator starts himself embeds its app-server, so its mail waits for its next prompt
