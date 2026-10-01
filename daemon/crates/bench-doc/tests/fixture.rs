@@ -7,7 +7,7 @@
 //! every surface kind, both kinds of name, a recorded agent, and two drawers —
 //! one open, one closed and badged.
 
-use bench_doc::{CanvasSource, Document, PaneName, Surface};
+use bench_doc::{CanvasSource, Document, DrawerEdge, DrawerName, PaneName, Surface};
 use std::path::PathBuf;
 
 fn fixture() -> (PathBuf, String) {
@@ -93,5 +93,15 @@ fn the_fixture_holds_one_of_everything() {
             .iter()
             .any(|d| d.badged && d.name != open.name),
         "a closed drawer an agent badged"
+    );
+    let notes = DrawerName::new("notes").unwrap();
+    let browser = DrawerName::new("browser").unwrap();
+    assert!(
+        doc.drawer(&notes).is_some() && doc.drawer_edge(&notes) == Some(DrawerEdge::Bottom),
+        "a drawer the operator put against an edge (#178)"
+    );
+    assert!(
+        doc.drawer(&browser).is_none() && doc.drawer_edge(&browser).is_some(),
+        "and an edge kept for a drawer that is gone"
     );
 }
