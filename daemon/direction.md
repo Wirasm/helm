@@ -61,6 +61,12 @@ operator's focus, so an agent's toggle is refused without `asked`, and an agent'
 drawer instead of opening it. No drawer operation touches a workspace. `bench.json` is version 1
 from here, so an older benchd quarantines it rather than dropping drawers on its next save.
 
+**A drop names its place (#178).** `pane/move`'s `to` is a step (the keyboard) or a place named by
+ids, `{tab: {slot, before?}}` or `{beside: {slot, side}}` (a dragged tab); `pane/open` takes the
+same place as `at` (a file dropped from Finder). Like a drawer, a place is outright and the rules
+are not asked; a surface that bench already shows is moved there rather than opened twice. helm
+works out which place the pointer means, and benchd what a move or an open there does.
+
 **Placement is the operator's file (#356).** Where a new pane goes is a table, and the table is
 TOML: the built-in one is `crates/bench-doc/rules/placement.default.toml`, embedded at build
 time, and `<root>/rules/placement.toml` replaces it whole. benchd reads the file before each

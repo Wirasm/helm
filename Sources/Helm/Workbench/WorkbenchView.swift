@@ -123,6 +123,9 @@ extension WorkbenchView {
         // zone is drawn exactly where the views are (`PaneDrop`).
         .overlay(alignment: .topLeading) { DropZoneOverlay(drag: model.paneDrag) }
         .coordinateSpace(name: PaneDrop.space)
+        // A file from Finder, opened where it is dropped (`FileDrop`). On the view that names
+        // the space, so the drop's location is measured in it.
+        .onDrop(of: [.fileURL], delegate: FileDropDelegate(model: model))
         // Keyed on the move, not on the camera: a window being resized changes the camera
         // every frame and must follow the pointer, not ease after it.
         .animation(
