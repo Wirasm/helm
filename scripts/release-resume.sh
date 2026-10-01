@@ -20,8 +20,9 @@
 # directory. Left out, it is read from the session's own row in ~/.claude/sessions.
 #
 # WHY IT DETACHES. The caller is normally an agent in a helm pane, which since M5b is a benchd
-# session: restarting benchd ends it, and quitting helm closes the pane. So this checks everything it can in the foreground, then re-runs itself in a new session
-# (double fork, nohup, setsid) and returns. The detached run waits until its parent is init
+# session: restarting benchd ends it, and quitting helm closes the pane. So this checks
+# everything it can in the foreground, then re-runs itself in a new session (double fork,
+# nohup, setsid) and returns. The detached run waits until its parent is init
 # before it touches anything; a skill gate's detached runner is where that race was learned.
 # Every step runs under `timeout`, so nothing outlives its deadline.
 #
@@ -421,11 +422,12 @@ warn() { log "WARNING: $*"; }
 # helm pane, and everything started from here inherits what is left: the build, a hand-started
 # benchd (and every agent it spawns), the `bench spawn` that resumes, and the fallback claude.
 # Its session identity must reach none of them, or the resume is attributed to the dead agent
-# and a claude can claim its address. `main` scrubs before either half runs, so the foreground
-# guard also asks the benchd step 3 restarts rather than the caller's BENCH_DIR. So whole namespaces go, not a list of names that misses
+# and a claude can claim its address. So whole namespaces go, not a list of names that misses
 # the next one. Suites come only from the flags. HELM_BUILD_DIR is a location, not identity, and
 # stays: it is where `make release` announces the build. CLAUDE_CONFIG_DIR goes with the rest:
-# every claude runs the operator's default profile under HOME (#491).
+# every claude runs the operator's default profile under HOME (#491). `main` scrubs before
+# either half runs, so the foreground guard asks the benchd step 3 restarts, not the caller's
+# BENCH_DIR.
 scrub_caller_env() {
   local v
   for v in $(compgen -e); do
