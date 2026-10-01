@@ -53,16 +53,16 @@ final class WorkspaceDropTests: XCTestCase {
 
     func testAWorkspaceDroppedInAGapGoesBeforeTheTabRightOfThePointer() throws {
         let target = try XCTUnwrap(resolve(.workspace(c), 20))
-        XCTAssertEqual(target.verb, .workspaceMove(path: c.value, before: a.value))
+        XCTAssertEqual(target.to, .bar(before: a.value))
         XCTAssertEqual(target.preview, bar.strip, "the bar is what changes")
         let seam = try XCTUnwrap(target.seam, "a bar in the gap")
         XCTAssertLessThan(seam.maxX, bar.tabs[a]!.minX + 1)
 
         XCTAssertEqual(
-            resolve(.workspace(a), 790)?.verb, .workspaceMove(path: a.value, before: nil),
+            resolve(.workspace(a), 790)?.to, .bar(before: nil),
             "past the last tab's middle is the end")
         XCTAssertEqual(
-            resolve(.workspace(a), 240)?.verb, .workspaceMove(path: a.value, before: c.value))
+            resolve(.workspace(a), 240)?.to, .bar(before: c.value))
     }
 
     /// The controls: positions where the order would not change. A resolver that answered every
@@ -77,7 +77,7 @@ final class WorkspaceDropTests: XCTestCase {
 
     func testAPaneDroppedOnAnotherWorkspacesTabMovesThere() throws {
         let target = try XCTUnwrap(resolve(.pane(pane), 160))
-        XCTAssertEqual(target.verb, .paneMove(pane, .workspace(b.value)))
+        XCTAssertEqual(target.to, .workspace(b.value))
         XCTAssertEqual(target.preview, bar.tabs[b], "the tab it goes to is the zone")
         XCTAssertNil(target.seam)
     }
@@ -100,7 +100,7 @@ final class WorkspaceDropTests: XCTestCase {
             bShows: [.init(id: UUID(), surface: .canvas(path: "/x/plan.md"))])
         XCTAssertNil(resolve(.pane(pane), 160, in: doc), "b already shows plan.md")
         XCTAssertEqual(
-            resolve(.pane(pane), 260, in: doc)?.verb, .paneMove(pane, .workspace(c.value)),
+            resolve(.pane(pane), 260, in: doc)?.to, .workspace(c.value),
             "c does not")
     }
 

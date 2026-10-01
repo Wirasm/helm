@@ -18,15 +18,19 @@ enum PaneDrop {
     /// How deep, as a share of the slot, the band on each edge that splits rather than tabs.
     static let edgeBand: CGFloat = 0.25
 
-    /// What the pointer at `point` would do with `pane`: a destination for `pane/move` and
-    /// the drop zone that shows it. nil off the bench and wherever the drop would leave the pane
-    /// where it is — a zone there would promise a move that does not happen.
+    /// What the pointer at `point` would do with `pane`: a place for `pane/move` and the drop
+    /// zone that shows it. nil off the bench and wherever the drop would leave the pane where it
+    /// is — a zone there would promise a move that does not happen.
+    ///
+    /// `pane` nil is a file dragged in from outside (`FileDrop`), to open at the place: nothing it
+    /// could land on is where it already is, and a slot's middle is nowhere, because the body
+    /// under it is the pane's own — a terminal or a page decides what a drop on it does.
     ///
     /// Those no-ops are benchd's rules (`move_pane_to_tab`, `move_pane_beside`), read here only
     /// to decide whether to draw. benchd stays the authority: it answers a no-op it is sent with
     /// `changed: false`.
     static func resolve(
-        pane: Pane.ID, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
+        pane: Pane.ID?, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
     ) -> DropTarget? {
         let from = Address.of(pane, in: bench)
         let standing = from.map {
@@ -56,7 +60,7 @@ enum PaneDrop {
         let column: Int
         let slot: Int
 
-        static func of(_ pane: Pane.ID, in bench: Workbench) -> Address? {
+        static func of(_ pane: Pane.ID?, in bench: Workbench) -> Address? {
             for (c, column) in bench.columns.enumerated() {
                 if let s = column.slots.firstIndex(where: { $0.panes.contains { $0.id == pane } }) {
                     return Address(column: c, slot: s)
@@ -73,7 +77,7 @@ enum PaneDrop {
 
     /// One slot under the pointer, and the dragged pane's standing in it.
     private struct Place {
-        let pane: Pane.ID
+        let pane: Pane.ID?
         let slot: Slot
         let drawn: SlotFrames
         /// The dragged pane's own slot, whether it is alone there and in its column, and the
@@ -92,7 +96,7 @@ enum PaneDrop {
             let seamX =
                 before.map { $0.frame.minX - 2 } ?? (tabs.last?.frame.maxX ?? drawn.strip.minX) + 2
             return DropTarget(
-                verb: .paneMove(pane, .tab(slot: slot.id, before: before?.id)), preview: drawn.body,
+                to: .place(.tab(slot: slot.id, before: before?.id)), preview: drawn.body,
                 seam: CGRect(
                     x: seamX - 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
@@ -112,12 +116,12 @@ enum PaneDrop {
         }
 
         /// The middle of a slot is "as its last tab". Its own slot's middle is nowhere: dropping
-        /// a tab back onto the body it came from should not reorder it.
+        /// a tab back onto the body it came from should not reorder it. A file's is nowhere too.
         private func middle() -> DropTarget? {
-            guard !isOwn else { return nil }
+            guard pane != nil, !isOwn else { return nil }
             let end = slot.panes.compactMap { drawn.tabs[$0.id]?.maxX }.max() ?? drawn.strip.minX
             return DropTarget(
-                verb: .paneMove(pane, .tab(slot: slot.id, before: nil)), preview: drawn.body,
+                to: .place(.tab(slot: slot.id, before: nil)), preview: drawn.body,
                 seam: CGRect(
                     x: end + 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
@@ -129,7 +133,7 @@ enum PaneDrop {
             let region = vertical ? drawn.body : columnFrame
             let preview = region.half(side)
             return DropTarget(
-                verb: .paneMove(pane, .beside(slot: slot.id, side: side)), preview: preview,
+                to: .place(.beside(slot: slot.id, side: side)), preview: preview,
                 seam: preview.edgeBar(side, thickness: 3))
         }
 
@@ -159,14 +163,30 @@ enum PaneDrop {
     }
 }
 
-/// Where a drop would go, and the drop zone that says so: `verb` is what the release sends,
-/// `preview` the region the dragged thing will occupy, and `seam` the bar where it enters — the
+/// Where a drop would go, and the drop zone that says so: `to` is where the release sends the
+/// dragged thing, `preview` the region it will occupy, and `seam` the bar where it enters — the
 /// edge it splits, or a gap in a tab strip or the workspace bar. A drop onto a workspace tab has
 /// no seam: the tab itself is where it goes.
 struct DropTarget: Equatable {
-    let verb: BenchVerb
+    let to: DropDestination
     let preview: CGRect
     var seam: CGRect?
+
+    /// The place on the bench, when it is one.
+    var place: BenchPlace? {
+        if case let .place(place) = to { place } else { nil }
+    }
+}
+
+/// Where a release sends the dragged thing, in the terms of the verb it becomes
+/// (`WorkbenchModel.verb(dropping:on:)`).
+enum DropDestination: Equatable {
+    /// A place on the bench: where a pane moves to, or a file opens (`BenchPlace`).
+    case place(BenchPlace)
+    /// Another workspace, by path: a pane dropped on its tab.
+    case workspace(String)
+    /// A gap in the workspace bar: before that workspace, or last.
+    case bar(before: String?)
 }
 
 /// Where one slot is drawn, in `BenchDrag.space`: the whole slot, its tab strip, and each tab.
@@ -198,10 +218,12 @@ extension CGRect {
 
 // MARK: - The live drag
 
-/// What is being dragged: a pane's tab on the bench, or a workspace's tab in the bar.
+/// What is being dragged: a pane's tab on the bench, a workspace's tab in the bar, or files from
+/// outside helm (`FileDrop`).
 enum DragItem: Equatable {
     case pane(Pane.ID)
     case workspace(WorkspacePath)
+    case files
 }
 
 /// The drag in progress and the frames it is resolved against. Its own object so that only the
@@ -281,6 +303,8 @@ extension WorkbenchModel {
             target = WorkspaceDrop.resolve(item, at: point, document: document, frames: drag.bar)
         } else if case let .pane(pane) = item, let bench {
             target = PaneDrop.resolve(pane: pane, at: point, bench: bench, frames: drag.slots)
+        } else if item == .files, let bench {
+            target = PaneDrop.resolve(pane: nil, at: point, bench: bench, frames: drag.slots)
         } else {
             target = nil
         }
@@ -291,7 +315,19 @@ extension WorkbenchModel {
     /// nothing where the drop would change nothing or the drag was cancelled.
     func dropTab(_ item: DragItem, at point: CGPoint) {
         dragTab(item, to: point)
-        guard let target = drag.end(item) else { return }
-        send(target.verb, by: .operatorGesture)
+        guard let target = drag.end(item), let verb = Self.verb(dropping: item, on: target.to)
+        else { return }
+        send(verb, by: .operatorGesture)
+    }
+
+    /// The verb a tab dropped on `to` sends. nil for a pairing no resolver produces; files are
+    /// `FileDrop`'s, which opens each one.
+    static func verb(dropping item: DragItem, on to: DropDestination) -> BenchVerb? {
+        switch (item, to) {
+        case let (.pane(pane), .place(place)): .paneMove(pane, .place(place))
+        case let (.pane(pane), .workspace(path)): .paneMove(pane, .workspace(path))
+        case let (.workspace(path), .bar(before)): .workspaceMove(path: path.value, before: before)
+        default: nil
+        }
     }
 }

@@ -11,7 +11,7 @@ enum WorkspaceDrop {
     /// What the pointer at `point`, over the bar, would do with `item`. nil wherever the drop
     /// would change nothing or benchd would refuse it: a workspace in its own place, a pane over
     /// its own workspace or a gap, a pane its bench cannot give up (a workspace's last pane), a
-    /// pane whose surface the target already shows, and a workspace anywhere but the bar.
+    /// pane whose surface the target already shows, a workspace anywhere but the bar, and files.
     ///
     /// The bar draws its tabs in the document's order, so that is the order read here.
     static func resolve(
@@ -31,8 +31,10 @@ enum WorkspaceDrop {
                 let surface = from.bench.panes.first(where: { $0.id == pane })?.surface,
                 !over.workspace.bench.panes.contains(where: { $0.surface.alreadyShows(surface) })
             else { return nil }
-            return DropTarget(
-                verb: .paneMove(pane, .workspace(over.workspace.path)), preview: over.frame)
+            return DropTarget(to: .workspace(over.workspace.path), preview: over.frame)
+        case .files:
+            // Files open on a bench, at a place on it (`FileDrop`); the bar is not one.
+            return nil
         }
     }
 
@@ -49,7 +51,7 @@ enum WorkspaceDrop {
         let height = tabs.first?.frame.height ?? strip.height
         let top = tabs.first?.frame.minY ?? strip.minY
         return DropTarget(
-            verb: .workspaceMove(path: path.value, before: before?.path.value), preview: strip,
+            to: .bar(before: before?.path.value), preview: strip,
             seam: CGRect(x: seamX - 1, y: top + 2, width: 2, height: max(height - 4, 0)))
     }
 }

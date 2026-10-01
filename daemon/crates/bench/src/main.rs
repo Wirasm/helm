@@ -95,9 +95,9 @@ fn usage() -> &'static str {
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
-     \x20     log <session id | transcript path>  a Claude or pi session's prompts, replies, tool\n\
-     \x20         [-n N] [--since 30m|2h|1d|<time>] calls and errors, read from its transcript with no\n\
-     \x20         [--json]                        daemon; the last 40 unless -n says otherwise\n\
+     \x20     log <session id | transcript path>  a Claude, pi or codex session's prompts, replies,\n\
+     \x20         [-n N] [--since 30m|2h|1d|<time>] tool calls and errors, read from its transcript\n\
+     \x20         [--json]                        with no daemon; the last 40 unless -n says so\n\
      \x20     attach <session> [--in-pane]        relay to a session's pty (Ctrl-\\ detaches); the\n\
      \x20                                         pty follows this terminal's size. --in-pane:\n\
      \x20                                         what a helm pane runs (quiet, no detach key)\n\

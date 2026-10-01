@@ -82,6 +82,9 @@ struct RootView: View {
         // where the views are (`BenchDrag`).
         .overlay(alignment: .topLeading) { DropZoneOverlay(drag: workbench.drag) }
         .coordinateSpace(name: BenchDrag.space)
+        // A file from Finder, opened where it is dropped (`FileDrop`). On the view that names
+        // the space, so the drop's location is measured in it; over the bar it resolves nowhere.
+        .onDrop(of: [.fileURL], delegate: FileDropDelegate(model: workbench))
         // ⇧⌘O: a folder on benchd's machine, checked there (M5c).
         .sheet(isPresented: $workbench.isWorkspacePickerOpen, onDismiss: returnKeyboard) {
             WorkspacePicker(prp: PrpStores(client: workbench.client)) { path in

@@ -163,6 +163,12 @@ action = "browser-forward"
 hint = "back · forward"
 
 [[bind]]
+key = "cmd+f"
+when = "browser"
+action = "browser-find"
+hint = "find"
+
+[[bind]]
 key = "cmd+1"
 when = "browser"
 action = "browser-tab"

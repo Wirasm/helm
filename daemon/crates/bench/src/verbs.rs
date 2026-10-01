@@ -10,7 +10,7 @@
 //! bring something forward. Pass it only when the operator asked (bench-architecture.md).
 
 use crate::{Cli, exchange, print_response, record_root, refuse};
-use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, SlotId, Split, Surface};
+use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
     DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, MoveTo, OpenInto, PaneOpen, ScreenGetArgs,
     ScreenSendArgs, SpawnArgs, Status,
@@ -297,15 +297,15 @@ fn move_to(p: &Parsed, workspace: Option<bench_doc::StandardPath>) -> Result<Mov
         workspace,
     ) {
         (Some(_), None, None, None) => Ok(MoveTo::Step(direction(p.words.get(2))?)),
-        (None, Some(slot), None, None) => Ok(MoveTo::Tab {
+        (None, Some(slot), None, None) => Ok(MoveTo::Place(Place::Tab {
             slot: SlotId::parse(&slot)?,
             before: before.as_deref().map(PaneId::parse).transpose()?,
-        }),
-        (None, None, Some(slot), None) => Ok(MoveTo::Beside {
+        })),
+        (None, None, Some(slot), None) => Ok(MoveTo::Place(Place::Beside {
             slot: SlotId::parse(&slot)?,
             side: direction(side.as_ref())
                 .map_err(|_| format!("--beside needs --side; {FORMS}"))?,
-        }),
+        })),
         (None, None, None, Some(path)) => Ok(MoveTo::Workspace(path)),
         _ => Err(FORMS.into()),
     }

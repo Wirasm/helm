@@ -2556,6 +2556,67 @@ fn a_workspace_moves_before_another_through_the_socket() {
     assert_eq!(again["changed"], false, "where it already is");
 }
 
+/// A file dropped from Finder (#178) is `pane/open` with `at`, the place a drop names: it opens
+/// there, and a second drop of the same file moves the pane already showing it.
+#[test]
+fn a_file_opened_at_a_place_lands_there_and_is_not_opened_twice() {
+    let home = TestHome::claim("m4-open-at");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (first, _, _) = working_bench(&daemon.socket);
+    let file = home.dir.join("dropped.md");
+    std::fs::write(&file, "# dropped\n").unwrap();
+    let surface =
+        serde_json::json!({ "kind": "canvas", "source": { "kind": "file", "path": file } });
+    let columns = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]["workspaces"][0]["bench"]["columns"]
+            .clone()
+    };
+    let slot_of_first = columns(&daemon.socket)[0]["slots"][0]["id"].clone();
+    assert_eq!(
+        columns(&daemon.socket)[0]["slots"][0]["panes"][0]["id"],
+        first
+    );
+
+    let opened = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": surface, "at": { "beside": { "slot": slot_of_first, "side": "up" } } }),
+        operator(),
+        false,
+    ));
+    let pane = opened["pane_created"].as_str().unwrap().to_string();
+    let after = columns(&daemon.socket);
+    assert_eq!(after[0]["slots"][0]["panes"][0]["id"], pane, "a row above");
+    assert_eq!(after[0]["slots"][1]["id"], slot_of_first);
+
+    let again = ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "surface": surface, "at": { "tab": { "slot": slot_of_first, "before": first } } }),
+        operator(),
+        false,
+    ));
+    assert!(again["pane_created"].is_null(), "{again}");
+    assert_eq!(again["pane"], pane, "the pane already showing it");
+    let after = columns(&daemon.socket);
+    let panes: Vec<_> = after[0]["slots"][0]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].clone())
+        .collect();
+    assert_eq!(
+        panes,
+        vec![serde_json::json!(pane), serde_json::json!(first)]
+    );
+}
+
 #[test]
 fn a_whole_session_driven_through_the_socket_survives_a_daemon_restart() {
     let home = TestHome::claim("m4-session");
@@ -4592,6 +4653,115 @@ fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
         fs::symlink_metadata(&stale).is_err(),
         "the stale socket is gone before the app-server binds"
     );
+}
+
+/// A benchd-spawned codex is listed by its thread, as its hooks report it, and once it ends by
+/// its rollout; `bench log` reads that rollout. The rollout's lines are real codex 0.157 shapes.
+#[test]
+fn a_spawned_codex_is_listed_by_its_thread_and_its_rollout_reads_as_a_log() {
+    let home = TestHome::claim("cxrow");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start_with_fake(h, "codex");
+    let ws = workspace(h);
+    let ws_arg = ws.display().to_string();
+    let run = bench(
+        h,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws_arg, "--name", "cx",
+        ],
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let (session, pid) = {
+        let v = json_of(&run);
+        (
+            v["session"].as_str().unwrap().to_string(),
+            v["pid"].as_i64().unwrap() as i32,
+        )
+    };
+    // Until its `/bin/sh` has exec'd, a hook from it would be read as its parent's.
+    wait_until("the stand-in has exec'd", Duration::from_secs(5), || {
+        bench_sessions::process::hook_caller(pid as u32) == pid as u32
+    });
+    let thread = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "codex", "event": event, "session": thread,
+                "cwd": ws_arg, "pid": pid, "bench_session": session}),
+        );
+    }
+    fs::create_dir_all(h.join(".codex")).unwrap();
+    fs::write(
+        h.join(".codex/session_index.jsonl"),
+        serde_json::json!({"id": thread, "thread_name": "Fix the build", "updated_at": "2026-10-01T07:35:00Z"})
+            .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let rows = || {
+        let run = bench(h, &["sessions", "--all", "--workspace", &ws_arg]);
+        assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+        json_of(&run)["rows"].as_array().unwrap().clone()
+    };
+    let live = rows();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(live[0]["id"], thread, "the thread, not {session}");
+    assert_eq!(live[0]["name"], "Fix the build");
+    assert_eq!(live[0]["state"]["activity"]["kind"], "busy");
+
+    let at = "2026-10-01T07:34:57.000Z";
+    let event = |payload: serde_json::Value| serde_json::json!({"timestamp": at, "type": "event_msg", "payload": payload});
+    let item = |item: serde_json::Value| {
+        event(
+            serde_json::json!({"type": "item_completed", "thread_id": thread, "turn_id": "u", "item": item}),
+        )
+    };
+    let lines = [
+        serde_json::json!({"timestamp": at, "type": "session_meta", "payload": {"id": thread, "cli_version": "0.157.0", "cwd": ws_arg}}),
+        serde_json::json!({"timestamp": at, "type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context>injected</environment_context>"}]}}),
+        item(
+            serde_json::json!({"type": "UserMessage", "id": "item-1", "content": [{"type": "text", "text": "fix the build"}]}),
+        ),
+        item(
+            serde_json::json!({"type": "CommandExecution", "id": "c", "command": ["/bin/zsh", "-lc", "cargo build"],
+            "status": "completed", "exit_code": 0}),
+        ),
+        item(
+            serde_json::json!({"type": "AgentMessage", "id": "a", "phase": "final_answer",
+            "content": [{"type": "Text", "text": "Built."}]}),
+        ),
+    ];
+    let dir = h.join(".codex/sessions/2026/10/01");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(format!("rollout-2026-10-01T10-34-56-{thread}.jsonl")),
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let log = bench(h, &["log", thread]);
+    assert_eq!(log.code, 0, "stderr: {}", log.stderr);
+    for line in [
+        "2026-10-01 07:34:57  user   fix the build",
+        "2026-10-01 07:34:57  tool   shell  cargo build",
+        "2026-10-01 07:34:57  agent  Built.",
+    ] {
+        assert!(log.stdout.contains(line), "{line:?} in:\n{}", log.stdout);
+    }
+    assert!(!log.stdout.contains("injected"), "{}", log.stdout);
+
+    // Listed as finished once benchd sees its process gone.
+    libc_kill(pid);
+    wait_until("the codex is finished", Duration::from_secs(5), || {
+        rows()
+            .first()
+            .is_some_and(|r| r["state"]["kind"] == "finished")
+    });
+    let finished = rows();
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    assert_eq!(finished[0]["id"], thread);
+    assert_eq!(finished[0]["state"]["kind"], "finished");
+    assert_eq!(finished[0]["open"]["argv"][1], "resume");
 }
 
 #[test]

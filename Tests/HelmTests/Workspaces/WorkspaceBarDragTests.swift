@@ -98,8 +98,8 @@ final class WorkspaceBarDragTests: XCTestCase {
 
         try hosted.drag(from: hosted.centre(of: "/w/c"), to: end)
         XCTAssertEqual(
-            hosted.rig.model.drag.live?.target?.verb,
-            .workspaceMove(path: "/w/c", before: "/w/a"), "the zone is the gap before the first")
+            hosted.rig.model.drag.live?.target?.to, .bar(before: "/w/a"),
+            "the zone is the gap before the first")
         try hosted.mouse(.leftMouseUp, at: end)
 
         XCTAssertEqual(hosted.rig.server.verbs.count, sent + 1)

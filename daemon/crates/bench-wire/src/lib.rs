@@ -201,6 +201,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     // M5c: a view onto the shared browser, relayed by benchd for a helm that may not share its
     // machine.
     "browser/connect",
+    // A file the operator chose on helm's machine, for a page's file input (helm #549).
+    "browser/upload",
     "just/run",
     "just/list",
     // M5b: give terminal panes whose session ended a session again (`just resume-all`).
@@ -274,6 +276,8 @@ pub enum Verb {
     /// The connection becomes a relay of CDP messages to the running browser, one JSON line
     /// each way (`BrowserConnected`).
     BrowserConnect,
+    /// A file for a page's file input, kept on benchd's machine (`BrowserUploadArgs`).
+    BrowserUpload,
     /// Run a recipe from the operator's bench justfile (#356).
     JustRun,
     /// Name the recipes in it (#500).
@@ -337,6 +341,7 @@ impl Verb {
             "browser/stop" => Some(Verb::BrowserStop),
             "browser/setup" => Some(Verb::BrowserSetup),
             "browser/connect" => Some(Verb::BrowserConnect),
+            "browser/upload" => Some(Verb::BrowserUpload),
             "helm/ask" => Some(Verb::HelmAsk),
             "helm/answer" => Some(Verb::HelmAnswer),
             "just/run" => Some(Verb::JustRun),
@@ -790,6 +795,32 @@ pub struct BrowserConnected {
 
 pub fn browser_dir(root: &Path) -> PathBuf {
     root.join("browser")
+}
+
+/// `browser/upload`'s payload (helm #549): a file the operator chose in helm's open panel for a
+/// page's `<input type=file>`. Chrome takes a file input's files as paths on its own machine
+/// (`DOM.setFileInputFiles`), so a helm on another machine sends the bytes here first. On one
+/// machine helm passes its own path and never sends this. Capped, like `file/write`, by
+/// `FILE_REQUEST_MAX_BYTES` on the request line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserUploadArgs {
+    /// The file's name, which the page sees: one path component.
+    pub name: String,
+    pub base64: String,
+}
+
+/// `browser/upload`'s answer: where benchd put the file, for `DOM.setFileInputFiles`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserUploaded {
+    pub path: String,
+}
+
+/// Where uploads are kept, one folder each so two files of one name never collide. Emptied
+/// when benchd starts: a page reads its file when its form is sent, while the browser (benchd's
+/// child) still runs.
+pub fn browser_uploads_dir(root: &Path) -> PathBuf {
+    browser_dir(root).join("uploads")
 }
 
 pub fn browser_config_path(root: &Path) -> PathBuf {
@@ -1324,6 +1355,28 @@ mod tests {
         }
     }
 
+    /// `fixtures/browser-upload.json`: the pane's upload and benchd's answer; helm's
+    /// `BrowserUploadWireTests` encodes the request and decodes the answer.
+    #[test]
+    fn the_browser_upload_fixture_is_the_verb_and_its_answer() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/browser-upload.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let request: Request = serde_json::from_value(value["request"].clone()).unwrap();
+        assert_eq!(Verb::parse(&request.verb), Some(Verb::BrowserUpload));
+        assert_eq!(request.by, Some(Actor::Helm));
+        let args: BrowserUploadArgs = serde_json::from_value(request.args.clone()).unwrap();
+        assert_eq!(unbase64(&args.base64).unwrap(), b"upload-me\n");
+        let uploaded: Response = serde_json::from_value(value["uploaded"].clone()).unwrap();
+        assert_eq!(uploaded.status, Status::Ok);
+        let data: BrowserUploaded = serde_json::from_value(uploaded.data.unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&data).unwrap(),
+            value["uploaded"]["data"]
+        );
+    }
+
     #[test]
     fn every_known_verb_parses_and_nothing_else_does() {
         for v in KNOWN_VERBS {
@@ -1331,7 +1384,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            54,
+            55,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

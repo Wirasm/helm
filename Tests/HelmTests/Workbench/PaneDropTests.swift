@@ -53,35 +53,35 @@ final class PaneDropTests: XCTestCase {
 
     func testTheMiddleOfAnotherSlotIsItsLastTab() throws {
         let target = try XCTUnwrap(resolve(a, 600, 150))
-        XCTAssertEqual(target.move, .tab(slot: top.id, before: nil))
+        XCTAssertEqual(target.place, .tab(slot: top.id, before: nil))
         XCTAssertEqual(target.preview, frames[top.id]!.body, "the whole slot will show it")
         XCTAssertGreaterThan(
             try XCTUnwrap(target.seam).minX, frames[top.id]!.tabs[d.id]!.maxX, "after its tabs")
     }
 
     func testAGapInAStripIsBeforeTheTabRightOfThePointer() {
-        XCTAssertEqual(resolve(a, 410, 14)?.move, .tab(slot: top.id, before: d.id))
+        XCTAssertEqual(resolve(a, 410, 14)?.place, .tab(slot: top.id, before: d.id))
         XCTAssertEqual(
-            resolve(a, 470, 14)?.move, .tab(slot: top.id, before: nil), "past d's middle")
-        XCTAssertEqual(resolve(c, 20, 14)?.move, .tab(slot: left.id, before: a.id), "a reorder")
+            resolve(a, 470, 14)?.place, .tab(slot: top.id, before: nil), "past d's middle")
+        XCTAssertEqual(resolve(c, 20, 14)?.place, .tab(slot: left.id, before: a.id), "a reorder")
     }
 
     func testAnEdgeBandSplitsBesideTheSlotAndShowsTheHalfItWillTake() throws {
         let up = try XCTUnwrap(resolve(a, 600, 40))
-        XCTAssertEqual(up.move, .beside(slot: top.id, side: .up))
+        XCTAssertEqual(up.place, .beside(slot: top.id, side: .up))
         XCTAssertEqual(up.preview, CGRect(x: 400, y: 0, width: 400, height: 150))
         XCTAssertEqual(up.seam?.height, 3, "a bar along the top edge")
 
         let sideways = try XCTUnwrap(resolve(a, 420, 150))
-        XCTAssertEqual(sideways.move, .beside(slot: top.id, side: .left))
+        XCTAssertEqual(sideways.place, .beside(slot: top.id, side: .left))
         XCTAssertEqual(
             sideways.preview, CGRect(x: 400, y: 0, width: 200, height: 600),
             "a new column: half of the whole column, not of the slot")
     }
 
     func testATabDroppedOnItsOwnSlotsEdgeBecomesAPaneOfItsOwn() {
-        XCTAssertEqual(resolve(a, 390, 300)?.move, .beside(slot: left.id, side: .right))
-        XCTAssertEqual(resolve(b, 200, 590)?.move, .beside(slot: left.id, side: .down))
+        XCTAssertEqual(resolve(a, 390, 300)?.place, .beside(slot: left.id, side: .right))
+        XCTAssertEqual(resolve(b, 200, 590)?.place, .beside(slot: left.id, side: .down))
     }
 
     /// The controls: positions where benchd would leave the pane where it is. A resolver that
@@ -102,7 +102,7 @@ final class PaneDropTests: XCTestCase {
         XCTAssertNil(resolve(e, 600, 290), "the bottom row onto the top row's bottom edge")
         XCTAssertNil(resolve(d, 600, 340), "the top row onto the bottom row's top edge")
         XCTAssertEqual(
-            resolve(d, 600, 590)?.move, .beside(slot: bottom.id, side: .down),
+            resolve(d, 600, 590)?.place, .beside(slot: bottom.id, side: .down),
             "…while the far edge still moves it")
 
         let pair = Workbench.assembled(
@@ -120,9 +120,9 @@ final class PaneDropTests: XCTestCase {
                         strip: CGRect(x: CGFloat(i) * 400, y: 0, width: 400, height: 28))
                 )
             })
-        func move(_ pane: Pane, _ x: CGFloat) -> BenchMoveTo? {
+        func move(_ pane: Pane, _ x: CGFloat) -> BenchPlace? {
             PaneDrop.resolve(pane: pane.id, at: CGPoint(x: x, y: 300), bench: pair, frames: frames)?
-                .move
+                .place
         }
         XCTAssertNil(move(d, 410), "onto the right column's left edge")
         XCTAssertNil(move(e, 390), "onto the left column's right edge")
@@ -130,7 +130,7 @@ final class PaneDropTests: XCTestCase {
     }
 
     func testALonePaneLeavesItsColumnSidewaysOnlyWhenTheColumnHoldsMore() {
-        XCTAssertEqual(resolve(e, 790, 450)?.move, .beside(slot: bottom.id, side: .right))
+        XCTAssertEqual(resolve(e, 790, 450)?.place, .beside(slot: bottom.id, side: .right))
         let alone = Workbench(panes: [d])
         XCTAssertNil(
             PaneDrop.resolve(
@@ -184,12 +184,5 @@ final class PaneDropTests: XCTestCase {
         rig.model.dropTab(.pane(second.id), at: CGPoint(x: 400, y: 300))
         XCTAssertEqual(
             rig.server.verbs.count, sent + 1, "a drop that changes nothing sends nothing")
-    }
-}
-
-extension DropTarget {
-    /// The `pane/move` destination this drop sends, for a test that reads like the resolver's rules.
-    fileprivate var move: BenchMoveTo? {
-        if case let .paneMove(_, to) = verb { to } else { nil }
     }
 }
