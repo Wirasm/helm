@@ -21,8 +21,7 @@ struct DrawerHost: View {
         GeometryReader { geo in
             if let drawer = model.openDrawer {
                 let style = keymap.style(for: drawer.name).placed(drawer.name, by: model.document)
-                let frame = DrawerFrame(
-                    name: drawer.name, area: geo.frame(in: .named(BenchDrag.space)), style: style)
+                let frame = DrawerFrame(area: geo.frame(in: .named(BenchDrag.space)), style: style)
                 let panel = DrawerPanel(model: model, drawer: drawer, edge: style.edge)
                 Group {
                     if style.edge == .bottom {
@@ -37,10 +36,9 @@ struct DrawerHost: View {
                 .transition(.move(edge: style.edge.slidesFrom))
                 // Where a drag of its header is resolved against (`DrawerDrop`).
                 .onChange(of: frame, initial: true) { model.drag.drawer = frame }
-                .onDisappear {
-                    if model.drag.drawer?.name == drawer.name { model.drag.drawer = nil }
-                    model.drag.abandon(.drawer(drawer.name))
-                }
+                // Closed mid-drag, its header's gesture never ends: without this the zone would
+                // stay drawn.
+                .onDisappear { model.drag.abandon(.drawer(drawer.name)) }
             }
         }
         .animation(.easeOut(duration: 0.12), value: model.openDrawer?.name)

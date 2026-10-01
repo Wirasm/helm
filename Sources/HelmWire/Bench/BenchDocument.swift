@@ -63,7 +63,7 @@ package struct BenchDocument: Codable, Equatable, Sendable {
 
     /// The window edge a drawer is drawn against (`bench-doc`'s `DrawerEdge`): the document's
     /// when the operator placed it, and the spelling the keymap's `[drawer.<name>] edge` uses.
-    package enum DrawerEdge: String, Codable, Equatable, Sendable, CaseIterable {
+    package enum DrawerEdge: String, Codable, Equatable, Sendable {
         case left, right, bottom
     }
 

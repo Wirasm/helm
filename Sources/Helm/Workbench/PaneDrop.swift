@@ -246,7 +246,7 @@ final class BenchDrag: ObservableObject {
 
     var slots: [Slot.ID: SlotFrames] = [:]
     var bar = BarFrames()
-    /// The open drawer and where it is drawn; nil while none is open.
+    /// The open drawer's style and where it is drawn; nil until one has been shown.
     var drawer: DrawerFrame?
     /// What is being dragged and what the pointer is over. nil between drags.
     @Published private(set) var live: (item: DragItem, target: DropTarget?)? {
@@ -304,10 +304,8 @@ extension WorkbenchModel {
     /// bar is drawn over the bench, so it answers first wherever it is.
     func dragTab(_ item: DragItem, to point: CGPoint) {
         let target: DropTarget?
-        if case let .drawer(name) = item {
-            target = drag.drawer.flatMap {
-                $0.name == name ? DrawerDrop.resolve(at: point, frame: $0) : nil
-            }
+        if case .drawer = item {
+            target = drag.drawer.flatMap { DrawerDrop.resolve(at: point, frame: $0) }
         } else if drag.bar.strip.contains(point), let document {
             target = WorkspaceDrop.resolve(item, at: point, document: document, frames: drag.bar)
         } else if case let .pane(pane) = item, let bench {

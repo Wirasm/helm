@@ -31,10 +31,9 @@ enum DrawerDrop {
     }
 }
 
-/// The open drawer, as `DrawerHost` draws it: its name, its style and the area it is drawn over,
-/// in `BenchDrag.space`.
+/// The open drawer, as `DrawerHost` draws it: its style and the area it is drawn over, in
+/// `BenchDrag.space`. Only an open drawer's header can be dragged, so it is the one this is.
 struct DrawerFrame: Equatable {
-    let name: String
     let area: CGRect
     let style: DrawerStyle
 }

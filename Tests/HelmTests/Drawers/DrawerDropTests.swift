@@ -13,7 +13,7 @@ final class DrawerDropTests: XCTestCase {
     /// A drawer on the right at half the width, over a bench drawn 1000×600 below a 40-point bar.
     private let area = CGRect(x: 0, y: 40, width: 1000, height: 600)
     private lazy var onTheRight = DrawerFrame(
-        name: "notes", area: area, style: DrawerStyle(edge: .right, size: 0.5))
+        area: area, style: DrawerStyle(edge: .right, size: 0.5))
 
     // MARK: - Which edge the pointer means
 
@@ -50,8 +50,7 @@ final class DrawerDropTests: XCTestCase {
         XCTAssertNil(
             DrawerDrop.resolve(
                 at: CGPoint(x: 500, y: 600),
-                frame: DrawerFrame(
-                    name: "archon", area: area, style: DrawerStyle(edge: .bottom, size: 0.4))))
+                frame: DrawerFrame(area: area, style: DrawerStyle(edge: .bottom, size: 0.4))))
     }
 
     // MARK: - The drop
