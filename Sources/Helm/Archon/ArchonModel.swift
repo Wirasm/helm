@@ -86,7 +86,7 @@ final class ArchonModel: ObservableObject {
     /// The gate the composer is currently answering, if any. Nil is the launch composer.
     @Published private(set) var reply: ArchonGateReply?
     /// A set rather than a flag: two gates are independently answerable, and a spinner over the
-    /// whole rail would say the wrong thing about the other one.
+    /// whole drawer would say the wrong thing about the other one.
     @Published private(set) var busyRuns: Set<String> = []
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []

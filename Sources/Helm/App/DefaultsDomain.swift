@@ -127,9 +127,9 @@ enum DefaultsDomain {
 
     /// The window's title, which is also what `winshot --list` sees.
     ///
-    /// Two helms are the *normal* state while building helm, and `docs/running-helm.md` records that
-    /// they are indistinguishable by name — so an isolated one says so in the one place an
-    /// agent outside the process can read. That makes this a safety mechanism another tool
+    /// Two helms are the *normal* state while building helm, and `docs/running-helm.md`
+    /// records that they are indistinguishable by name — so an isolated one says so in the one
+    /// place an agent outside the process can read. That makes this a safety mechanism another tool
     /// depends on, not decoration, which is why it is pinned rather than eyeballed.
     static var windowTitle: String { windowTitle(for: activeDomain) }
 

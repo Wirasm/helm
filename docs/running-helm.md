@@ -66,7 +66,8 @@ socket outright). Panes export
 daemon. Prove isolation with `defaults read <name>` and the negative with `defaults read
 com.wirasm.helm`.
 
-Refusals are loud: the legacy `helm` domain, a path, `NSGlobalDomain`, and a name benchd's
+Two helms are otherwise indistinguishable by name, to `winshot` and to a reader. Refusals are
+loud: the legacy `helm` domain, a path, `NSGlobalDomain`, and a name benchd's
 `SuiteName` cannot take (such as `Helm-Bench`) stop the launch or the pane rather than fall back to
 the operator's state. An isolated instance shows its suite on a status-bar capsule and is titled
 `helm — <name>`. The window frame is AppKit's autosave and is not moved by the suite. Do not

@@ -29,7 +29,7 @@ named.
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build`, `swift test`, `xcodegen generate`, unless every change is one no Swift build or test reads | Swift toolchain, xcodegen |
 | `skills` | the `helm-board` and `post-canvas` skill gates | node, zsh, python3, git, lsof |
-| `daemon` | `daemon/test.sh`, when `daemon/`, a `bench-*` or the `helm-canvas` skill, `RenderableFile.swift`, the shell integration or GhosttyTerminal's `Package.swift` changed | cargo, lsof |
+| `daemon` | `daemon/test.sh`, when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill, `RenderableFile.swift`, the shell integration or GhosttyTerminal's `Package.swift` changed | cargo, lsof |
 | `pi` | the `pi-extensions` gate, when `pi/` changed | node, `npm install` in `pi/`, lsof |
 
 "Changed" means against `origin/development`, committed or not. The path rules live only in
@@ -72,7 +72,8 @@ A `.build` from before the official-Ghostty move fails with `missing required mo
 Several agents share this machine and the operator's live helm. These rules are not optional.
 
 - **Never restart a running helm without warning the operator.** A live window may be hosting his
-  session. **Never restart benchd unless he has said nothing is in flight**: it ends every session.
+  session. **Never restart benchd unless he has said nothing is in flight**: it ends every session
+  (`just resume-all` brings the panes back).
 - **Kill only a pid you have verified is yours, never a pattern.** `pkill -f` cannot tell the
   operator's helm from a worktree build.
 - **Anything you spawn must die without you.** Bound its lifetime: `timeout <n> <cmd>`, or a loop

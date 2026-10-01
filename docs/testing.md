@@ -89,10 +89,10 @@ a Sentry envelope with a minidump: read the stack before guessing. #462 was one 
 
 ## Tests that sleep
 
-`swift test` is not load-sensitive, with one documented exception:
-`CanvasEditorTests.testARunOfTypingIsOneSave`, whose assertion needs a `Task.sleep` to stay
-inside a deadline. `Task.sleep(for:)` is a floor, so a loaded machine overshoots it, the behaviour
-happens correctly, and the test calls that a failure. It carries a 50× margin and says so. A test
+`swift test` is not load-sensitive, with two documented exceptions whose assertions need a
+`Task.sleep` to stay inside a deadline: `CanvasEditorTests.testARunOfTypingIsOneSave` (a 50×
+margin) and `KeyPopupTests.testARenewedHoldRestartsTheDelay` (0.8 s against a 2 s delay). `Task.sleep(for:)` is a floor, so a loaded machine overshoots it, the behaviour
+happens correctly, and the test calls that a failure. Each says so in its header. A test
 that sleeps to let a window elapse is only made more certain by an overshoot. Say which direction
 a new sleep goes before adding one.
 
