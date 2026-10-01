@@ -191,6 +191,7 @@ mod tests {
                 extra_args: Vec::new(),
                 codex_server: None,
                 codex_hook_trust: None,
+                codex_trust_folder: false,
             };
             assert_eq!(argv(&spec).unwrap().0, kind.name());
             if matches!(kind, AgentKind::Codex) {

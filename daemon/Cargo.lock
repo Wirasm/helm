@@ -46,6 +46,7 @@ dependencies = [
  "bench-vt",
  "libc",
  "rustix",
+ "serde_json",
 ]
 
 [[package]]
@@ -90,6 +91,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "toml",
 ]
 
 [[package]]
