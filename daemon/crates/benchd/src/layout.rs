@@ -15,8 +15,8 @@
 
 use crate::{Core, shells};
 use bench_doc::{
-    Caller, CanvasSource, Destination, Document, Focus, Pane, PaneId, Placement, Rules, Surface,
-    Target,
+    Caller, CanvasSource, Destination, Document, Focus, Pane, PaneId, Place, Placement, Rules,
+    Surface, Target,
 };
 use bench_session::AgentKind;
 use bench_wire::{
@@ -405,6 +405,7 @@ pub fn apply(
             // pane would join, and may send it to a drawer themselves.
             let target = match into {
                 OpenInto::Drawer(name) => return open_in_drawer(doc, name, surface, focus),
+                OpenInto::At(place) => return open_at(doc, *place, surface, focus),
                 OpenInto::Active => Target::Active,
                 OpenInto::Workspace(path) => Target::Workspace(path.clone()),
             };
@@ -443,8 +444,7 @@ pub fn apply(
         LayoutVerb::PaneMove { pane, to } => doc
             .edit(Target::Pane(*pane), focus, |b| match *to {
                 MoveTo::Step(direction) => b.move_pane(*pane, direction, focus),
-                MoveTo::Tab { slot, before } => b.move_pane_to_tab(*pane, slot, before, focus),
-                MoveTo::Beside { slot, side } => b.move_pane_beside(*pane, slot, side, focus),
+                MoveTo::Place(place) => b.move_pane_to(*pane, place, focus),
             })
             .map(|_| Outcome::default()),
         LayoutVerb::PaneName { pane, name, .. } => doc
@@ -501,6 +501,25 @@ fn open_in_drawer(
     let pane = Pane::new(surface.clone());
     let id = pane.id;
     let landed = doc.place_in_drawer(drawer, pane, focus)?;
+    Ok(Outcome {
+        created: (landed == id).then_some(id),
+        pane: Some(landed),
+    })
+}
+
+/// A new pane at a place on the bench holding its slot, or the one there already showing it,
+/// moved to that place.
+fn open_at(
+    doc: &mut Document,
+    place: Place,
+    surface: &Surface,
+    focus: Focus,
+) -> Result<Outcome, bench_doc::Refusal> {
+    let pane = Pane::new(surface.clone());
+    let id = pane.id;
+    let landed = doc.edit(Target::Slot(place.slot()), focus, |b| {
+        b.open_at(pane, place, focus)
+    })?;
     Ok(Outcome {
         created: (landed == id).then_some(id),
         pane: Some(landed),

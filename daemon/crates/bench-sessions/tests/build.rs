@@ -916,6 +916,7 @@ fn an_agent_whose_hooks_report_is_listed_in_its_pane_once_and_only_while_it_live
         pid,
         activity: Activity::Idle,
         handle: format!("ws-{session}"),
+        reported_ms: 0,
     };
     // A pi agent: no registry, nothing in its pane's foreground; its hooks are the only source.
     f.live.insert(300, now_ms());
@@ -953,9 +954,154 @@ fn a_hosted_session_running_outside_helm_is_neither_in_a_pane_nor_finished() {
         pid: 400,
         activity: Activity::Busy,
         handle: "ws-resumed".into(),
+        reported_ms: 0,
     });
     assert!(ids(&f.build()).is_empty(), "{:?}", ids(&f.build()));
     // Once it exits, the record's finished row is back.
     f.live.remove(&400);
     assert_eq!(ids(&f.build()), ["resumed-elsewhere"]);
+}
+
+/// The agent benchd spawned, as its hooks report it in no pane under the spawn's handle.
+fn spawned(
+    harness: Harness,
+    session: &str,
+    handle: &str,
+    pid: u32,
+    activity: Activity,
+    at: u64,
+) -> HookedAgent {
+    HookedAgent {
+        harness,
+        session: session.into(),
+        cwd: String::new(),
+        pane: None,
+        pid,
+        activity,
+        handle: handle.into(),
+        reported_ms: at,
+    }
+}
+
+#[test]
+fn a_bench_codex_or_pi_session_is_listed_as_its_hooks_report_it() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let codex = |session: &str, handle: &str, pid| BenchSession {
+        session: session.into(),
+        harness: Harness::Codex,
+        runtime_session: None,
+        cwd: ws.clone(),
+        pid,
+        live: true,
+        spawned_ms: now_ms(),
+        handle: handle.into(),
+    };
+    f.bench.push(codex("s2", "worker", 401));
+    f.bench
+        .push(bench_session("s3", "pi-1", &ws, "pi-worker", true));
+    f.live.insert(401, 0);
+    f.live.insert(500, 0);
+    // codex ran two threads in one process (`/new`): the one it reported last is running.
+    f.hooked.push(spawned(
+        Harness::Codex,
+        "thread-a",
+        "worker",
+        401,
+        Activity::Busy,
+        1,
+    ));
+    f.hooked.push(spawned(
+        Harness::Codex,
+        "thread-b",
+        "worker",
+        401,
+        Activity::Idle,
+        2,
+    ));
+    f.hooked.push(spawned(
+        Harness::Pi,
+        "pi-1",
+        "pi-worker",
+        500,
+        Activity::Busy,
+        1,
+    ));
+    write(
+        &f.home().join(".codex/session_index.jsonl"),
+        &jsonl(&[json!({"id": "thread-b", "thread_name": "Fix the build"})]),
+    );
+    let built = f.build();
+    assert_eq!(
+        ids(&built),
+        ["pi-1", "thread-b"],
+        "named by the thread, not s2"
+    );
+    let r = row(&built, "thread-b").unwrap();
+    assert_eq!(*activity(r), Activity::Idle);
+    assert_eq!(r.name.as_deref(), Some("Fix the build"));
+    assert_eq!(
+        r.host,
+        Host::Bench {
+            session: "s2".into()
+        }
+    );
+    assert_eq!(*activity(row(&built, "pi-1").unwrap()), Activity::Busy);
+
+    // An agent with another handle, or one in a pane, is not this session's.
+    f.hooked.clear();
+    f.hooked.push(spawned(
+        Harness::Codex,
+        "elsewhere",
+        "other",
+        401,
+        Activity::Idle,
+        1,
+    ));
+    let mut in_pane = spawned(Harness::Codex, "in-pane", "worker", 401, Activity::Idle, 1);
+    in_pane.pane = Some(PaneId::parse(PANE).unwrap());
+    f.hooked.push(in_pane);
+    let built = f.build();
+    assert_eq!(*activity(row(&built, "s2").unwrap()), Activity::Unknown);
+}
+
+#[test]
+fn a_finished_codex_session_is_listed_from_its_rollout() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let (kept, gone) = (
+        "01a0f663-47f0-7d53-b41a-68f3a1f656ab",
+        "01a0f663-0000-7000-8000-000000000000",
+    );
+    write(
+        &f.home().join(format!(
+            ".codex/sessions/2026/10/01/rollout-2026-10-01T10-34-56-{kept}.jsonl"
+        )),
+        &jsonl(&[json!({"type": "session_meta", "payload": {"id": kept}})]),
+    );
+    for id in [kept, gone] {
+        f.hosted.push(HostedSession {
+            harness: Harness::Codex,
+            id: id.into(),
+            cwd: ws.clone(),
+            via: HostedVia::Bench {
+                session: "s5".into(),
+                handle: Some("worker".into()),
+            },
+            recorded_at: "2026-10-01T07:35:00Z".into(),
+            forked_from: None,
+        });
+    }
+    let built = f.build();
+    assert_eq!(
+        ids(&built),
+        [kept],
+        "a thread whose rollout is gone left nothing to resume"
+    );
+    let r = row(&built, kept).unwrap();
+    assert!(!r.state.is_running());
+    let OpenAction::Resume { argv, .. } = &r.open else {
+        panic!("{:?}", r.open);
+    };
+    assert_eq!(argv[..3], ["codex", "resume", kept]);
 }
