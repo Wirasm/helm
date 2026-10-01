@@ -845,8 +845,8 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         Err(_) => return,
     });
     let mut line = String::new();
-    // Read up to the larger cap `file/write`, `file/append` and `helm/answer` get; every other verb is held to
-    // `MAX_REQUEST_BYTES` once the line says which verb it is.
+    // Read up to the larger cap `file/write`, `file/append`, `helm/answer` and `browser/upload`
+    // get; every other verb is held to `MAX_REQUEST_BYTES` once the line says which verb it is.
     let mut limited = (&mut reader).take(FILE_REQUEST_MAX_BYTES as u64 + 1);
     if limited.read_line(&mut line).is_err() {
         respond(

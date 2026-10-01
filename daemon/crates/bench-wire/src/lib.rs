@@ -1355,7 +1355,7 @@ mod tests {
     }
 
     /// `fixtures/browser-upload.json`: the pane's upload and benchd's answer; helm's
-    /// `BenchWireConformanceTests` encodes the request and decodes the answer.
+    /// `BrowserUploadWireTests` encodes the request and decodes the answer.
     #[test]
     fn the_browser_upload_fixture_is_the_verb_and_its_answer() {
         let path =
