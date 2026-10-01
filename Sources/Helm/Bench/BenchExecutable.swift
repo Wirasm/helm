@@ -118,7 +118,9 @@ enum BenchExecutable {
     /// The version a `bench` says it is (`bench --version`), or nil when it says none: it is
     /// older than the flag or cannot run. Throws `NoAnswer` when it is still running after
     /// `seconds`, which says nothing about its version.
-    static func version(of bench: String, within seconds: TimeInterval = 2) throws(NoAnswer) -> String? {
+    static func version(
+        of bench: String, within seconds: TimeInterval = 2
+    ) throws(NoAnswer) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: bench)
         process.arguments = ["--version"]
