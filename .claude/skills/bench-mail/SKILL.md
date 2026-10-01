@@ -126,7 +126,7 @@ $BENCH wiring
   Without that setting, a push is held behind a dialog in the pane and the mail waits for the
   next prompt.
 - **codex:** merge `codex.merge` into `~/.codex/hooks.json`, then trust the hook once in
-  codex's `/hooks`. The command never changes, so it is trusted once.
+  plain `codex` (no `-p`: trust accepted under a profile covers only that profile). The command never changes, so it is trusted once.
 - **pi:** link `pi/extensions/bench` from a helm checkout into `~/.pi/agent/extensions/`.
 
 `bench wiring --check` reads the files and says what is missing (exit 3 until all of it is

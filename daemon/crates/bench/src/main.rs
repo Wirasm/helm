@@ -627,7 +627,11 @@ fn wiring(mode: Option<&str>) -> i32 {
 }
 
 /// What the operator does once so codex runs the bench's hooks, in the words its dialog uses.
-const CODEX_TRUST_STEP: &str = "open codex once and choose \"Trust all and continue\"";
+/// Plain `codex`, because codex 0.159.3 saves the trust a `codex -p <name>` session accepts in
+/// that profile's file, where only that profile reads it.
+const CODEX_TRUST_STEP: &str = "open plain `codex` (no `-p`) once and choose \"Trust all and \
+     continue\"; trust accepted under `codex -p <name>` is saved in ~/.codex/<name>.config.toml \
+     and covers only that profile";
 
 /// Why an event can still need review after that step: nothing in codex's dialog fixes these.
 const CODEX_TRUST_ELSE: &str = "an event still listed after that has its hook disabled in \
@@ -653,11 +657,21 @@ fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_lin
     let exists = PathBuf::from(bench).is_file();
     // A hook in the file runs only once codex trusts it, and only codex can say whether it
     // does: the trust record is a hash of codex's own normalized form of the hook.
-    let review = codex_hooks_list().map(|list| bench_wire::hook::codex_needs_review(&list, bench));
-    let trusted = review.as_ref().is_ok_and(Vec::is_empty);
+    let codex_home = codex_file.parent().unwrap_or(Path::new("."));
+    let review = codex_hooks_list().map(|list| {
+        let events = bench_wire::hook::codex_needs_review(&list, bench);
+        let profiles = codex_profile_trust(codex_home, &list, bench, &events);
+        (events, profiles)
+    });
+    let trusted = review.as_ref().is_ok_and(|(events, _)| events.is_empty());
     let mut codex = json!({ "file": codex_file, "missing_events": codex_missing });
     match review {
-        Ok(events) => codex["needs_review"] = json!(events),
+        Ok((events, profiles)) => {
+            codex["needs_review"] = json!(events);
+            if !profiles.is_empty() {
+                codex["trusted_only_under_profile"] = json!(profiles);
+            }
+        }
         Err(why) => codex["trust_unverified"] = json!(why),
     }
     if !trusted {
@@ -682,6 +696,46 @@ fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_lin
     } else {
         Status::Refused.exit_code()
     }
+}
+
+/// Of `needs_review`, the events each codex profile trusts (`<codex_home>/<name>.config.toml`),
+/// by profile name: the trust a `codex -p <name>` session saved where `hooks/list` cannot see
+/// it. Read-only; a file that does not parse counts as trusting nothing.
+fn codex_profile_trust(
+    codex_home: &Path,
+    hooks_list: &Value,
+    bench: &str,
+    needs_review: &[String],
+) -> serde_json::Map<String, Value> {
+    let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(codex_home)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry
+                .file_name()
+                .to_str()?
+                .strip_suffix(".config.toml")?
+                .to_owned();
+            Some((name, entry.path()))
+        })
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .filter_map(|(name, path)| {
+            let config: toml::Table = std::fs::read_to_string(path).ok()?.parse().ok()?;
+            let state = config.get("hooks")?.get("state")?;
+            let events: Vec<String> =
+                bench_wire::hook::codex_trusted_by(hooks_list, bench, |key| {
+                    Some(state.get(key)?.get("trusted_hash")?.as_str()?.to_owned())
+                })
+                .into_iter()
+                .filter(|event| needs_review.contains(event))
+                .collect();
+            (!events.is_empty()).then(|| (name, json!(events)))
+        })
+        .collect()
 }
 
 /// How long `wiring --check` waits for codex's answer. Measured: 60 ms on 0.159.3, 250 ms on

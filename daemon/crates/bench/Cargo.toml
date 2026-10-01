@@ -11,6 +11,8 @@ bench-wire = { path = "../bench-wire" }
 # `bench log` reads transcripts with the session list's own harness readers.
 bench-sessions = { path = "../bench-sessions" }
 serde_json.workspace = true
+# `wiring --check` reads the hook trust a codex profile saved (`~/.codex/<name>.config.toml`).
+toml.workspace = true
 # The attach client reads its terminal's size to keep the session's pty matching it, and hears
 # it change through SIGWINCH (libc: sigaction, pipe, poll).
 libc = "0.2"

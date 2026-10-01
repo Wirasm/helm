@@ -5075,6 +5075,88 @@ fn wiring_check_fails_until_codex_trusts_its_hooks() {
     );
 }
 
+/// codex 0.159.3 saves the trust a `codex -p <name>` session accepts in
+/// `~/.codex/<name>.config.toml`, which the app-server's `hooks/list` never reads: the operator
+/// trusted all eight under `-p yolo` and the check kept telling him to trust them again.
+#[test]
+fn wiring_check_names_trust_saved_only_under_a_codex_profile() {
+    let home = TestHome::claim("profile");
+    let h = &home.dir;
+    let plan = json_of(&bench(h, &["wiring"]));
+    let write = |rel: &str, text: &str| {
+        let path = h.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write(
+        ".claude/settings.json",
+        &plan["claude"]["merge"].to_string(),
+    );
+    write(".codex/hooks.json", &plan["codex"]["merge"].to_string());
+    write(".pi/agent/extensions/bench/index.ts", "");
+    let merge = &plan["codex"]["merge"]["hooks"];
+    let events: Vec<&String> = merge.as_object().unwrap().keys().collect();
+    let hooks: Vec<serde_json::Value> = events
+        .iter()
+        .map(|event| {
+            serde_json::json!({ "eventName": event, "trustStatus": "untrusted",
+                "key": format!("hooks.json:{event}:0:0"), "currentHash": format!("sha256:{event}"),
+                "command": merge[event.as_str()][0]["hooks"][0]["command"], "enabled": true })
+        })
+        .collect();
+    write(
+        "codex-hooks-list.json",
+        &serde_json::json!({ "data": [{ "hooks": hooks }] }).to_string(),
+    );
+    let state = |hash: &dyn Fn(&str) -> String| {
+        events
+            .iter()
+            .map(|e| {
+                format!(
+                    "[hooks.state.\"hooks.json:{e}:0:0\"]\ntrusted_hash = \"{}\"\n",
+                    hash(e)
+                )
+            })
+            .collect::<String>()
+    };
+    write(
+        ".codex/yolo.config.toml",
+        &state(&|e| format!("sha256:{e}")),
+    );
+    // Trust in a profile for an older definition of the hook covers nothing now.
+    write(
+        ".codex/old.config.toml",
+        &state(&|_| "sha256:before".into()),
+    );
+    let bin = write_agent_script(h, "codex", STUB_CODEX_APP_SERVER);
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let run = bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
+    assert_eq!(run.code, 3, "plain codex still runs none: {}", run.stdout);
+    let codex = &json_of(&run)["codex"];
+    assert_eq!(
+        codex["needs_review"].as_array().unwrap().len(),
+        8,
+        "{codex}"
+    );
+    assert_eq!(
+        codex["trusted_only_under_profile"],
+        serde_json::json!({ "yolo": codex["needs_review"] }),
+        "{codex}"
+    );
+    assert!(
+        codex["then"]
+            .as_str()
+            .unwrap()
+            .contains("plain `codex` (no `-p`)"),
+        "{codex}"
+    );
+}
+
 #[test]
 fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     let home = TestHome::claim("wiring");
