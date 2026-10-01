@@ -41,6 +41,7 @@ final class BrowserPaneModel: ObservableObject {
     let downloads: BrowserDownloads
     /// Pages asking for a file (#549).
     let uploads = BrowserUploads()
+    let pageInput = BrowserPageInput()
     /// Links the operator ⌘-clicked before the browser was reachable, oldest first. Each
     /// opens as a tab once the pane connects, so a click made while benchd's browser is
     /// still starting is not lost.
@@ -77,6 +78,11 @@ final class BrowserPaneModel: ObservableObject {
     init(endpoint: BenchEndpoint?) {
         self.endpoint = endpoint
         downloads = BrowserDownloads(endpoint: endpoint)
+        pageInput.isCurrent = { [weak self] destination in
+            self?.connection === destination.connection
+                && self?.inputSession == destination.session
+        }
+        pageInput.failed = { [weak self] message in self?.notice = message }
         startWatching()
     }
 
@@ -86,6 +92,7 @@ final class BrowserPaneModel: ObservableObject {
         watch?.cancel()
         watch = nil
         viewportTask?.cancel()
+        pageInput.reset()
         connection?.close()
         connection = nil
     }
@@ -124,6 +131,7 @@ final class BrowserPaneModel: ObservableObject {
             self.session = nil
             self.sessionTargets = [:]
             self.dialogs = [:]
+            self.pageInput.reset()
             self.listed = false
             switch ending {
             case let .refused(why):
@@ -206,6 +214,8 @@ final class BrowserPaneModel: ObservableObject {
             downloads.handle(event)
         case "Page.fileChooserOpened":
             handleChooser(event)
+        case "Page.frameNavigated":
+            handleNavigation(event)
         case "Page.frameStartedLoading", "Page.frameStoppedLoading":
             handleLoading(event)
         default:
@@ -218,6 +228,7 @@ final class BrowserPaneModel: ObservableObject {
         guard let held = event.sessionId, let target = sessionTargets[held] else { return }
         if event.method == "Page.javascriptDialogOpening" {
             if let opening = event.params(DialogOpening.self) {
+                if held == session { pageInput.reset() }
                 dialogs[target] = BrowserDialog(opening, session: held)
             }
             return
@@ -258,6 +269,8 @@ final class BrowserPaneModel: ObservableObject {
     private func attach(to target: String) {
         guard let connection else { return }
         let previous = session
+        session = nil
+        pageInput.reset()
         loadingFrames.removeAll()
         loading = false
         Task {
@@ -485,6 +498,13 @@ extension BrowserPaneModel {
         if loading != !loadingFrames.isEmpty { loading = !loadingFrames.isEmpty }
     }
 
+    private func handleNavigation(_ event: CDPConnection.Event) {
+        guard event.sessionId == session,
+            let navigation = event.params(FrameNavigation.self), navigation.frame.parentId == nil
+        else { return }
+        pageInput.reset()
+    }
+
     /// A page on show asked for a file. Only one the operator's own click opened gets a panel
     /// (`BrowserUploads`); the chosen files go to the input as paths on benchd's machine.
     private func handleChooser(_ event: CDPConnection.Event) {
@@ -521,7 +541,6 @@ extension BrowserPaneModel {
     }
 
 }
-
 // MARK: - Input from the surface
 
 extension BrowserPaneModel: BrowserInputSink {
@@ -529,42 +548,44 @@ extension BrowserPaneModel: BrowserInputSink {
     /// queues input sent to a stopped page and delivers it once the dialog is answered
     /// (measured, #544), so text typed at the page under a dialog would land in it afterwards.
     private var inputSession: String? {
-        guard let shown = tabs.showing, dialogs[shown] == nil else { return nil }
+        guard let shown = tabs.showing, dialogs[shown] == nil,
+            let session, sessionTargets[session] == shown
+        else { return nil }
         return session
     }
 
     func mouse(_ params: MouseEvent) {
-        guard let inputSession else { return }
+        guard let connection, let inputSession else { return }
         if params.type == "mousePressed" { uploads.operatorActed() }
-        connection?.send("Input.dispatchMouseEvent", params, session: inputSession)
+        pageInput.send(.mouse(params), to: .init(connection: connection, session: inputSession))
     }
 
     func key(_ params: KeyEvent) {
-        guard let inputSession else { return }
+        guard let connection, let inputSession else { return }
         uploads.operatorActed()
-        connection?.send("Input.dispatchKeyEvent", params, session: inputSession)
+        pageInput.send(.key(params), to: .init(connection: connection, session: inputSession))
     }
 
     func insertText(_ text: String) {
-        guard let inputSession else { return }
-        connection?.send("Input.insertText", InsertText(text: text), session: inputSession)
+        guard let connection, let inputSession else { return }
+        pageInput.send(.text(text), to: .init(connection: connection, session: inputSession))
+    }
+
+    func paste(_ payload: BrowserPaste) {
+        guard let connection, let inputSession else { return }
+        pageInput.send(.paste(payload), to: .init(connection: connection, session: inputSession))
     }
 
     func setComposition(_ text: String, selection: NSRange) {
-        guard let inputSession else { return }
-        connection?.send(
-            "Input.imeSetComposition", BrowserComposition(text: text, selection: selection),
-            session: inputSession)
+        guard let connection, let session = inputSession else { return }
+        pageInput.send(
+            .composition(BrowserComposition(text: text, selection: selection)),
+            to: .init(connection: connection, session: session))
     }
 
     func textCaretRect() async -> CGRect? {
         guard let connection, let session = inputSession else { return nil }
-        let result = try? await connection.call(
-            "Runtime.evaluate",
-            Evaluate(expression: BrowserTextInput.caretExpression, returnByValue: true),
-            session: session, returning: Evaluated<TextCaret>.self)
-        guard session == inputSession, let caret = result?.result.value else { return nil }
-        return CGRect(x: caret.x, y: caret.y, width: caret.width, height: caret.height)
+        return await pageInput.caret(to: .init(connection: connection, session: session))
     }
 
     /// A CDP call to the page the operator's input goes to: nil under a dialog, with no browser,
@@ -606,6 +627,10 @@ private struct CreateTarget: Encodable { let url: String }
 private struct Created: Decodable { let targetId: String }
 private struct CloseTarget: Encodable { let targetId: String }
 private struct FrameEvent: Decodable { let frameId: String }
+private struct FrameNavigation: Decodable {
+    struct Frame: Decodable { let parentId: String? }
+    let frame: Frame
+}
 private struct DownloadBehavior: Encodable {
     let behavior: String
     let eventsEnabled: Bool
@@ -649,13 +674,6 @@ private struct Screencast: Encodable {
     let everyNthFrame: Int
 }
 private struct FrameAck: Encodable { let sessionId: Int }
-private struct TextCaret: Decodable {
-    let x: Double
-    let y: Double
-    let width: Double
-    let height: Double
-}
-private struct InsertText: Encodable { let text: String }
 private struct Navigate: Encodable { let url: String }
 struct Evaluate: Encodable {
     let expression: String

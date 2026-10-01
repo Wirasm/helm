@@ -16,6 +16,7 @@ final class BrowserTextInputTests: XCTestCase {
         func mouse(_: BrowserPaneModel.MouseEvent) {}
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
+        func paste(_: BrowserPaste) {}
         func textCaretRect() async -> CGRect? { CGRect(x: 40, y: 20, width: 1, height: 18) }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
