@@ -71,7 +71,9 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   `--dangerously-bypass-approvals-and-sandbox`, pi with `--approve`. `--model` and `--effort`
   pick the model. `--arg <flag>` adds a flag after the posture; it never replaces it.
 - `--resume <session-id>` re-enters a claude, codex or pi conversation instead of starting one
-  (codex's id is its thread id, which its hook records).
+  (codex's id is its thread id, which its hook records). Without `--prompt-file` its first
+  message is benchd's resume notice, which tells it its last turn was interrupted and to carry
+  on; `bench resume` and `bench restore` send the same. A `--prompt-file` replaces the notice.
 - `--fork <session-id>` starts a new claude, codex or pi conversation that begins as a copy of
   that one, to ask about its work while the original carries on untouched. The fork gets its own
   id (the answer's `runtime_session`, null for codex until its hook reports the fork's thread;

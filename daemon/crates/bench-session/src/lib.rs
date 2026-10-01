@@ -161,9 +161,9 @@ pub struct SpawnSpec {
     /// The first prompt's file. argv carries a sentence naming it, never its text: the
     /// agent reads it as its first act, so nothing waits for a TUI to be ready and nothing is
     /// typed into the pty (#358), and `ps` shows a path rather than a plan (helm #93). The
-    /// file must outlive the spawn. A resume carries one only when the caller sends a new
-    /// message into the resumed conversation (`bench spawn --resume --prompt-file`); `bench
-    /// resume` re-enters without one.
+    /// file must outlive the spawn. A resume always carries one: the caller's new message
+    /// (`bench spawn --resume --prompt-file`), else the notice benchd writes for it
+    /// (`spawn::wire` in benchd), never the prompt of an earlier spawn.
     pub prompt_file: Option<String>,
     /// The caller's own flags, after the posture and before the prompt (`--remote-control`,
     /// say). They add to the posture, never replace it: a posture removes a prompt, and the
@@ -184,6 +184,20 @@ pub struct SpawnSpec {
 }
 
 impl SpawnSpec {
+    /// The spec that re-enters conversation `id` as this one ran it: the same agent, directory,
+    /// model, posture and caller flags, and no first prompt. An earlier spawn's prompt is never
+    /// sent again; benchd gives the resume its own notice when it wires the session.
+    pub fn resuming(&self, id: String) -> SpawnSpec {
+        SpawnSpec {
+            conversation: Conversation::Resume(id),
+            prompt_file: None,
+            settings: None,
+            codex_server: None,
+            codex_hook_trust: None,
+            ..self.clone()
+        }
+    }
+
     /// Whether the app-server holds this codex session's permissions, so its TUI must carry
     /// none: a served resume or fork, where codex exits on a permission flag ("Permission
     /// overrides are not supported when resuming a remote task", measured on 0.157.0, and
