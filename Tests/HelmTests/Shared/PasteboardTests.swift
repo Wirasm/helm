@@ -41,4 +41,14 @@ final class PasteboardTests: XCTestCase {
 
         XCTAssertEqual(Pasteboard.path(of: folder), "/tmp/helm")
     }
+
+    /// A copied canvas path goes back to benchd as often as anywhere: an agent handed it runs
+    /// `bench open` with it, and benchd places a canvas by the exact path. So it is spelled as the
+    /// bench spells it, `/private` included, or the same file opens as a second canvas.
+    func testACopiedPathUnderPrivateTmpKeepsItsPrefix() {
+        XCTAssertEqual(
+            Pasteboard.path(of: URL(fileURLWithPath: "/private/tmp")), "/private/tmp")
+        XCTAssertEqual(
+            Pasteboard.path(of: URL(fileURLWithPath: "/private/etc/hosts")), "/private/etc/hosts")
+    }
 }

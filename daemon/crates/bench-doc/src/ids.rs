@@ -54,7 +54,8 @@ uuid_id!(
 
 /// An absolute path in one canonical spelling: `.` and empty components dropped, `..`
 /// collapsed lexically, no trailing slash. Symlinks are **not** resolved — the path the
-/// caller named is the path the bench shows (helm's `FilesystemPath.normalized` rule).
+/// caller named is the path the bench shows, `/private/tmp` included. helm's copy of the rule
+/// is `FilesystemPath.standardized`, and `fixtures/standard-path.json` holds both to one table.
 ///
 /// It is a type rather than a helper because placement compares sources **by value**
 /// (`Bench::pane_showing`): an unstandardised path silently fails to match and ⌘-clicking
@@ -109,23 +110,25 @@ impl fmt::Display for StandardPath {
 mod tests {
     use super::*;
 
+    /// `fixtures/standard-path.json` is the table helm's `FilesystemPath.standardized` answers
+    /// too (`StandardizedPathTests`), so a canvas path benchd's document holds and the path
+    /// helm writes its live file at are spelled alike. Its `/private` rows are the ones helm got
+    /// wrong: it dropped the prefix, and the live file's mail found no canvas.
     #[test]
-    fn a_path_has_one_spelling() {
-        for (raw, want) in [
-            ("/tmp/plan.md", "/tmp/plan.md"),
-            ("/tmp/./plan.md", "/tmp/plan.md"),
-            ("/tmp//a/../plan.md", "/tmp/plan.md"),
-            ("/tmp/work/", "/tmp/work"),
-            ("/", "/"),
-            ("/..", "/"),
-        ] {
+    fn the_standard_path_fixture_has_one_spelling_per_row() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/standard-path.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let table: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let rows = table["rows"].as_array().unwrap();
+        assert!(!rows.is_empty());
+        for row in rows {
+            let raw = row["raw"].as_str().unwrap();
+            let want = row["standard"].as_str().unwrap();
             assert_eq!(StandardPath::new(raw).unwrap().as_str(), want, "{raw}");
         }
-    }
-
-    #[test]
-    fn a_relative_path_is_refused_not_resolved() {
-        for raw in ["plan.md", "./plan.md", "~/plan.md", ""] {
+        for raw in table["refused"].as_array().unwrap() {
+            let raw = raw.as_str().unwrap();
             assert!(StandardPath::new(raw).is_err(), "{raw:?} should be refused");
         }
     }
