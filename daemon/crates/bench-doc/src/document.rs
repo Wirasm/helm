@@ -19,7 +19,7 @@
 //! agent's pane landing in a drawer badges it instead. A drawer operation never touches a
 //! workspace, so toggling one cannot re-lay-out the bench under it.
 
-use crate::bench::{Bench, Focus, Pane};
+use crate::bench::{Bench, Focus, Pane, Placement};
 use crate::drawer::{Drawer, DrawerName};
 use crate::ids::{ColumnId, PaneId, SlotId, StandardPath};
 use crate::refusal::Refusal;
@@ -343,6 +343,76 @@ impl Document {
             doc.index_of(path)?;
             doc.active = Some(path.clone());
             Ok(())
+        })
+    }
+
+    /// Reorder the workspaces (#178, a workspace tab dropped in a gap of the bar): `path` goes
+    /// before `before`, or last. `Ok(false)` where it already is: before itself, before the
+    /// workspace already after it, or last when it is last. Moves no focus.
+    pub fn move_workspace(
+        &mut self,
+        path: &StandardPath,
+        before: Option<&StandardPath>,
+        focus: Focus,
+    ) -> Result<bool, Refusal> {
+        let from = self.index_of(path)?;
+        if let Some(before) = before {
+            self.index_of(before)?;
+        }
+        let next = self.workspaces.get(from + 1).map(|w| &w.path);
+        if before == Some(path) || before == next {
+            return Ok(false);
+        }
+        self.commit(focus, |doc| {
+            let moved = doc.workspaces.remove(from);
+            let at = match before {
+                Some(before) => doc.index_of(before)?,
+                None => doc.workspaces.len(),
+            };
+            doc.workspaces.insert(at, moved);
+            Ok(true)
+        })
+    }
+
+    /// Move a pane to another workspace's bench (#178, a tab dropped on a workspace tab), as a
+    /// tab of that bench's focused slot: the drop said "put it there", which is not the question
+    /// the placement rules answer about a new pane. Its own bench gives it up by `close`'s rule,
+    /// so a workspace's last pane cannot leave, and a bench that already shows its surface refuses
+    /// it, the one `pane/open` would bring forward instead (`Surface::already_shows`).
+    ///
+    /// With `Take` focus follows the pane, as it does every move: that workspace becomes the one
+    /// on screen with the pane focused. `Ok(false)` when it is already there.
+    pub fn move_pane_to_workspace(
+        &mut self,
+        pane: PaneId,
+        path: &StandardPath,
+        focus: Focus,
+    ) -> Result<bool, Refusal> {
+        let from = self.resolve(&Target::Pane(pane))?;
+        let to = self.index_of(path)?;
+        if from == to {
+            return Ok(false);
+        }
+        let surface = &self.workspaces[from]
+            .bench
+            .pane(pane)
+            .ok_or(Refusal::UnknownPane(pane))?
+            .surface;
+        if let Some(shown) = self.workspaces[to].bench.pane_showing(surface) {
+            return Err(Refusal::AlreadyShown {
+                pane: shown,
+                workspace: path.clone(),
+            });
+        }
+        self.commit(focus, |doc| {
+            let moved = doc.workspaces[from].bench.remove(pane)?;
+            let bench = &mut doc.workspaces[to].bench;
+            let slot = bench.focused_slot();
+            bench.place(moved, Placement::Tab(slot), focus)?;
+            if focus == Focus::Take {
+                doc.active = Some(path.clone());
+            }
+            Ok(true)
         })
     }
 

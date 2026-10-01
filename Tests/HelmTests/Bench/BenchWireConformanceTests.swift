@@ -87,7 +87,7 @@ final class BenchWireConformanceTests: XCTestCase {
         let sampled = Set(requests.map(\.verb.name))
         let helmSends: Set<String> = [
             "bench/get", "workspace/open", "workspace/close", "workspace/activate",
-            "pane/open",
+            "workspace/move", "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
             "focus/slot", "focus/step", "focus/waiting", "layout/resize", "drawer/toggle",
         ]

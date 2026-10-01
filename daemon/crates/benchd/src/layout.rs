@@ -400,6 +400,9 @@ pub fn apply(
             doc.activate(path, focus)?;
             Ok(Outcome::default())
         }
+        LayoutVerb::WorkspaceMove { path, before } => doc
+            .move_workspace(path, before.as_ref(), focus)
+            .map(|_| Outcome::default()),
         LayoutVerb::PaneOpen(PaneOpen { into, surface }) => {
             // A named drawer bypasses the rules; otherwise they decide, against the bench the
             // pane would join, and may send it to a drawer themselves.
@@ -441,12 +444,7 @@ pub fn apply(
             doc.close_pane(*pane, focus).map(|()| Outcome::default())
         }
         LayoutVerb::PaneShow { pane } => doc.show_pane(*pane, focus).map(|()| Outcome::default()),
-        LayoutVerb::PaneMove { pane, to } => doc
-            .edit(Target::Pane(*pane), focus, |b| match *to {
-                MoveTo::Step(direction) => b.move_pane(*pane, direction, focus),
-                MoveTo::Place(place) => b.move_pane_to(*pane, place, focus),
-            })
-            .map(|_| Outcome::default()),
+        LayoutVerb::PaneMove { pane, to } => move_pane(doc, *pane, to, focus),
         LayoutVerb::PaneName { pane, name, .. } => doc
             .name_pane(*pane, name.clone(), focus)
             .map(|_| Outcome::default()),
@@ -489,6 +487,27 @@ pub fn apply(
             }
         }
     }
+}
+
+/// `pane/move`: a place on the pane's own bench, or another workspace's bench, which only the
+/// document can reach.
+fn move_pane(
+    doc: &mut Document,
+    pane: PaneId,
+    to: &MoveTo,
+    focus: Focus,
+) -> Result<Outcome, bench_doc::Refusal> {
+    let on_its_bench = Target::Pane(pane);
+    let moved = match to {
+        MoveTo::Workspace(path) => doc.move_pane_to_workspace(pane, path, focus),
+        MoveTo::Step(direction) => doc.edit(on_its_bench, focus, |b| {
+            b.move_pane(pane, *direction, focus)
+        }),
+        MoveTo::Place(place) => {
+            doc.edit(on_its_bench, focus, |b| b.move_pane_to(pane, *place, focus))
+        }
+    };
+    moved.map(|_| Outcome::default())
 }
 
 /// A new pane in a drawer, or the one there already showing it.

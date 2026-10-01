@@ -45,8 +45,9 @@ BENCH="${BENCH:-bench}"
 "$BENCH" get pane "$PANE"
 ```
 
-The answer has the pane, its `workspace` (or `drawer`), `visible` (on screen now) and `focused`
-(holds his keyboard). `bench get` prints the whole bench. Both cover hidden and parked panes.
+The answer has the pane, its `workspace` and `slot` (or `drawer`), `visible` (on screen now) and
+`focused` (holds his keyboard). `bench get` prints the whole bench, every slot's id among it. Both
+cover hidden and parked panes.
 
 ## Start another agent
 
@@ -93,14 +94,25 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
 
 ```bash
 BENCH="${BENCH:-bench}"
+SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["slot"])')
+"$BENCH" move "$PANE" --beside "$SLOT" --side right
 "$BENCH" name "$PANE" "review of the plan"
 "$BENCH" close "$PANE"
 ```
 
 - `bench show <pane>` makes it its slot's visible tab, in a slot he is not typing in.
   `bench focus <pane> --asked` also gives it the keyboard.
-- `bench move <pane> <left|right|up|down>` and `bench split <right|down>` rearrange around him.
-  A split still halves the column he is in; that is a layout change, not a focus change.
+- `bench move` puts a pane anywhere a drag in helm can, one destination at a time:
+  - `bench move <pane> <left|right|up|down>`: one step, the way his move keys go.
+  - `--tab <slot> [--before <pane>]`: into that slot as a tab, before the pane named or last.
+  - `--beside <slot> --side <left|right|up|down>`: a slot of its own above or below that slot,
+    or a column left or right of its column. Against the pane's own slot, a tab becomes a pane.
+  - `--workspace <path>`: into that workspace, as a tab of its focused slot. A workspace's last
+    pane cannot leave it, and a workspace already showing that file (or the browser) refuses it:
+    `bench show` the pane it names instead.
+- `bench split <right|down>` opens a new column or row. A split still halves the column he is in;
+  that is a layout change, not a focus change. Moving the pane that holds his keyboard needs
+  `--asked`.
 - `bench name` names a pane nobody has named, or one only the bench named. A name he chose needs
   `--rename`, which says he asked.
 - `bench close` closes a canvas or the browser outright, and a shell sitting at its prompt. A

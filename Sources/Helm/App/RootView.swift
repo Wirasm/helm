@@ -48,6 +48,7 @@ struct RootView: View {
             // bench's one door like every other gesture.
             WorkspaceBar(
                 model: model,
+                workbench: workbench,
                 select: {
                     workbench.send(.workspaceActivate(path: $0.path.value), by: .operatorGesture)
                 },
@@ -76,6 +77,14 @@ struct RootView: View {
                 .onChange(of: palette.isOpen) { _, open in if !open { returnKeyboard() } }
             StatusBarView(model: model, workbench: workbench, justRuns: justRuns)
         }
+        // One space for every drag (#178): the bar's tabs and the bench's slots report their frames
+        // in it, so a pane's tab can be dropped on a workspace's and the drop zone is drawn exactly
+        // where the views are (`BenchDrag`).
+        .overlay(alignment: .topLeading) { DropZoneOverlay(drag: workbench.drag) }
+        .coordinateSpace(name: BenchDrag.space)
+        // A file from Finder, opened where it is dropped (`FileDrop`). On the view that names
+        // the space, so the drop's location is measured in it; over the bar it resolves nowhere.
+        .onDrop(of: [.fileURL], delegate: FileDropDelegate(model: workbench))
         // ⇧⌘O: a folder on benchd's machine, checked there (M5c).
         .sheet(isPresented: $workbench.isWorkspacePickerOpen, onDismiss: returnKeyboard) {
             WorkspacePicker(prp: PrpStores(client: workbench.client)) { path in

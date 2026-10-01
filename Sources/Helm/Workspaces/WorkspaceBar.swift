@@ -16,6 +16,10 @@ struct WorkspaceBar: View {
     /// `TerminalManager`. The bar renders a dot; it does not learn what a registry is.
     @ObservedObject private var board = BoardModel.shared
     @ObservedObject private var keymap = Keymap.shared
+    /// Where a dragged tab goes (#178): a workspace tab reorders the bar, and a pane's tab dropped
+    /// here moves to that workspace. The bar reports its frames and its own tabs' drags; the
+    /// workbench resolves and sends (`WorkspaceDrop`).
+    let workbench: WorkbenchModel
     let select: (Workspace) -> Void
     let close: (Workspace) -> Void
 
@@ -47,6 +51,11 @@ struct WorkspaceBar: View {
         .padding(.horizontal, 8).padding(.vertical, 5)
         .foregroundStyle(Color.textPrimary)
         .background(ChromeBackground())
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .named(BenchDrag.space))
+        } action: {
+            workbench.drag.bar.strip = $0
+        }
         .task { await board.poll() }
     }
 
@@ -73,6 +82,7 @@ struct WorkspaceBar: View {
                 in: RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.chrome)
+        .modifier(DraggableWorkspaceTab(workbench: workbench, path: workspace.path))
         .contextMenu {
             Button("Close Workspace") { close(workspace) }
             Button("Copy Path") { Pasteboard.copy(workspace.path.value) }
@@ -80,5 +90,31 @@ struct WorkspaceBar: View {
         // Keyed on selection so the branch is asked again when the tab appears and whenever it
         // is switched to or away from (#379). `ForEach` already keys the tab by workspace.
         .task(id: isSelected) { await model.refreshBranch(for: workspace) }
+    }
+}
+
+/// A workspace tab reports where it is and can be dragged along the bar (#178), the way a pane's
+/// tab can (`SlotTabStrip`): four points of travel before it starts, so a click stays a click, and
+/// simultaneous with the button so its tap is not held back.
+private struct DraggableWorkspaceTab: ViewModifier {
+    let workbench: WorkbenchModel
+    let path: WorkspacePath
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .named(BenchDrag.space))
+                    .onChanged { workbench.dragTab(.workspace(path), to: $0.location) }
+                    .onEnded { workbench.dropTab(.workspace(path), at: $0.location) }
+            )
+            .onGeometryChange(for: CGRect.self) {
+                $0.frame(in: .named(BenchDrag.space))
+            } action: {
+                workbench.drag.bar.tabs[path] = $0
+            }
+            .onDisappear {
+                workbench.drag.bar.tabs[path] = nil
+                workbench.drag.abandon(.workspace(path))
+            }
     }
 }
