@@ -153,7 +153,10 @@ The skills are the guides: `bench-panes`, `bench-mail`, `bench-browser`, `bench-
   `rm` guard sat for six and a half hours). When one goes quiet, read its report
   (`bench sessions --all`) rather than adding a flag. A fork (`--fork`) is read-only on purpose.
 - **A spawn's prompt is a file that outlives the spawn**: `ps` shows its path, never its text
-  (#93). Claude Code must already trust `--cwd`; run `cd <dir> && claude` once by hand.
+  (#93). Claude Code must already trust `--cwd`; run `cd <dir> && claude` once by hand. codex
+  must trust `--cwd` itself (a trusted parent does not count) or it stops at "Trust this
+  folder?"; run `cd <dir> && codex` once. Trust is the operator's call either way.
+  `bench status` names the binary and version each agent spawns with (`agents`).
 - **Artifacts go to the project's `~/.prp/<key>/` store, never the repo**, and reach the bench
   through `bench open`. `notes/` is the operator's directory: never write there. He can edit any
   markdown canvas, and nothing tells you he did, so **read a file again before you rewrite it.**
