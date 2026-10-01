@@ -142,12 +142,16 @@ pub(crate) fn spawn(
     let mut cmd = Command::new(program);
     // Identity benchd's own launcher may carry: a Claude session's inbox and token, its
     // marker, and helm's pane. A session benchd spawns reports as itself (#358), never as
-    // whatever started the daemon.
+    // whatever started the daemon. And an alternate profile: every agent runs the operator's
+    // default one under HOME (#491), so a config dir the launcher pointed elsewhere stops here.
     for inherited in [
         "CLAUDE_CODE_MESSAGING_SOCKET",
         "CLAUDE_CODE_MESSAGING_TOKEN",
         "CLAUDECODE",
         "HELM_PANE",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
     ] {
         cmd.env_remove(inherited);
     }

@@ -114,9 +114,11 @@ enum PaneEnvironment {
     /// are untouched.
     ///
     /// **What the prefix costs is paid back by the login shell.** A pane runs `$SHELL` as a
-    /// login shell, so anything the operator genuinely *configured* — an export in
-    /// `~/.zshrc`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR` — is re-established inside the
-    /// pane. What does not come back is session state, which is exactly the part that lies.
+    /// login shell, so anything the operator genuinely *configured* in `~/.zshrc` is
+    /// re-established inside the pane. What does not come back is session state, which is
+    /// exactly the part that lies. An alternate profile (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+    /// `PI_CODING_AGENT_DIR`) is never passed on: agents run the operator's default one under
+    /// `HOME`, and benchd drops those three from every session it starts (#491).
     ///
     /// `ANTHROPIC_*` is deliberately **not** here: an API key is credentials the hosted agent
     /// needs, not an identity claim about a session it is not in.
