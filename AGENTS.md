@@ -28,7 +28,7 @@ its parts in order and ends with one line per part: `PASS`, `FAIL (rerun: <comma
 | `lint` | `make lint`: formatting and the size limits below | Swift toolchain |
 | `swift` | `swift build && swift test && xcodegen generate` (SwiftPM calls add `--disable-keychain`), unless every change is one no Swift build or test reads (`swift_ignores`: `docs/`, `pi/`, `daemon/` but not its fixtures, markdown outside `Sources/`, `Tests/` and skills) | Swift toolchain, xcodegen |
 | `skills` | the board and post-canvas skill gates | node, zsh, python3, git, lsof |
-| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*` or the `helm-canvas` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo, lsof |
+| `daemon` | `daemon/test.sh`, only when `daemon/`, `daemon.yml`, a `bench-*`, the `helm-canvas` or the `helm-orchestrate` skill (their snippets run against a real benchd), `RenderableFile.swift` (the CLI's `bench open` checks its list) or the vendored shell integration (benchd builds it in) changed | cargo, lsof |
 | `pi` | the `pi-extensions` gate, only when `pi/` changed | node, `npm install` in `pi/`, lsof |
 
 "Changed" means against `origin/development`, committed or not. A missing tool is a `FAIL`
@@ -208,8 +208,8 @@ bash daemon/test.sh
 
 `daemon/` is the bench daemon (`benchd`) — a self-contained Rust cargo workspace, the
 same carve-out as `pi/`: its gate needs only the Rust toolchain, its CI job
-runs only when `daemon/**`, a `.claude/skills/bench-*` skill or `.claude/skills/helm-canvas/`
-(the gate executes those skills' snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
+runs only when `daemon/**`, a `.claude/skills/bench-*` skill, `.claude/skills/helm-canvas/` or
+`.claude/skills/helm-orchestrate/` (the gate executes those skills' snippets) or `Sources/Helm/Shared/RenderableFile.swift` (the CLI's `bench open` checks its list
 against it) changed, and the Swift gate never learns about it. Read
 `daemon/direction.md` before working there; the milestone sequence is
 `docs/future-planning/bench-roadmap.md` (target shape: `bench-architecture.md` beside it), and
@@ -899,13 +899,14 @@ cross-repo terms helm shares with kild and prp. See `docs/agents/domain.md`.
 
 ### The helm-local skills
 
-`.claude/skills/` holds fifteen; **seven are vendored** from `mattpocock/skills` and pinned in
+`.claude/skills/` holds sixteen; **seven are vendored** from `mattpocock/skills` and pinned in
 `skills-lock.json` by a `computedHash` — so a hand-edit to one of those is drift against its pin,
-not a change. The other eight are hand-written. The first four below are helm's, the surface an
+not a change. The other nine are hand-written. The first four below are helm's, the surface an
 agent hosted in helm actually uses, and each has a gate listed in *Working here* above (the
-canvas skill's snippets run in the daemon gate). The last
+canvas skill's snippets run in the daemon gate). The next
 four, `bench-panes`, `bench-mail`, `bench-browser` and `bench-sessions`, are benchd's, and their
-snippets run in the daemon gate's conformance suite.
+snippets run in the daemon gate's conformance suite. The last, `helm-orchestrate`, runs agents
+through all of them, and its snippets run there too.
 
 - **`helm-canvas`** — what a canvas *is* and what it can do, and `bench open`, which is how an
   artifact gets onto the bench. Read it before writing one; it deliberately says nothing about
@@ -927,6 +928,9 @@ snippets run in the daemon gate's conformance suite.
 - **`bench-sessions`** — who is working in a workspace (`bench sessions --all`), and what any of
   them did (`bench log <id>`, #421), read from the transcript without mailing the agent. The
   operator sees the same list in the `sessions` drawer (⌘⇧S, `Sources/Helm/Sessions/`).
+- **`helm-orchestrate`** — running a fleet of agents on the bench (#186): pick claude, codex or pi
+  and a model per task, brief each with the skills to use, track them with `bench sessions` and a
+  run file in `~/.prp/<key>/orchestration/`, land PRs through `helm-merge-queue`, and release.
 
 ### The two helm-local subagents
 
