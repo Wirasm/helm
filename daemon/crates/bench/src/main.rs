@@ -649,19 +649,13 @@ fn wiring_check(bench: &str, claude_file: &PathBuf, codex_file: &PathBuf, pi_lin
     let exists = PathBuf::from(bench).is_file();
     // A hook in the file runs only once codex trusts it, and only codex can say whether it
     // does: the trust record is a hash of codex's own normalized form of the hook.
+    let review = codex_hooks_list().map(|list| bench_wire::hook::codex_needs_review(&list, bench));
+    let trusted = review.as_ref().is_ok_and(Vec::is_empty);
     let mut codex = json!({ "file": codex_file, "missing_events": codex_missing });
-    let trusted = match codex_hooks_list() {
-        Ok(list) => {
-            let review = bench_wire::hook::codex_needs_review(&list, bench);
-            let trusted = review.is_empty();
-            codex["needs_review"] = json!(review);
-            trusted
-        }
-        Err(why) => {
-            codex["trust_unverified"] = json!(why);
-            false
-        }
-    };
+    match review {
+        Ok(events) => codex["needs_review"] = json!(events),
+        Err(why) => codex["trust_unverified"] = json!(why),
+    }
     if !trusted {
         codex["then"] = json!(CODEX_TRUST_STEP);
     }
