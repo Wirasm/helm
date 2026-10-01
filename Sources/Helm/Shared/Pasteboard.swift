@@ -25,5 +25,9 @@ enum Pasteboard {
     ///
     /// A function rather than a call-site expression so the choice is testable and there is
     /// exactly one place to change it if that judgement turns out wrong.
-    static func path(of url: URL) -> String { url.standardizedFileURL.path }
+    ///
+    /// **Spelled as the bench spells it** (`StandardizedPath`): a copied canvas path is often
+    /// handed to an agent that runs `bench open` with it, and benchd places a canvas by the exact
+    /// path, so `/tmp/…` for a `/private/tmp/…` canvas would open the file a second time.
+    static func path(of url: URL) -> String { StandardizedPath(url).value }
 }

@@ -83,5 +83,6 @@ nodes:
         reran: { type: array, items: { type: integer } }
         reasons: { type: object }
         stopped: { type: string }
+        pruned: { type: string }
         summary: { type: string }
-      required: [mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, summary]
+      required: [mode, base_sha, merged, tested, landed_through, held, unverified, queued, reran, reasons, stopped, pruned, summary]

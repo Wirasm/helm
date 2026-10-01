@@ -37,6 +37,10 @@ extension XCTestCase {
     ) throws -> CanvasAnnotation {
         var body = body
         body["kind"] = body["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        body["anchorKind"] = body["anchorKind"] ?? (body["id"] is String ? "element" : "excerpt")
+        if body["anchorKind"] as? String == "excerpt" {
+            body["source"] = body["source"] ?? body["text"]
+        }
         return try XCTUnwrap(
             CanvasAnnotation.decode(posted: body, comment: comment),
             "the annotation fixture this test is built on is not a body helm accepts any more — "

@@ -15,6 +15,10 @@ A verdict is only taken on a head that is up to date with `development`. A check
 on a head behind it ran against an older base and says nothing about the PR today, so the
 queue updates first and judges the new head's own checks.
 
+After the batch, the worktrees of the PRs it merged are pruned with the repo's own
+`scripts/prune-worktrees.sh`, whose checks keep any worktree with a process in it, uncommitted
+work or commits development does not have.
+
 State is one file, queue.json under $ARTIFACTS_DIR, rewritten after every transition. Across
 runs the record is $STATE_DIR/merge-queue/ledger.jsonl, one appended line per transition.
 
@@ -43,6 +47,9 @@ KICK_GRACE_SECONDS = 180
 MERGE_READBACK_SECONDS = 90
 MAX_PRS = 20  # the loop's max_iterations
 GH_TIMEOUT_SECONDS = 120  # one hung gh call must not outlive the queue's own deadlines
+# The repo's worktree pruner, in the checkout this queue runs from.
+PRUNE_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "prune-worktrees.sh"
+PRUNE_TIMEOUT_SECONDS = 900  # it removes worktrees one at a time, each bounded at 300s
 
 PASSING = {"success", "neutral", "skipped"}
 MERGEABLE = {"CLEAN", "UNSTABLE", "HAS_HOOKS"}
@@ -163,6 +170,29 @@ def verify_merge(parents: list[str], old_tip: str, head: str) -> bool:
     return parents == [old_tip, head]
 
 
+def prune_merged(branches: list[str], script: Path = PRUNE_SCRIPT) -> str:
+    """Remove the worktrees on `branches`, which this batch merged. The script decides what is
+    safe to remove; this only narrows it to these branches and reports its lines. A failure
+    here never touches the merge results, so it is reported rather than raised."""
+    if not branches:
+        return ""
+    if not script.is_file():
+        return f"not pruned: {script} is missing in this checkout"
+    argv = ["bash", str(script)] + [arg for b in branches for arg in ("--branch", b)]
+    # Its own process group, so a timeout stops the `git worktree remove` it is running too.
+    proc = subprocess.Popen(  # noqa: S603
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+    )
+    try:
+        said, _ = proc.communicate(timeout=PRUNE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, 9)
+        proc.communicate()
+        return f"not pruned: prune-worktrees did not finish in {PRUNE_TIMEOUT_SECONDS}s"
+    said = said.strip()
+    return said if proc.returncode == 0 else f"prune-worktrees exited {proc.returncode}: {said}"
+
+
 # --- I/O --------------------------------------------------------------------------------
 
 
@@ -267,12 +297,15 @@ class Queue:
         base_sha = gh_text("api", f"repos/{repo}/branches/{BASE}", "--jq", ".commit.sha")
         items = []
         for number in numbers:
-            view = gh_json("pr", "view", str(number), "--json", "number,title,url,headRefOid")
+            view = gh_json(
+                "pr", "view", str(number), "--json", "number,title,url,headRefOid,headRefName"
+            )
             items.append(
                 {
                     "number": number,
                     "title": view["title"],
                     "url": view["url"],
+                    "branch": view["headRefName"],
                     "head_sha": view["headRefOid"],
                     "status": "queued",
                     "reason": "",
@@ -532,7 +565,7 @@ class Queue:
             # Intake refused (its reason is on that node); there is nothing to report on.
             return {"mode": "", "base_sha": "", "merged": [], "tested": [], "landed_through": [],
                     "held": [], "unverified": [], "queued": [], "reran": [], "reasons": {},
-                    "stopped": "intake refused",
+                    "pruned": "", "stopped": "intake refused",
                     "summary": "intake refused; nothing ran"}
 
         def by(*statuses: str) -> list[int]:
@@ -553,6 +586,11 @@ class Queue:
             "reran": [i["number"] for i in self.items if i.get("reran")],
             "reasons": reasons,
             "stopped": self.state["stopped"],
+            # Only what this batch merged: a worktree whose PR merged in another run, or by
+            # hand, is `just prune-worktrees`'s to judge.
+            "pruned": prune_merged(
+                [i["branch"] for i in self.items if i["status"] == "merged" and i.get("branch")]
+            ),
         }
         out["summary"] = (
             f"{out['mode']}: {BASE} was {out['base_sha'][:8]}; merged {out['merged']}; "
@@ -561,6 +599,7 @@ class Queue:
             + (f"; not reached {out['queued']}" if out["queued"] else "")
             + (f"; re-ran a red check once for {out['reran']}" if out["reran"] else "")
             + (f"; stopped: {out['stopped']}" if out["stopped"] else "")
+            + (f"; prune: {out['pruned'].splitlines()[-1]}" if out["pruned"] else "")
         )
         return out
 

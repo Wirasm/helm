@@ -25,8 +25,13 @@ final class CanvasNoteHover: ObservableObject {
         }
         let payload: [String: String]
         switch anchor {
-        case let .element(id, text): payload = ["id": id, "text": text]
-        case let .quote(text): payload = ["text": text]
+        case let .element(id, text): payload = ["anchorKind": "element", "id": id, "text": text]
+        case let .quote(text): payload = ["anchorKind": "quote", "text": text]
+        case let .excerpt(source, text):
+            payload = ["anchorKind": "excerpt", "source": source, "text": text]
+        case let .unanchored(reason, _):
+            status[note.id] = "This note is not anchorable: \(reason)."
+            return
         }
         webView.callAsyncJavaScript(
             "return window.__helmHoverNote(anchor);", arguments: ["anchor": payload],

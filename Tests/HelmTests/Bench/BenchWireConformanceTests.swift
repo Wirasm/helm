@@ -60,6 +60,8 @@ final class BenchWireConformanceTests: XCTestCase {
         let open = try XCTUnwrap(document.drawers.first { $0.name == document.openDrawer })
         XCTAssertGreaterThan(open.panes.count, 1)
         XCTAssertTrue(document.drawers.contains { $0.badged && $0.name != open.name })
+        // Where the operator put them (#178), including a drawer that is gone.
+        XCTAssertEqual(document.drawerEdges, ["notes": .bottom, "browser": .left])
 
         XCTAssertEqual(
             try normalized(JSONEncoder().encode(document)), try normalized(data),
@@ -90,6 +92,7 @@ final class BenchWireConformanceTests: XCTestCase {
             "workspace/move", "pane/open",
             "pane/split", "pane/close", "pane/show", "pane/move", "pane/name",
             "focus/slot", "focus/step", "focus/waiting", "layout/resize", "drawer/toggle",
+            "drawer/place",
         ]
         XCTAssertEqual(sampled, helmSends)
     }

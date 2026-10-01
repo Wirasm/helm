@@ -193,7 +193,7 @@ private final class CommentWindow {
         file: StaticString, line: UInt
     ) throws -> CanvasSelection {
         let body: [String: Any] = [
-            "kind": CanvasPageSelection.Kind.selection.rawValue,
+            "kind": CanvasPageSelection.Kind.selection.rawValue, "anchorKind": "element",
             "id": "phase-2",
             "text": "Phase 2",
         ]

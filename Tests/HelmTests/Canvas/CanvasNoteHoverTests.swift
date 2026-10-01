@@ -209,7 +209,7 @@ final class CanvasNoteHoverTests: XCTestCase {
         }
 
         func hover(id: String? = nil, text: String) async throws -> String {
-            var anchor = ["text": text]
+            var anchor = ["anchorKind": id == nil ? "quote" : "element", "text": text]
             anchor["id"] = id
             return try await withCheckedThrowingContinuation { continuation in
                 webView.callAsyncJavaScript(

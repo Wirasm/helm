@@ -18,6 +18,7 @@ final class CanvasAnnotationTests: XCTestCase {
             return CanvasAnnotation.decode(posted: body, comment: comment)
         }
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        payload["anchorKind"] = payload["anchorKind"] ?? "element"
         return CanvasAnnotation.decode(posted: payload, comment: comment)
     }
 
@@ -39,7 +40,11 @@ final class CanvasAnnotationTests: XCTestCase {
         // node's <g>, whose id is mostly renderer bookkeeping. The anchor keeps only
         // the part that appears in the ```mermaid fence, so the agent can grep it (#113).
         let annotation = decode(
-            ["id": "mermaid-0-flowchart-phase2-1", "text": "Phase 2: Ship"])
+            [
+                "anchorKind": "mermaid", "rendererRole": "node",
+                "id": "mermaid-0-flowchart-phase2-1",
+                "text": "Phase 2: Ship",
+            ])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase2", text: "Phase 2: Ship")))
     }
@@ -54,37 +59,23 @@ final class CanvasAnnotationTests: XCTestCase {
             "an id that merely starts with the word is still the agent's own")
     }
 
-    func testNoIDDegradesToAQuote() {
-        let annotation = decode(["text": "the store move has to come first"])
-
-        XCTAssertEqual(
-            annotation?.mark, .selection(.quote("the store move has to come first")),
-            "markdown goes through marked client-side and headings get no id unless the "
-                + "page adds one — this is the documented degradation, not a bug")
-    }
-
-    func testAnIDOfNullDegradesToAQuoteRatherThanFailing() {
-        // The script posts `id: null` when it found no ancestor with one.
-        let annotation = decode(["id": NSNull(), "text": "a passage"])
-
-        XCTAssertEqual(annotation?.mark, .selection(.quote("a passage")))
+    func testMissingSourceIdentityIsRefused() {
+        XCTAssertNil(decode(["text": "the store move has to come first"]))
+        XCTAssertNil(decode(["id": NSNull(), "text": "a passage"]))
     }
 
     // MARK: - Hostile and malformed bodies
 
     func testAnIDWithCharactersAnIDCannotHaveIsRefused() {
         for hostile in ["a\"b", "id with spaces", "</script>", "a'); drop--", "\u{0}"] {
-            XCTAssertEqual(
-                decode(["id": hostile, "text": "some text"])?.mark, .selection(.quote("some text")),
-                "\(hostile) is not an id, so it degrades rather than being trusted")
+            XCTAssertNil(decode(["id": hostile, "text": "some text"]), hostile)
         }
     }
 
     func testAnOversizedIDIsRefused() {
         let long = String(repeating: "a", count: CanvasAnnotation.maximumIDLength + 1)
 
-        XCTAssertEqual(
-            decode(["id": long, "text": "some text"])?.mark, .selection(.quote("some text")))
+        XCTAssertNil(decode(["id": long, "text": "some text"]))
     }
 
     /// Refused rather than truncated: half a quotation anchors to the wrong place just as
@@ -112,11 +103,11 @@ final class CanvasAnnotationTests: XCTestCase {
         XCTAssertNil(decode(["text": "a passage"], comment: "   \n "))
     }
 
-    func testControlCharactersAreStrippedFromTheQuote() {
-        let annotation = decode(["text": "clean\u{7}text\nkept"])
+    func testControlCharactersAreStrippedFromSelectionText() {
+        let annotation = decode(["id": "phase", "text": "clean\u{7}text\nkept"])
 
         XCTAssertEqual(
-            annotation?.mark, .selection(.quote("cleantext\nkept")),
+            annotation?.mark, .selection(.element(id: "phase", text: "cleantext\nkept")),
             "newlines and tabs survive; a bell does not")
     }
 

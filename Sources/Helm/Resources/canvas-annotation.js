@@ -48,22 +48,6 @@
   // in exactly the form that means "grep for this", which is #215's second half: a degradation
   // that announced itself would be fine, and this one asserts.
   //
-  // The same *kind* of judgement `MermaidAnchor.isRenderGenerated` makes on the Swift side —
-  // an id minted rather than authored is not an anchor — but **not a second enforcement of
-  // this one, and Swift cannot be given one.** `isRenderGenerated` only knows ids shaped
-  // `mermaid-<digits>`; nothing in `CanvasAnnotation.decode` refuses `content`, and nothing
-  // should, because by the time the payload is a string the two cases are identical.
-  // `testAnIDTheAgentWroteIsAnAnchorEvenWhenItIsSpelledLikeHelmsOwn` pins that: an `.html`
-  // artifact's own `id="content"` is a real, greppable anchor and must decode as one. What
-  // separates them is which element carried `data-helm-frame`, and that fact lives only in
-  // the DOM — it does not cross the bridge. So this is the sole enforcement by necessity
-  // rather than by choice, and the far side could only refuse if the payload *told* it.
-  // #109's `kind` does not close that: it says which MESSAGE this is, not which element the
-  // anchor came off, and an anchor field saying "this id is helm's own" is still not built.
-  //
-  // `MermaidAnchor` states the same ceiling for its own case: `sequenceDiagram` emits
-  // `actor0` with no prefix, "helm cannot tell, and does not guess."
-  //
   // **Why a marker and not a look at the wrapper itself.** The first cut recognised the frame
   // by its id and its position directly under the body, which is true by construction of the
   // page above — and equally true of an agent-authored wrapper using the same landmark id,
@@ -102,6 +86,22 @@
     return !!(node && node.closest && node.closest("[data-helm-surface]"));
   }
 
+  // Diagram provenance must be known before an id leaves the DOM. In particular,
+  // actor0 is renderer bookkeeping inside Mermaid and an authored name outside it.
+  function rendererRole(node) {
+    // Authored CSS classes can be named node or cluster. Mermaid's direct label group
+    // and SVG diagram type distinguish structural groups without consulting those classes.
+    var cluster = Array.from(node.children || []).some(function (child) {
+      return child.localName === "g" && child.classList.contains("cluster-label");
+    });
+    if (!cluster) { return "node"; }
+    var svg = node.closest("svg");
+    var diagram = svg && svg.getAttribute("aria-roledescription");
+    if (diagram === "flowchart-v2" || diagram === "class") { return "cluster"; }
+    if (diagram === "stateDiagram") { return "stateCluster"; }
+    return "unknown";
+  }
+
   // What a mark can be NAMED by: the nearest id on the marked element or an ancestor, because
   // a name can belong to a container and still name what is inside it (#215).
   //
@@ -109,11 +109,33 @@
   // and it is the whole of #113: a mark on a mermaid node lands on the `<text>` or `<p>` inside
   // the `<g>` that carries the id, so reading only the marked element's own id would anchor no
   // diagram at all.
-  function nameFor(node) {
-    for (var up = node; up && up !== document.body; up = up.parentNode) {
-      if (up.id && !helmFrame(up)) { return up.id; }
+  function anchorFor(node, text) {
+    if (node && node.closest && node.closest(".mermaid")) {
+      for (var up = node; up && up !== document.body; up = up.parentNode) {
+        if (up.id) {
+          return { anchorKind: "mermaid", id: up.id,
+                   rendererRole: rendererRole(up) };
+        }
+      }
+      return { anchorKind: "mermaid", id: null, rendererRole: "unknown" };
     }
-    return null;
+    var source = null;
+    for (var up = node; up && up !== document.body; up = up.parentNode) {
+      if (up.id && !helmFrame(up)) { return { anchorKind: "element", id: up.id }; }
+      if (source === null) { source = up.getAttribute("data-helm-source"); }
+      if (helmFrame(up)) {
+        if (source !== null) {
+          try { return { anchorKind: "excerpt", source: JSON.parse(source), id: null }; }
+          catch (error) {
+            return { anchorKind: "unanchored", id: null, reason: "the source metadata is malformed" };
+          }
+        }
+        return { anchorKind: "unanchored", id: null,
+                 reason: "no literal source block covers this selection; select one Markdown block" };
+      }
+    }
+    return { anchorKind: "unanchored", id: null,
+             reason: "this HTML selection has no authored id; add an id to its block" };
   }
 
   // The element a gesture is really about. A Range's `commonAncestorContainer` is very often
@@ -124,25 +146,28 @@
     return node && node.nodeType === 3 ? node.parentNode : node;
   }
 
-  // Capture and later lookup use the same DOM naming walk and surface exclusion.
-  function anchorFor(node, text) {
-    node = elementFor(node);
-    return { id: node && !inPageSurface(node) ? nameFor(node) : null, text: text };
-  }
-
-  function sourceID(id) {
-    var match = /^mermaid-\d+-(?:flowchart|classId|state|entity)-(.+)-\d+$/.exec(id || "");
-    return match ? match[1] : id;
+  // Paired with MermaidAnchor.sourceIdentifier(in:role:) in Swift. The real-vendor capture
+  // → Swift decode → sidecar → hover test in CanvasHoverIntegrationTests catches drift.
+  function sourceID(anchor) {
+    if (anchor.anchorKind === "element") { return anchor.id; }
+    if (anchor.anchorKind !== "mermaid") { return null; }
+    var suffix = /^mermaid-\d+-(.+)$/.exec(anchor.id || "");
+    if (!suffix) { return null; }
+    if (anchor.rendererRole === "cluster") { return suffix[1]; }
+    if (anchor.rendererRole !== "node" && anchor.rendererRole !== "stateCluster") { return null; }
+    var node = /^(flowchart|classId|state|entity)-(.+)-\d+$/.exec(suffix[1]);
+    if (!node || (anchor.rendererRole === "stateCluster" && node[1] !== "state")) { return null; }
+    return node[2];
   }
 
   function words(text) { return String(text || "").replace(/\s+/g, " ").trim(); }
 
   function addressable(node) {
     if (inPageSurface(node) || helmFrame(node)) { return false; }
-    var diagram = node.closest && node.closest(".mermaid, svg[aria-roledescription]");
-    if (!diagram) { return true; }
-    // Unsupported diagrams carry no author identifier. Never recover them by label alone.
-    return /^mermaid-\d+-(flowchart|classId|state|entity)-.+-\d+$/.test(nameFor(node) || "");
+    var captured = anchorFor(node, "");
+    // Capture owns diagram provenance and renderer roles. Unsupported diagrams cannot be
+    // recovered by label alone; historical prose quotes outside diagrams still can.
+    return captured.anchorKind !== "mermaid" || sourceID(captured) !== null;
   }
 
   function verified(node, text) {
@@ -181,12 +206,22 @@
   }
 
   function resolveAnchor(anchor) {
-    if (!anchor || !words(anchor.text)) { return null; }
-    if (anchor.id) {
+    if (!anchor || !words(anchor.text)
+        || ["element", "quote", "excerpt"].indexOf(anchor.anchorKind) < 0) { return null; }
+    if (anchor.anchorKind === "excerpt") {
+      var blocks = Array.from(document.querySelectorAll("[data-helm-source]")).filter(function (node) {
+        var captured = anchorFor(node, anchor.text);
+        return captured.anchorKind === "excerpt" && captured.source === anchor.source;
+      });
+      if (blocks.length !== 1 || !verified(blocks[0], anchor.text)) { return null; }
+      var excerptRange = quoteRange(blocks[0], anchor.text);
+      return excerptRange && !excerptRange.ambiguous ? { node: blocks[0], range: excerptRange } : null;
+    }
+    if (anchor.anchorKind === "element") {
       var direct = document.getElementById(anchor.id);
       if (verified(direct, anchor.text)) { return { node: direct }; }
       var matches = Array.from(document.querySelectorAll("[id]")).filter(function (node) {
-        return sourceID(anchorFor(node, anchor.text).id) === anchor.id && verified(node, anchor.text);
+        return sourceID(anchorFor(node, anchor.text)) === anchor.id && verified(node, anchor.text);
       });
       if (matches.length === 1) { return { node: matches[0] }; }
       if (matches.length > 1) { return null; }
@@ -245,7 +280,7 @@
   // looked marked.
   //
   // **A CSS Custom Highlight, not a rectangle over the page**, and the reason is anchoring.
-  // An anchor is resolved out of the DOM — `nameFor` walks ancestors for an id, and a range's
+  // An anchor is resolved out of the DOM — `anchorFor` reads source identity from ancestors, and a range's
   // `commonAncestorContainer` decides which element it is about — so a highlight that wrapped
   // the range in elements of its own, or split its text nodes, would change the thing the mark
   // is named by while claiming to change nothing. `CSS.highlights` mutates **no DOM at all**:
@@ -348,7 +383,7 @@
     // tool.
     if (inPageSurface(e.target)) { return; }
     // The text is the operator's own highlight rather than an element's contents; the NAME
-    // comes from `nameFor` (#215).
+    // comes from `anchorFor` (#195).
     var selection = document.getSelection();
     var empty = !selection || selection.isCollapsed || selection.rangeCount === 0;
     var text = empty ? "" : String(selection).trim();
@@ -358,16 +393,16 @@
     if (!text) { unpaintTextMark(); bridge.postMessage({ kind: "cleared" }); return; }
     var range = selection.getRangeAt(0);
     var node = elementFor(range.commonAncestorContainer);
-    var id = anchorFor(node, text).id;
+    var anchor = anchorFor(node, text);
     var r = range.getBoundingClientRect();
     // One mark on screen: whatever was up before comes down first, even when this one cannot
     // be painted. The new mark then STAYS — from here it is the comment field's subject, and
     // only Swift closing that field may take it down.
     unpaintTextMark();
     paintTextMark(range);
-    bridge.postMessage({
-      kind: "selection", id: id, text: text,
+    bridge.postMessage(Object.assign({
+      kind: "selection", text: text,
       rect: { x: r.left, y: r.top, width: r.width, height: r.height }
-    });
+    }, anchor));
   }, true);
 })();

@@ -305,12 +305,12 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         let registered = by_pid.get(&b.pid).copied();
         let reported = registered
             .is_none()
-            .then(|| spawned_agent(inputs, b))
+            .then(|| spawned_agent(inputs.hooked, b.harness, &b.handle, alive))
             .flatten();
         let id = registered
             .map(|r| r.session.clone())
-            .or_else(|| b.runtime_session.clone())
             .or_else(|| reported.map(|h| h.session.clone()))
+            .or_else(|| b.runtime_session.clone())
             .unwrap_or_else(|| b.session.clone());
         live.insert(key(b.harness, &id));
         if let Some(r) = registered {
@@ -327,7 +327,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 harness: b.harness,
                 name: registered
                     .and_then(|r| r.name.clone())
-                    .or_else(|| codex_name(&codex_names, b.harness, &id)),
+                    .or_else(|| named(inputs.home, cache, &codex_names, b.harness, &b.cwd, &id)),
                 id,
                 parent: None,
                 cwd: b.cwd.clone(),
@@ -426,9 +426,16 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 harness: h.harness,
                 id: h.session.clone(),
                 parent: None,
-                name: registered
-                    .and_then(|r| r.name.clone())
-                    .or_else(|| codex_name(&codex_names, h.harness, &h.session)),
+                name: registered.and_then(|r| r.name.clone()).or_else(|| {
+                    named(
+                        inputs.home,
+                        cache,
+                        &codex_names,
+                        h.harness,
+                        &h.cwd,
+                        &h.session,
+                    )
+                }),
                 cwd: h.cwd.clone(),
                 state: SessionState::Running {
                     activity: h.activity.clone(),
@@ -576,7 +583,10 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 harness: h.harness,
                 id: h.id.clone(),
                 parent: None,
-                name: None,
+                name: match h.harness {
+                    Harness::Pi => cache.pi_name(&transcript),
+                    _ => named(inputs.home, cache, &codex_names, h.harness, &h.cwd, &h.id),
+                },
                 cwd: h.cwd.clone(),
                 state: SessionState::Finished { at_ms },
                 host: Host::None,
@@ -620,23 +630,57 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     }
 }
 
-/// The agent benchd spawned in session `b`, as its hooks report it: it claimed the spawn's
+/// The agent benchd spawned with `handle`, as its hooks report it: it claimed the spawn's
 /// handle and runs in no pane (benchd's `waiting` joins them by the same rule). A process that
-/// started a second thread reports both under that handle; the one it reported last runs now.
-fn spawned_agent<'a>(inputs: &'a Inputs, b: &BenchSession) -> Option<&'a HookedAgent> {
-    inputs
-        .hooked
+/// started a second thread (codex's `/new`) reports both under that handle; the one it reported
+/// last runs now.
+pub fn spawned_agent<'a>(
+    hooked: &'a [HookedAgent],
+    harness: Harness,
+    handle: &str,
+    alive: &dyn Fn(u32, Option<u64>) -> bool,
+) -> Option<&'a HookedAgent> {
+    hooked
         .iter()
-        .filter(|h| h.harness == b.harness && h.handle == b.handle && h.pane.is_none())
-        .filter(|h| (inputs.alive)(h.pid, None))
+        .filter(|h| h.harness == harness && h.handle == handle && h.pane.is_none())
+        .filter(|h| alive(h.pid, None))
         .max_by_key(|h| h.reported_ms)
 }
 
-/// A codex thread's name, as codex keeps it; other harnesses' names come from elsewhere.
-fn codex_name(names: &HashMap<String, String>, harness: Harness, id: &str) -> Option<String> {
-    (harness == Harness::Codex)
-        .then(|| names.get(id).cloned())
-        .flatten()
+/// The conversation a benchd session runs now: the one its agent reported last, else the id
+/// the bench started it with. A codex names its thread after the spawn, and `/new` starts
+/// another in the same process, so the hook is the better witness. `None` for a codex no hook
+/// has reported yet.
+pub fn conversation(
+    hooked: &[HookedAgent],
+    harness: Harness,
+    handle: &str,
+    runtime_session: Option<&str>,
+    alive: &dyn Fn(u32, Option<u64>) -> bool,
+) -> Option<String> {
+    spawned_agent(hooked, harness, handle, alive)
+        .map(|h| h.session.clone())
+        .or_else(|| runtime_session.map(str::to_string))
+}
+
+/// The name a harness keeps for a session: codex's thread name, or pi's latest `/name`. Claude's
+/// comes from its registry row instead.
+fn named(
+    home: &Path,
+    cache: &mut Cache,
+    codex_names: &HashMap<String, String>,
+    harness: Harness,
+    cwd: &str,
+    id: &str,
+) -> Option<String> {
+    match harness {
+        Harness::Codex => codex_names.get(id).cloned(),
+        Harness::Pi => pi::session(home, cwd, id)
+            .ok()
+            .flatten()
+            .and_then(|path| cache.pi_name(&path)),
+        Harness::Claude => None,
+    }
 }
 
 fn key(harness: Harness, id: &str) -> SessionKey {

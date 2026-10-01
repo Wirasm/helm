@@ -64,24 +64,41 @@ enum CanvasNotes {
 
     /// Parse the exact heading format we write, not arbitrary operator prose.
     static func mark(in heading: String) -> CanvasAnnotation.Mark? {
+        if heading.hasPrefix("source ") { return sourceMark(in: heading) }
         if heading.hasPrefix("`#"), let boundary = heading.range(of: "` — ") {
             let id = String(
                 heading[heading.index(heading.startIndex, offsetBy: 2)..<boundary.lowerBound])
             guard let text = headingText(String(heading[boundary.upperBound...])) else {
                 return nil
             }
-            guard
-                CanvasAnnotation.Mark.decode(["id": id, "text": text], as: .selection)
-                    == .selection(.element(id: id, text: text))
+            guard CanvasAnnotation.validID(id) == id,
+                CanvasAnnotation.sanitizedText(text) == text
             else { return nil }
             return .selection(.element(id: id, text: text))
         }
         guard let text = headingText(heading) else { return nil }
-        guard
-            CanvasAnnotation.Mark.decode(["text": text], as: .selection)
-                == .selection(.quote(text))
-        else { return nil }
+        guard CanvasAnnotation.sanitizedText(text) == text else { return nil }
         return .selection(.quote(text))
+    }
+
+    /// JSON strings can themselves contain ` text `, so read the two encoded values rather
+    /// than splitting on that delimiter inside arbitrary source bytes.
+    private static func sourceMark(in heading: String) -> CanvasAnnotation.Mark? {
+        let pattern = #"^source ("(?:[^"\\]|\\.)*") text ("(?:[^"\\]|\\.)*")$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+            let match = expression.firstMatch(
+                in: heading, range: NSRange(heading.startIndex..., in: heading)),
+            let sourceRange = Range(match.range(at: 1), in: heading),
+            let textRange = Range(match.range(at: 2), in: heading),
+            let source = try? JSONDecoder().decode(
+                String.self, from: Data(heading[sourceRange].utf8)),
+            let text = try? JSONDecoder().decode(String.self, from: Data(heading[textRange].utf8))
+        else { return nil }
+        let mark = CanvasAnnotation.Mark.selection(.excerpt(source: source, text: text))
+        return CanvasAnnotation.Mark.decode(
+            [
+                "anchorKind": "excerpt", "source": source, "text": text,
+            ], as: .selection) == mark ? mark : nil
     }
 
     struct Note: Identifiable {
@@ -122,8 +139,13 @@ enum CanvasNotes {
         switch anchor {
         case let .element(id, text): "`#\(id)` — \(quoted(text))"
         case let .quote(text): quoted(text)
+        case let .excerpt(source, text): "source \(jsonString(source)) text \(jsonString(text))"
+        case .unanchored: preconditionFailure("Unanchored selections cannot become notes")
         }
     }
+
+    /// The shared string encoding for source and selected words in a note heading.
+    static func jsonString(_ text: String) -> String { CanvasHTML.jsString(text) }
 
     /// What goes on the clipboard when a comment is written, so it can be pasted straight
     /// into an agent that helm cannot reach.
@@ -211,8 +233,7 @@ enum CanvasNotes {
         if !text.contains(where: { $0.isNewline || $0 == "\"" || $0 == "\\" || $0 == "\t" }) {
             return "\"\(text)\""
         }
-        let data = try! JSONEncoder().encode(text)
-        return "text " + String(decoding: data, as: UTF8.self)
+        return "text " + jsonString(text)
     }
 
     private static func headingText(_ heading: String) -> String? {

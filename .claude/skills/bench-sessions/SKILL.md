@@ -29,6 +29,10 @@ for r in json.load(sys.stdin)["rows"]:
   and finished sessions helm or benchd hosted. Running rows come first.
 - It needs benchd running (exit 2 when it is not). The `bench-mail` skill covers each row's
   `mail` field.
+- **`name` is the harness's own**: Claude's session name, codex's thread name, pi's `/name`.
+  A codex row's `id` is the thread it runs now: after `/new` it is the new thread.
+  `bench sessions` (without `--all`) and `bench mail who` give the same id as
+  `runtime_session` and `session`.
 - **A running row whose agent waits on the operator** says `"activity": {"kind": "waiting",
   "waiting_for": "permission prompt"}` (or `trust prompt`, `question`, …): the agent's own
   report, or a prompt benchd read off its screen, which is how a codex or pi prompt, or a Claude

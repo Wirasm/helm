@@ -25,7 +25,8 @@
 #   edge = "left"             # left, right or bottom
 #   size = 0.3                # 0.1 to 0.9 of the window's width, or height on the bottom
 # Built in: sessions on the left at 0.28, archon on the bottom at 0.42, every other
-#   drawer on the right at 0.5.
+#   drawer on the right at 0.5. The edge is only the default: drag a drawer by its
+#   header to another edge and benchd keeps that one instead.
 
 manage = "cmd+alt"
 

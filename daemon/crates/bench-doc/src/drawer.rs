@@ -18,7 +18,7 @@ use std::fmt;
 /// A drawer's name: `[a-z0-9-]{1,32}`. It is typed into keymaps and CLI flags and shown on the
 /// status bar, so it has one spelling, and a name that could not be typed back is refused where
 /// it arrives rather than stored.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct DrawerName(String);
 
@@ -54,6 +54,18 @@ impl fmt::Display for DrawerName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// The window edge a drawer is drawn against (#178). The operator's, set by dragging the drawer
+/// there; kept in the document by name rather than on the [`Drawer`], so it outlives the drawer
+/// emptying and coming back. A drawer the document has no edge for is drawn where helm's keymap
+/// file or its built-in table says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawerEdge {
+    Left,
+    Right,
+    Bottom,
 }
 
 /// One drawer. Fields are public like `Slot`'s: the document owns every rule that changes them
