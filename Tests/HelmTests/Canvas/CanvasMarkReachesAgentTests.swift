@@ -57,7 +57,7 @@ final class CanvasMarkReachesAgentTests: XCTestCase {
             mail: BenchMailbox(
                 who: { _ in nil }, send: { sends.calls.append(($0, $1, $2, $3)) }))
         model.onAnnotation = { annotation, canvas in
-            courier.send(annotation, on: canvas, along: route)
+            courier.send(annotation, on: canvas, liveFile: nil, along: route)
         }
         model.copyToClipboard = { [weak self] text in self?.copied.append(text) }
         return model

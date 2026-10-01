@@ -11,7 +11,8 @@
 mod common;
 
 use bench_doc::{
-    Document, DrawerName, Focus, Pane, PaneId, PaneName, Refusal, StandardPath, Surface, Workspace,
+    Document, DrawerEdge, DrawerName, Focus, Pane, PaneId, PaneName, Refusal, StandardPath,
+    Surface, Workspace,
 };
 use common::*;
 use serde_json::json;
@@ -516,4 +517,94 @@ fn going_to_a_pane_crosses_workspaces_and_drawers_and_only_as_the_operator() {
     doc.go_to(in_drawer, Focus::Take).unwrap();
     assert_eq!(doc.open_drawer().unwrap().name, name("browser"));
     assert_eq!(doc.focused_pane(), Some(in_drawer));
+}
+
+// MARK: - Where a drawer sits (#178)
+
+#[test]
+fn the_operator_puts_a_drawer_against_an_edge_and_nothing_else_moves() {
+    let mut doc = working_document();
+    doc.toggle_drawer(&name("notes"), Some(file("/tmp/n.md")), Focus::Take)
+        .unwrap();
+    let before = workspaces(&doc);
+    let focus = doc.focused_pane();
+    assert_eq!(
+        doc.drawer_edge(&name("notes")),
+        None,
+        "the keymap's, until placed"
+    );
+
+    doc.place_drawer(&name("notes"), DrawerEdge::Bottom, Focus::Take)
+        .unwrap();
+
+    assert_eq!(doc.drawer_edge(&name("notes")), Some(DrawerEdge::Bottom));
+    assert_eq!(doc.open_drawer().unwrap().name, name("notes"), "still open");
+    assert_eq!(doc.focused_pane(), focus, "the keyboard stayed");
+    assert_eq!(workspaces(&doc), before, "the bench did not move");
+}
+
+#[test]
+fn an_agent_cannot_move_the_operators_drawer_unasked() {
+    let mut doc = working_document();
+    doc.toggle_drawer(&name("notes"), Some(file("/tmp/n.md")), Focus::Take)
+        .unwrap();
+    let before = doc.clone();
+
+    let refused = doc.place_drawer(&name("notes"), DrawerEdge::Left, Focus::Leave);
+    assert_eq!(refused, Err(Refusal::DrawerPlacement(name("notes"))));
+    assert!(
+        refused.unwrap_err().to_string().contains("--asked"),
+        "the refusal names the way through"
+    );
+    assert_eq!(doc, before, "a refused placement changes nothing");
+
+    // Control: asked, it is the operator's own, and applies.
+    doc.place_drawer(&name("notes"), DrawerEdge::Left, Focus::Take)
+        .unwrap();
+    assert_eq!(doc.drawer_edge(&name("notes")), Some(DrawerEdge::Left));
+}
+
+#[test]
+fn a_drawers_edge_outlives_the_drawer() {
+    let mut doc = working_document();
+    doc.toggle_drawer(&name("notes"), Some(file("/tmp/n.md")), Focus::Take)
+        .unwrap();
+    doc.place_drawer(&name("notes"), DrawerEdge::Bottom, Focus::Take)
+        .unwrap();
+    let only = doc.drawer(&name("notes")).unwrap().selected;
+
+    doc.close_pane(only, Focus::Take).unwrap();
+    assert!(
+        doc.drawer(&name("notes")).is_none(),
+        "its last pane took it"
+    );
+    assert_eq!(
+        doc.drawer_edge(&name("notes")),
+        Some(DrawerEdge::Bottom),
+        "where it sat is kept"
+    );
+
+    doc.toggle_drawer(&name("notes"), Some(file("/tmp/n.md")), Focus::Take)
+        .unwrap();
+    assert_eq!(doc.drawer_edge(&name("notes")), Some(DrawerEdge::Bottom));
+}
+
+#[test]
+fn a_placed_edge_is_written_and_read_back() {
+    let mut doc = working_document();
+    doc.place_drawer(&name("browser"), DrawerEdge::Left, Focus::Take)
+        .unwrap();
+    let text = serde_json::to_string(&doc).unwrap();
+    assert!(
+        text.contains(r#""drawer_edges":{"browser":"left"}"#),
+        "{text}"
+    );
+    let back: Document = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, doc);
+
+    let unplaced = serde_json::to_value(working_document()).unwrap();
+    assert!(
+        unplaced.get("drawer_edges").is_none(),
+        "absent until one is placed, so an older document reads unchanged"
+    );
 }

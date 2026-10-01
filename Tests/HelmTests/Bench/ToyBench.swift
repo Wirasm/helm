@@ -28,7 +28,8 @@ struct ToyBench {
     mutating func apply(_ request: BenchRequest) throws -> Answer {
         let focus = request.by == .operatorGesture || request.asked
         switch request.verb {
-        case .get, .paneOpenInDrawer, .drawerToggle, .paneMove, .workspaceMove, .focusWaiting:
+        case .get, .paneOpenInDrawer, .drawerToggle, .drawerPlace, .paneMove, .workspaceMove,
+            .focusWaiting:
             return Answer()
         case .workspaceOpen, .workspaceActivate, .workspaceClose:
             return try applyWorkspace(request.verb, focus: focus)

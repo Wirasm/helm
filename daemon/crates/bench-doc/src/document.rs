@@ -20,12 +20,12 @@
 //! workspace, so toggling one cannot re-lay-out the bench under it.
 
 use crate::bench::{Bench, Focus, Pane, Placement};
-use crate::drawer::{Drawer, DrawerName};
+use crate::drawer::{Drawer, DrawerEdge, DrawerName};
 use crate::ids::{ColumnId, PaneId, SlotId, StandardPath};
 use crate::refusal::Refusal;
 use crate::surface::{PaneName, ResumableAgent, Surface};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// One open folder and its arrangement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +59,11 @@ pub struct Document {
     /// The drawer shown over the bench, if any. One at a time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open_drawer: Option<DrawerName>,
+    /// The edge the operator put each drawer against (#178), by name: it outlives the drawer,
+    /// which goes with its last pane. Absent when none was placed, so an older benchd reads the
+    /// document and drops only this on its next save.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    drawer_edges: BTreeMap<DrawerName, DrawerEdge>,
 }
 
 /// The operator's focus, as far as the document can see it: the active workspace, its focused
@@ -116,6 +121,11 @@ impl Document {
     /// The drawer shown over the bench.
     pub fn open_drawer(&self) -> Option<&Drawer> {
         self.drawer(self.open_drawer.as_ref()?)
+    }
+
+    /// The edge the operator put drawer `name` against, if he has.
+    pub fn drawer_edge(&self, name: &DrawerName) -> Option<DrawerEdge> {
+        self.drawer_edges.get(name).copied()
     }
 
     /// The drawer holding `pane`.
@@ -491,6 +501,25 @@ impl Document {
         })
     }
 
+    /// Put a drawer against an edge of the window (#178, the operator dragging it there). Where
+    /// his drawers sit is his: this moves no focus, so the guard in `commit` would let an agent
+    /// through, and it is refused here instead. Any drawer name may be placed, held or not, as
+    /// the keymap file may style one before it exists.
+    pub fn place_drawer(
+        &mut self,
+        name: &DrawerName,
+        edge: DrawerEdge,
+        focus: Focus,
+    ) -> Result<(), Refusal> {
+        if focus == Focus::Leave {
+            return Err(Refusal::DrawerPlacement(name.clone()));
+        }
+        self.commit(focus, |doc| {
+            doc.drawer_edges.insert(name.clone(), edge);
+            Ok(())
+        })
+    }
+
     // MARK: pane operations that reach drawers
     //
     // Pane ids are one namespace, so a verb naming a pane finds it wherever it lives. These four
@@ -738,6 +767,8 @@ struct EncodedDocument {
     drawers: Vec<Drawer>,
     #[serde(default)]
     open_drawer: Option<DrawerName>,
+    #[serde(default)]
+    drawer_edges: BTreeMap<DrawerName, DrawerEdge>,
 }
 
 impl TryFrom<EncodedDocument> for Document {
@@ -770,6 +801,7 @@ impl TryFrom<EncodedDocument> for Document {
             active: raw.active,
             drawers: raw.drawers,
             open_drawer: raw.open_drawer,
+            drawer_edges: raw.drawer_edges,
         };
         doc.check().map_err(|r| r.to_string())?;
         Ok(doc)
