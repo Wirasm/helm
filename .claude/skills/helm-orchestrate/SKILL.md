@@ -82,7 +82,8 @@ tail -1 "$RUN"
   quotes). `$WS` becomes the agent's mail handle (`--name`), such as `ws1` or `issue-186`; a taken
   one is refused.
 - The answer carries `handle`, `agent`, `session`, `pid`, `runtime_session`, `pane` and
-  `workspace`. `runtime` is the conversation id `--resume` and `--fork` take later; codex has none.
+  `workspace`. `runtime` is the conversation id `--resume` and `--fork` take later; a new codex has
+  none until its hook records its thread id.
 - The pane lands in the background of `$WORKTREE`'s workspace. A few seconds after the spawn, read
   it once with `bench get screen <pane>`: an agent stopped at a trust question or an unknown
   model shows there, not in the spawn's exit code.
@@ -132,7 +133,7 @@ for r in json.load(sys.stdin)["rows"]:
 - Restate the worktree path in any instruction that leads to git commands.
 - An agent whose session ended while its pane stayed is brought back with `bench restore <pane>`:
   a recorded claude, codex or pi conversation is resumed there. `bench sessions --all` shows
-  the handle to mail. When the pane is gone too, spawn again with `--resume <runtime>` (claude and pi only), or
+  the handle to mail. When the pane is gone too, spawn again with `--resume <runtime>` (codex: its thread id), or
   a fresh agent whose brief points at the branch and the PR.
 
 ## 7. Verify, merge, release

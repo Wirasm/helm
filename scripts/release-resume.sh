@@ -406,7 +406,7 @@ detached_run() {
   # 7. Every other pane back (M5b): benchd's restart ended every session, and each pane keeps
   # its record. After step 6, so the pane that held this session does not resume it a second
   # time (`bench restore` never resumes a conversation a live session holds; that pane gets a
-  # shell). `bench spawn --resume` and `bench resume` make no such check.
+  # shell). `bench spawn --resume` refuses one too; `bench resume` makes no such check.
   log "step 7: bench restore --all"
   local panes=""
   if ! restore_panes "$bin"; then

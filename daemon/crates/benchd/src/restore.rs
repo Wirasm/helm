@@ -15,7 +15,7 @@
 //! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
 //! second, forking resume.
 
-use crate::{Core, claude_settings, sessions, shells, spawn};
+use crate::{Core, hook, sessions, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, RestoreArgs};
@@ -144,11 +144,17 @@ fn has_transcript(id: &str) -> bool {
         .any(|project| project.path().join(&file).is_file())
 }
 
-/// Whether a live session already holds conversation `runtime`.
-fn held(core: &Core, runtime: &str) -> bool {
+/// Whether a live session already holds conversation `runtime`: by the id it was started with,
+/// or, for a codex that names its thread after the fact, by the id its hook recorded.
+pub fn held(core: &Core, runtime: &str) -> bool {
+    let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
     core.sessions
         .values()
         .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
+        || core.session_records.hosted.iter().any(|h| {
+            h.id == runtime
+                && matches!(&h.via, bench_wire::HostedVia::Bench { session, .. } if live(session))
+        })
 }
 
 /// Where the pane's shell was last working, if that directory is still there.
@@ -186,11 +192,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         .and_then(|h| h.handle().map(str::to_string))
         .filter(|h| !core.sessions.values().any(|s| &s.handle == h))
         .unwrap_or_else(|| id.clone());
-    let settings = match kind {
-        AgentKind::Claude => Some(claude_settings(&core.root)?),
-        _ => None,
-    };
-    let spec = SpawnSpec {
+    let mut spec = SpawnSpec {
         agent: kind,
         cwd: agent.cwd.clone(),
         model: None,
@@ -199,9 +201,10 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         posture,
         prompt_file: None,
         extra_args: Vec::new(),
-        settings,
+        settings: None,
         codex_server: None,
     };
+    spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(
         id.clone(),
         handle.clone(),
@@ -212,6 +215,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
+    hook::serve_resumed(core, &session);
     let _ = core.append(
         "session/spawned",
         json!({

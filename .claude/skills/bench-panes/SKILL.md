@@ -66,7 +66,8 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
 - Each agent runs unattended: claude with `--dangerously-skip-permissions`, codex with
   `--dangerously-bypass-approvals-and-sandbox`, pi with `--approve`. `--model` and `--effort`
   pick the model. `--arg <flag>` adds a flag after the posture; it never replaces it.
-- `--resume <session-id>` re-enters a claude or pi conversation instead of starting one.
+- `--resume <session-id>` re-enters a claude, codex or pi conversation instead of starting one
+  (codex's id is its thread id, which its hook records).
 - `--fork <session-id>` starts a new claude conversation that begins as a copy of that one, to
   ask about its work while the original carries on untouched. The fork gets its own id (the
   answer's `runtime_session`; `forked_from` names the original) and runs **read-only**, in
@@ -110,6 +111,10 @@ BENCH="${BENCH:-bench}"
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
   its own hook), else a shell in the directory the pane's shell was last working in.
+- A resumed codex opens on codex's "Hooks need review" until someone answers it, unless the
+  operator has trusted his hooks in codex once: codex ignores `--dangerously-bypass-hook-trust`
+  when it resumes against its own app-server. Mail to it answers `queued` and starts its turn once
+  it is past that screen.
 
 ## See what he sees
 
