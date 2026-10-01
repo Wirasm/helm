@@ -47,8 +47,6 @@ KICK_GRACE_SECONDS = 180
 MERGE_READBACK_SECONDS = 90
 MAX_PRS = 20  # the loop's max_iterations
 GH_TIMEOUT_SECONDS = 120  # one hung gh call must not outlive the queue's own deadlines
-# The repo's worktree pruner, in the checkout this queue runs from.
-PRUNE_SCRIPT = Path(__file__).resolve().parents[4] / "scripts" / "prune-worktrees.sh"
 PRUNE_TIMEOUT_SECONDS = 900  # it removes worktrees one at a time, each bounded at 300s
 
 PASSING = {"success", "neutral", "skipped"}
@@ -170,12 +168,25 @@ def verify_merge(parents: list[str], old_tip: str, head: str) -> bool:
     return parents == [old_tip, head]
 
 
-def prune_merged(branches: list[str], script: Path = PRUNE_SCRIPT) -> str:
+def prune_merged(branches: list[str], checkout: Path | None = None) -> str:
     """Remove the worktrees on `branches`, which this batch merged. The script decides what is
     safe to remove; this only narrows it to these branches and reports its lines. A failure
-    here never touches the merge results, so it is reported rather than raised."""
+    here never touches the merge results, so it is reported rather than raised.
+
+    The script is the one in `checkout`, the cwd Archon runs the node in: the checkout the
+    queue was launched with (`--cwd`). Never this file's own directory, which is Archon's
+    frozen copy of the pack under workflow-source/runs/<id>/project, with no scripts/ and no
+    worktrees beside it."""
     if not branches:
         return ""
+    checkout = checkout or Path.cwd()
+    top = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if top.returncode != 0:
+        return f"not pruned: {checkout} is not a git checkout ({top.stderr.strip()})"
+    script = Path(top.stdout.strip()) / "scripts" / "prune-worktrees.sh"
     if not script.is_file():
         return f"not pruned: {script} is missing in this checkout"
     argv = ["bash", str(script)] + [arg for b in branches for arg in ("--branch", b)]
