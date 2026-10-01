@@ -174,22 +174,35 @@ await test("session_start reports the session and says the address benchd gave i
 	}
 });
 
-await test("mail benchd hands over at a model request is in every request of that run", async () => {
+await test("mail benchd hands over at a model request is new once, then stays where it arrived", async () => {
 	const bench = fakeBench();
 	try {
 		const { record, ctx } = started();
 		await record.handlers.get("session_start")({}, ctx);
 		const inject = record.handlers.get("context");
-		bench.answer({ handle: "h", context: "You have mail from a: /x/m1.md" });
+		const texts = (result) => result?.messages?.map((m) => m.content[0].text).join(" | ");
+		bench.answer({ handle: "h", context: "mail m1" });
 		const first = await inject({ messages: [user("go")] }, ctx);
-		check(first?.messages?.length === 2, `first request: ${JSON.stringify(first)}`);
-		check(first.messages[1].content[0].text === "You have mail from a: /x/m1.md", "the notice is appended");
+		check(texts(first) === "go | mail m1", `first request: ${texts(first)}`);
+
+		// The agent read m1 and replied; benchd hands over nothing new. m1 stays before that.
 		bench.answer({ handle: "h" });
-		const second = await inject({ messages: [user("go"), user("tool result")] }, ctx);
-		check(second?.messages?.length === 3, "the notice is re-sent for the rest of the run");
+		const second = await inject({ messages: [user("go"), user("read m1"), user("replied")] }, ctx);
+		check(texts(second) === "go | mail m1 | read m1 | replied", `second request: ${texts(second)}`);
+		check(
+			second?.messages?.[1]?.timestamp === first?.messages?.[1]?.timestamp,
+			"the notice keeps the moment it arrived",
+		);
+
+		// A second notice arrives later in the run: it is new now, and m1 stays where it was.
+		bench.answer({ handle: "h", context: "mail m2" });
+		const third = await inject({ messages: [user("go"), user("read m1"), user("replied"), user("more")] }, ctx);
+		check(texts(third) === "go | mail m1 | read m1 | replied | more | mail m2", `third request: ${texts(third)}`);
+
 		record.handlers.get("agent_start")({}, ctx);
+		bench.answer({ handle: "h" });
 		const next = await inject({ messages: [user("next run")] }, ctx);
-		check(next === undefined, "a new run starts without it");
+		check(next === undefined, "a new run starts without them");
 	} finally {
 		bench.done();
 	}
