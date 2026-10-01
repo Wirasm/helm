@@ -315,6 +315,104 @@ fn codex_events_in(names: &[&str], listed: bool) -> Vec<String> {
         .collect()
 }
 
+/// How long a `hooks/list` probe waits for codex's answer. Measured: 60 ms on 0.159.3, 250 ms on
+/// 0.157.0, both from a cold start.
+const CODEX_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// codex's own `hooks/list` for `cwd`, from the `codex` on PATH, through a stdio app-server of its own that is killed once it answers. It reads the
+/// operator's codex config and writes nothing. stdin stays open until the answer: an
+/// app-server whose stdin closes exits before answering.
+pub fn codex_hooks_list(cwd: &std::path::Path) -> Result<serde_json::Value, String> {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, Write};
+    use std::process;
+    let mut child = process::Command::new("codex")
+        .arg("app-server")
+        .current_dir(cwd)
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot start `codex app-server`: {e}"))?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("`codex app-server` has no stdio".into());
+    };
+    let requests = [
+        json!({ "id": 1, "method": "initialize",
+                "params": { "clientInfo": { "name": "bench",
+                                            "version": env!("CARGO_PKG_VERSION") } } }),
+        json!({ "method": "initialized" }),
+        json!({ "id": 2, "method": "hooks/list", "params": { "cwds": [cwd] } }),
+    ];
+    let wrote = requests.iter().try_for_each(|r| writeln!(stdin, "{r}"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Ok(message) = serde_json::from_str::<Value>(&line)
+                && message["id"] == 2
+            {
+                let _ = tx.send(message);
+                return;
+            }
+        }
+    });
+    let answer = wrote
+        .map_err(|e| format!("cannot write to `codex app-server`: {e}"))
+        .and_then(|()| {
+            rx.recv_timeout(CODEX_ANSWER_WAIT).map_err(|e| match e {
+                std::sync::mpsc::RecvTimeoutError::Timeout => format!(
+                    "`codex app-server` did not answer hooks/list within {}s",
+                    CODEX_ANSWER_WAIT.as_secs()
+                ),
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    "`codex app-server` ended its output without answering hooks/list".into()
+                }
+            })
+        });
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let answer = answer?;
+    if answer["result"].is_object() {
+        Ok(answer["result"].clone())
+    } else {
+        Err(format!("codex refused hooks/list: {}", answer["error"]))
+    }
+}
+
+/// The config override that trusts, for one codex process, every hook a `hooks/list` answer
+/// says needs review: `hooks.state={ "<key>" = { trusted_hash = "<currentHash>" }, … }`, the
+/// form codex's `/hooks` saves, given with `-c` so nothing is written. `None` when nothing needs
+/// review. What `--dangerously-bypass-hook-trust` does, for the one start codex ignores that flag
+/// on: a TUI resuming against a separate app-server reviews hooks at startup whatever the flag
+/// says (`is_persistent_resume` in codex's `tui/src/lib.rs`, 0.159.3), asking the server's
+/// `hooks/list`. One table rather than one `-c` per key: codex splits a dotted `-c` path at
+/// every dot, and a key is a path (`/Users/me/.codex/hooks.json:stop:0:0`).
+pub fn codex_session_trust(hooks_list: &serde_json::Value) -> Option<String> {
+    let entries: Vec<String> = hooks_list["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
+        .filter(|h| matches!(h["trustStatus"].as_str(), Some("untrusted" | "modified")))
+        .filter_map(|h| {
+            let (key, hash) = (h["key"].as_str()?, h["currentHash"].as_str()?);
+            // A JSON string is a TOML basic string: the same quotes and escapes.
+            Some(format!(
+                "{} = {{ trusted_hash = {} }}",
+                serde_json::Value::from(key),
+                serde_json::Value::from(hash)
+            ))
+        })
+        .collect();
+    (!entries.is_empty()).then(|| format!("hooks.state={{ {} }}", entries.join(", ")))
+}
+
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
 /// declared — helm's `HELM_PANE` or benchd's `BENCH_SESSION` — **and** that runs on a
 /// terminal.
@@ -621,5 +719,29 @@ mod tests {
         .unwrap();
         assert_eq!(args.harness, Harness::Claude);
         assert!(args.pane.is_none() && args.tool.is_none());
+    }
+
+    /// Only what needs review is trusted, by its key and its hash as codex reports them now, in
+    /// one table whose keys keep their dots.
+    #[test]
+    fn codex_session_trust_trusts_what_needs_review_as_one_table() {
+        let list = serde_json::json!({ "data": [{ "hooks": [
+            { "key": "/h/.codex/hooks.json:stop:0:0", "currentHash": "sha256:a",
+              "trustStatus": "untrusted" },
+            { "key": "/h/.codex/hooks.json:pre_tool_use:0:0", "currentHash": "sha256:b",
+              "trustStatus": "modified" },
+            { "key": "/h/.codex/hooks.json:session_start:0:0", "currentHash": "sha256:c",
+              "trustStatus": "trusted" },
+            { "key": "managed:x", "currentHash": "sha256:d", "trustStatus": "managed" },
+        ]}]});
+        assert_eq!(
+            codex_session_trust(&list).as_deref(),
+            Some(
+                r#"hooks.state={ "/h/.codex/hooks.json:stop:0:0" = { trusted_hash = "sha256:a" }, "/h/.codex/hooks.json:pre_tool_use:0:0" = { trusted_hash = "sha256:b" } }"#
+            )
+        );
+        let trusted = serde_json::json!({ "data": [{ "hooks": [
+            { "key": "k", "currentHash": "sha256:c", "trustStatus": "trusted" }]}]});
+        assert_eq!(codex_session_trust(&trusted), None);
     }
 }

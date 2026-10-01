@@ -20,6 +20,7 @@ use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, RestoreArgs};
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// What `restore` did for one pane.
@@ -39,18 +40,26 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         Some(p) => Some(PaneId::parse(p.trim()).map_err(|why| format!("restore: {why}"))?),
         None => None,
     };
+    // Asking codex for its hook trust starts a process, so it is asked before the lock is
+    // taken for the restore, once per directory a codex is recorded in.
+    let codex_dirs: HashSet<String> = {
+        let c = core.lock().unwrap();
+        let doc = &c.bench.document;
+        waiting(&c, doc, only)
+            .iter()
+            .filter_map(|(pane, _, _)| doc.pane(*pane).and_then(recorded_agent))
+            .filter(|a| a.command == AgentKind::Codex.name())
+            .map(|a| a.cwd)
+            .collect()
+    };
+    let trusts: HashMap<String, Option<String>> = codex_dirs
+        .into_iter()
+        .map(|cwd| (spawn::codex_hook_trust(&cwd), cwd))
+        .map(|(trust, cwd)| (cwd, trust))
+        .collect();
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
-    let waiting: Vec<_> = next
-        .terminals()
-        .into_iter()
-        .filter(|(pane, _, _)| only.is_none_or(|p| p == *pane))
-        .filter(|(_, _, session)| {
-            session
-                .as_deref()
-                .is_none_or(|s| !c.sessions.get(s).is_some_and(|s| s.is_live()))
-        })
-        .collect();
+    let waiting = waiting(&c, &next, only);
     if let Some(pane) = only
         && waiting.is_empty()
     {
@@ -84,7 +93,10 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "claude conversation {} was never written in: nothing to resume",
                 a.session
             ))),
-            Some(a) => resume(&mut c, pane, &a).map_err(Some),
+            Some(a) => {
+                let trust = trusts.get(&a.cwd).cloned().flatten();
+                resume(&mut c, pane, &a, trust).map_err(Some)
+            }
             None => Err(None),
         };
         let one = match resumed {
@@ -118,6 +130,24 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }
+}
+
+/// The terminal panes of `doc` (or only `only`) that show no live session: the ones a restore
+/// gives a session.
+fn waiting(
+    c: &Core,
+    doc: &bench_doc::Document,
+    only: Option<PaneId>,
+) -> Vec<(PaneId, Option<bench_doc::StandardPath>, Option<String>)> {
+    doc.terminals()
+        .into_iter()
+        .filter(|(pane, _, _)| only.is_none_or(|p| p == *pane))
+        .filter(|(_, _, session)| {
+            session
+                .as_deref()
+                .is_none_or(|s| !c.sessions.get(s).is_some_and(|s| s.is_live()))
+        })
+        .collect()
 }
 
 /// Whether Claude has written a transcript for conversation `id`:
@@ -180,8 +210,13 @@ fn recorded_agent(pane: &bench_doc::Pane) -> Option<ResumableAgent> {
 }
 
 /// Resume `agent`'s conversation as a benchd session for `pane`, under the mailbox the record
-/// gave it when it has one.
-fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<Session>, String> {
+/// gave it when it has one; a codex with `hook_trust` ([`spawn::hook_trust`]).
+fn resume(
+    core: &mut Core,
+    pane: PaneId,
+    agent: &ResumableAgent,
+    hook_trust: Option<String>,
+) -> Result<Arc<Session>, String> {
     let kind = AgentKind::parse(&agent.command, false)?;
     let id = format!("s{}", core.next_session);
     core.next_session += 1;
@@ -203,6 +238,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         extra_args: Vec::new(),
         settings: None,
         codex_server: None,
+        codex_hook_trust: hook_trust,
     };
     spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(

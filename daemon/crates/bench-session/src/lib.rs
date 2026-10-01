@@ -177,6 +177,10 @@ pub struct SpawnSpec {
     /// idle (#358). `None` runs the TUI with its app-server embedded, which nothing outside the
     /// process can reach.
     pub codex_server: Option<String>,
+    /// codex: the `-c` override its app-server trusts the hooks with for this session alone
+    /// (`bench_wire::hook::codex_session_trust`), on a served resume, the one start codex
+    /// reviews hooks on despite `--dangerously-bypass-hook-trust`.
+    pub codex_hook_trust: Option<String>,
 }
 
 impl SpawnSpec {
@@ -206,7 +210,8 @@ impl SpawnSpec {
 }
 
 /// How a served codex session starts, as a script: `$0` is the socket, `$1` the app-server's
-/// sandbox ([`codex_sandbox`]), the rest the TUI's flags. Measured on codex 0.157.0:
+/// sandbox ([`codex_sandbox`]), `$2` its hook trust ([`SpawnSpec::codex_hook_trust`], empty for
+/// none), the rest the TUI's flags. Measured on codex 0.157.0:
 /// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
 ///   parent. So it runs in the session's environment (`BENCH_SESSION`), one per session, and
 ///   benchd knows which session a hook is from without matching threads.
@@ -219,9 +224,9 @@ impl SpawnSpec {
 /// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
 ///   watcher is its leash: it outlives a hangup and stops the server within a second of the
 ///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
-pub const CODEX_SERVED: &str = r#"s="$0" m="$1"
-shift
-codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
+pub const CODEX_SERVED: &str = r#"s="$0" m="$1" t="$2"
+shift 2
+codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' ${t:+-c "$t"} --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
 p=$!
 ( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 i=0
@@ -311,7 +316,9 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             }
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
             // made in a dialog nobody is at an unattended pane to answer. An agent that already
-            // runs every command unsandboxed gains nothing a hook could add.
+            // runs every command unsandboxed gains nothing a hook could add. A served resume
+            // ignores this flag at startup; its server carries the trust instead
+            // ([`SpawnSpec::codex_hook_trust`]).
             args.push("--dangerously-bypass-hook-trust".into());
             // The thread's directory. Against a separate app-server the TUI's own cwd is not
             // it (measured: the thread ran in the server's).
@@ -390,6 +397,7 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             CODEX_SERVED.to_string(),
             socket.clone(),
             codex_sandbox(spec.posture).to_string(),
+            spec.codex_hook_trust.clone().unwrap_or_default(),
         ];
         served.extend(args);
         return Ok(("/bin/sh".to_string(), served));
@@ -775,6 +783,7 @@ mod tests {
             settings: None,
             extra_args: Vec::new(),
             codex_server: None,
+            codex_hook_trust: None,
         }
     }
 
@@ -860,11 +869,17 @@ mod tests {
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "/bin/sh");
         assert_eq!(
-            a[..4],
-            ["-c", CODEX_SERVED, "/r/codex/s1.sock", "danger-full-access"]
+            a[..5],
+            [
+                "-c",
+                CODEX_SERVED,
+                "/r/codex/s1.sock",
+                "danger-full-access",
+                ""
+            ]
         );
         assert_eq!(
-            a[4..],
+            a[5..],
             embedded[..],
             "the TUI keeps every flag and the prompt"
         );
@@ -878,7 +893,7 @@ mod tests {
         assert!(embedded.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
         s.codex_server = Some("/r/codex/s1.sock".into());
         let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..6], ["danger-full-access", "resume", "019a-thread"]);
+        assert_eq!(a[3..7], ["danger-full-access", "", "resume", "019a-thread"]);
         assert!(
             !a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
             "codex exits on a permission flag in a remote resume: {a:?}"
@@ -930,6 +945,7 @@ mod tests {
                     CODEX_SERVED,
                     socket.to_str().unwrap(),
                     "danger-full-access",
+                    "",
                 ])
                 .env("PATH", path)
                 .spawn()
@@ -962,6 +978,46 @@ mod tests {
                 "the app-server outlived its TUI after signal {signal}"
             );
         }
+    }
+
+    /// The trust is one `-c` value to the app-server, however many spaces and quotes it holds,
+    /// and with none the server gets no `-c` for it at all.
+    #[test]
+    fn a_served_codexs_hook_trust_reaches_its_app_server_as_one_argument() {
+        let dir = std::env::temp_dir().join(format!("bcxt{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("codex");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n[ \"$1\" = app-server ] && printf '%s\\n' \"$@\" > {}/server.args\nexit 0\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let trust = r#"hooks.state={ "/h/x.json:stop:0:0" = { trusted_hash = "sha256:a b" } }"#;
+        let server_args = |trust: &str| {
+            let _ = std::fs::remove_file(dir.join("server.args"));
+            let status = std::process::Command::new("/bin/sh")
+                .args(["-c", CODEX_SERVED, dir.join("s.sock").to_str().unwrap()])
+                .args(["danger-full-access", trust, "resume", "019a"])
+                .env("PATH", format!("{}:/bin:/usr/bin", dir.display()))
+                .status()
+                .unwrap();
+            assert!(status.success());
+            std::fs::read_to_string(dir.join("server.args")).unwrap()
+        };
+        let with = server_args(trust);
+        let without = server_args("");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(with.contains(&format!("-c\n{trust}\n--listen\n")), "{with}");
+        assert!(
+            without.contains("approval_policy=\"never\"\n--listen\n"),
+            "{without}"
+        );
     }
 
     #[test]
@@ -1094,12 +1150,13 @@ mod tests {
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "/bin/sh");
         assert_eq!(
-            a[..6],
+            a[..7],
             [
                 "-c",
                 CODEX_SERVED,
                 "/r/codex/s2.sock",
                 "read-only",
+                "",
                 "fork",
                 "019a-author"
             ]
@@ -1112,7 +1169,7 @@ mod tests {
         s.conversation = Conversation::Resume("019b-fork".into());
         s.prompt_file = None;
         let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..6], ["read-only", "resume", "019b-fork"]);
+        assert_eq!(a[3..7], ["read-only", "", "resume", "019b-fork"]);
     }
 
     /// Unserved, the TUI carries the posture itself.

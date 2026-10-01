@@ -139,6 +139,7 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
     };
     let mut spec = plan.spec.clone();
     wire(&mut spec, &root, id).map_err(|why| (Status::Error, why))?;
+    spec.codex_hook_trust = hook_trust(&spec);
     Session::spawn(
         id.to_string(),
         handle.to_string(),
@@ -162,6 +163,33 @@ pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<()
         _ => {}
     }
     Ok(())
+}
+
+/// The hook trust `spec` starts with ([`SpawnSpec::codex_hook_trust`]): asked of codex for a
+/// codex resume, the one start whose TUI reviews hooks despite the bypass flag, and `None` for
+/// everything else. It starts a process, so it runs outside the core lock, on every route that
+/// resumes a codex: `spawn` and `resume` call it, `restore` asks [`codex_hook_trust`] for each
+/// directory before it takes the lock.
+pub fn hook_trust(spec: &SpawnSpec) -> Option<String> {
+    let resume = matches!(spec.conversation, bench_session::Conversation::Resume(_));
+    (spec.agent == AgentKind::Codex && resume)
+        .then(|| codex_hook_trust(&spec.cwd))
+        .flatten()
+}
+
+/// The trust a resumed codex's app-server gives the hooks that need review in `cwd`, asked of
+/// codex itself (`hooks/list`, 60 ms on 0.159.3, at most 10 s). Without it the TUI opens on
+/// "Hooks need review", none of its hooks run, and mail to it waits. A failed probe starts the
+/// session anyway: its screen then shows the dialog, which `bench sessions` reports as `hook
+/// review`.
+pub fn codex_hook_trust(cwd: &str) -> Option<String> {
+    match bench_wire::hook::codex_hooks_list(std::path::Path::new(cwd)) {
+        Ok(list) => bench_wire::hook::codex_session_trust(&list),
+        Err(why) => {
+            eprintln!("benchd: codex in {cwd} resumes without hook trust: {why}");
+            None
+        }
+    }
 }
 
 /// What an agent benchd starts learns about itself: its session, its address and this root, so
@@ -291,6 +319,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         settings: None,
         extra_args: args.args,
         codex_server: None,
+        codex_hook_trust: None,
     };
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
     // runtime cannot run (a fork of the test agent, say) is refused here, before anything is

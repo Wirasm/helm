@@ -204,6 +204,7 @@ pub fn open_action(
                 settings: None,
                 extra_args: Vec::new(),
                 codex_server: None,
+                codex_hook_trust: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),
