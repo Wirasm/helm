@@ -104,7 +104,7 @@ struct Palette: Equatable, Sendable {
     /// in its own words (`packages/web/src/experiments/console/theme.css`): *"the duotone
     /// magenta → violet → teal gradient drawn from the shield logo is THE brand"*, painted at
     /// 135° by two utilities — `.brand-text` on the wordmark, `.brand-bar` on a CTA. helm
-    /// spends it on exactly those two things: the rail's title and its send button.
+    /// spends it on exactly those two things: the Archon drawer's title and its send button.
     ///
     /// **Governed rather than borrowed as hex**, which is the only kind of second voice this
     /// file allows. Archon's authored values are `oklch(0.640 0.295 330)`,
@@ -152,8 +152,8 @@ struct Palette: Equatable, Sendable {
     let attention: Token
     /// **Something failed, and the operator has to look.** A command that exited nonzero, a
     /// worktree action that refused, an Archon run that errored. Archon's `--error`,
-    /// `oklch(0.68 0.215 18)`; named for the job rather than the rail, because the worktrees
-    /// rail and the terminal tab spend it too.
+    /// `oklch(0.68 0.215 18)`; named for the job rather than for Archon, because the
+    /// Worktrees drawer and the terminal tab spend it too.
     let danger: Token
 
     // MARK: - Archon's ground

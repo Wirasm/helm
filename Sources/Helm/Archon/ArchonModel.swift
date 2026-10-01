@@ -75,19 +75,18 @@ final class ArchonModel: ObservableObject {
     private var failedPolls = 0
     @Published private(set) var isRefreshing = false
     @Published private(set) var isLaunching = false
-    /// **The one piece of text here that is not in the rail's list, and it is deliberate.**
+    /// **The one piece of text here that is not in the drawer's list, and it is deliberate.**
     /// Everything ambient was cut — no liveness word, no empty-state prose, no footer — but a
     /// send button that silently does nothing is a worse defect than a line of text, and this
     /// is the only place Archon's own reason for refusing a launch can be read.
     @Published private(set) var launchFailure: String?
-    /// Why the last decision did not land. **Separate from `launchFailure`** because the two sit
-    /// on different halves of the rail, and a rejected launch must not be cleared by a
-    /// successful approve.
+    /// Why the last decision did not land. **Separate from `launchFailure`** because a rejected
+    /// launch must not be cleared by a successful approve.
     @Published private(set) var actionFailure: String?
     /// The gate the composer is currently answering, if any. Nil is the launch composer.
     @Published private(set) var reply: ArchonGateReply?
     /// A set rather than a flag: two gates are independently answerable, and a spinner over the
-    /// whole rail would say the wrong thing about the other one.
+    /// whole drawer would say the wrong thing about the other one.
     @Published private(set) var busyRuns: Set<String> = []
     @Published private(set) var workflows: [ArchonWorkflow] = []
     @Published private(set) var workflowLoadErrors: [ArchonWorkflowLoadError] = []

@@ -9,10 +9,9 @@
 # what leaves the note.
 #
 # Writes the format `BuildStamp` decodes. That type and this script are the two halves of one
-# wire format across a runtime boundary a Swift library cannot cross, which is the same
-# carve-out AGENTS.md grants the spool scripts and the mailbox — and, like those, it is
-# detectable rather than trusted: `BuildStampScriptTests` runs this script and decodes what it
-# writes with the real type.
+# wire format across a runtime boundary a Swift library cannot cross, the one case AGENTS.md
+# allows a duplicate, and only because it is detectable rather than trusted:
+# `BuildStampScriptTests` runs this script and decodes what it writes with the real type.
 set -euo pipefail
 
 product="${1:?usage: announce-build.sh <path to built Helm.app>}"
