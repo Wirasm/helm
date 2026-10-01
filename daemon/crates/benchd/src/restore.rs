@@ -203,6 +203,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         extra_args: Vec::new(),
         settings: None,
         codex_server: None,
+        codex_hook_trust: None,
     };
     spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(

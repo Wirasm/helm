@@ -158,10 +158,29 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
     match spec.agent {
         AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
-        AgentKind::Codex => spec.codex_server = Some(codex_server_socket(root, id)?),
+        AgentKind::Codex => {
+            spec.codex_server = Some(codex_server_socket(root, id)?);
+            if spec.served_resume().is_some() {
+                spec.codex_hook_trust = codex_hook_trust(&spec.cwd);
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// The trust a resumed codex's app-server gives the hooks that need review, asked of codex
+/// itself (`hooks/list`, 60 ms on 0.159.3). Without it the TUI opens on "Hooks need review",
+/// none of its hooks run, and mail to it waits. A failed probe starts the session anyway: its
+/// screen then shows the dialog, which `bench sessions` reports as `hook review`.
+fn codex_hook_trust(cwd: &str) -> Option<String> {
+    match bench_wire::hook::codex_hooks_list(std::path::Path::new(cwd)) {
+        Ok(list) => bench_wire::hook::codex_session_trust(&list),
+        Err(why) => {
+            eprintln!("benchd: codex in {cwd} resumes without hook trust: {why}");
+            None
+        }
+    }
 }
 
 /// What an agent benchd starts learns about itself: its session, its address and this root, so
@@ -291,6 +310,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         settings: None,
         extra_args: args.args,
         codex_server: None,
+        codex_hook_trust: None,
     };
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
     // runtime cannot run (a fork of the test agent, say) is refused here, before anything is
