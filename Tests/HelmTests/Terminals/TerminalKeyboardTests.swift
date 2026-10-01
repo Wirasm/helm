@@ -235,9 +235,9 @@ final class TerminalKeyboardTests: XCTestCase {
 
 // MARK: - Harness
 
-/// helm in a window, with readable ptys.
+/// helm in a window, asking where typing goes.
 @MainActor
-private final class HelmWindow {
+private final class HelmWindow: HelmTestWindow {
     enum Layout {
         /// One column, one slot, N tabs — the frame a first-run workspace gets.
         case oneSlot
@@ -254,79 +254,29 @@ private final class HelmWindow {
         case afterTheHop
     }
 
-    let terminals: TerminalManager
-    let workbench: WorkbenchModel
-    let window: NSWindow
-    private let ptys = PtyRegistry()
-    private let workspacePath = NSTemporaryDirectory()
-    /// The toy benchd the bench is drawn from (`ToyBench`), and helm's client for it.
-    private let server: FakeBenchd
-    private let client: BenchClient
-
     init(terminals count: Int, layout: Layout = .oneSlot, attach: Attach = .immediately) throws {
-        // A test bundle is not an app, and AppKit will not deliver a key event through a
-        // window that belongs to no application. `.accessory` keeps it out of the Dock and
-        // off the operator's screen — nothing here activates, so nothing steals their focus.
-        _ = NSApplication.shared
-        NSApp.setActivationPolicy(.accessory)
-
-        let registry = ptys
-        terminals = TerminalManager(command: { registry.next() })
         // Drawn from a document that already names the panes, so the ids are known before
         // anything mounts — which is also the launch path, and one of the three cases #96 lists.
         let ids = (0..<count).map { _ in UUID() }
-        (server, client) = try startToyBenchd(.only(workspacePath, Self.bench(ids, layout)))
-        let workbench = WorkbenchModel(terminals: terminals, client: client)
-        self.workbench = workbench
-        XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
-        XCTAssertNotNil(workbench.bench, "no bench was drawn")
-
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-
-        let hosting = NSHostingView(
-            rootView: WorkbenchView(model: workbench, workspaceRoot: workspacePath))
-        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
-
-        switch attach {
-        case .immediately:
-            window.contentView = hosting
-        case .afterTheHop:
-            // Lay the whole tree out with no window anywhere in it, then let the main queue
-            // drain. Any claim that depends on `view.window` being non-nil during SwiftUI's
-            // update, or one runloop turn after it, has now had its chance and missed.
-            hosting.layoutSubtreeIfNeeded()
-            Self.drainMainQueue()
-            window.contentView = hosting
-        }
-        settle()
+        let workspacePath = NSTemporaryDirectory()
+        try super.init(
+            workspacePath: workspacePath, bench: Self.bench(ids, layout),
+            root: { WorkbenchView(model: $0, workspaceRoot: workspacePath) },
+            attach: { window, hosting in
+                switch attach {
+                case .immediately:
+                    window.contentView = hosting
+                case .afterTheHop:
+                    // Lay the whole tree out with no window anywhere in it, then let the main
+                    // queue drain. Any claim that depends on `view.window` being non-nil during
+                    // SwiftUI's update, or one runloop turn after it, has now had its chance
+                    // and missed.
+                    hosting.layoutSubtreeIfNeeded()
+                    Self.drainMainQueue()
+                    window.contentView = hosting
+                }
+            })
     }
-
-    /// Explicit rather than a `deinit`: a nonisolated deinit may not touch main-actor state,
-    /// and leaving the window in the run loop leaks a Metal-backed surface into the next test.
-    ///
-    /// Every session is closed through the registry rather than left to ARC reaching
-    /// `terminals` when the harness goes out of scope: that is one stray strong reference away
-    /// from a live Metal layer and display link outliving its test.
-    func close() {
-        window.contentView = nil
-        window.close()
-        for session in terminals.sessions { terminals.surfaces.close(session.id) }
-        client.stop()
-        server.stop()
-    }
-
-    /// Let AppKit, SwiftUI and ghostty run for a moment.
-    ///
-    /// **Deliberately no longer how anything is waited for.** It used to be a fixed 0.6s (0.3s
-    /// after a keystroke), which is a bet that the machine is as fast today as it was when the
-    /// number was picked — and #192 is that bet lost. Every claim this suite makes now waits on
-    /// its own observable with a generous ceiling (`Eventually`), so this is only what it says:
-    /// a chance for the hierarchy to run before a *negative* claim, which has no edge to wait
-    /// for by definition.
-    func settle() { Eventually.pump() }
 
     func session(_ index: Int) -> TerminalSession { terminals.sessions[index] }
 
@@ -350,43 +300,6 @@ private final class HelmWindow {
         XCTAssertEqual(window.firstResponder as? NSView, view, message(), file: file, line: line)
     }
 
-    /// The pty behind a pane, matched on the in-memory session's **identity**.
-    ///
-    /// It was matched on position — the Nth session's Nth `Pty` — and that was wrong the
-    /// moment a test could close a pane: `terminals.sessions` shrinks where the registry
-    /// does not, so index N silently starts naming a different terminal. It failed as a
-    /// missing keystroke, which reads as a focus bug and is not one.
-    func pty(of pane: Pane.ID) throws -> Pty {
-        let session = try XCTUnwrap(
-            terminals.sessions.first { $0.id == pane }, "no session for pane \(pane)")
-        let pty = try XCTUnwrap(
-            ptys.all.first { $0.command == session.hostView.configuration.command },
-            "no pty registered for \(pane)")
-        // **The one precondition every keystroke assertion in this file rests on**, checked
-        // here because this accessor is the single door all of them go through. A surface that
-        // never came up and a keyboard that went to the wrong pane are the same red without
-        // it — see `MissingTerminalSurface`, and #192, which that ambiguity cost two days.
-        let budget: TimeInterval = 5
-        guard Eventually.holds(within: budget, { session.status == .running }) else {
-            throw MissingTerminalSurface(pane: pane, waited: budget)
-        }
-        // The surface is up; the recorder in it must also be in raw mode before anything is
-        // typed at it, or the keystroke waits in the line discipline for a newline.
-        guard Eventually.holds(within: budget, { pty.isReady }) else {
-            throw RecorderNeverStarted(pane: pane, pty: pty, waited: budget)
-        }
-        return pty
-    }
-
-    /// Carry out one of the key table's gestures the way a key does — resolved against the
-    /// bench and sent as the operator — and let it land.
-    func command(_ gesture: VerbTemplate) {
-        if let verb = gesture.resolve(bench: workbench.bench, workspaces: [], active: nil) {
-            workbench.send(verb, by: .operatorGesture)
-        }
-        settle()
-    }
-
     /// Open a second workspace, the way the operator's ⌘⇧O does. Returns the pane its terminal
     /// arrives under.
     @discardableResult
@@ -394,38 +307,6 @@ private final class HelmWindow {
         workbench.send(.workspaceOpen(path: workspacePath + "another/"), by: .operatorGesture)
         settle()
         return try XCTUnwrap(workbench.bench?.panes.first?.id)
-    }
-
-    /// A keystroke through the window, not into a view: `sendEvent` walks the responder
-    /// chain, so this asks the question the operator asks — where does typing go.
-    func type(_ text: String) {
-        for character in text {
-            let event = NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                characters: String(character), charactersIgnoringModifiers: String(character),
-                isARepeat: false, keyCode: Self.keyCode(for: character))
-            // Loudly, not silently: a dropped event would surface downstream as "the
-            // keystroke never reached the shell", which reads as a focus bug and is not one.
-            guard let event else {
-                return XCTFail("could not synthesise a key event for \(character)")
-            }
-            window.sendEvent(event)
-        }
-        // No budget for the byte's journey here — `Pty.received(_:)` waits for arrival at the
-        // pty it is asked about. The short pump is for the *negative* claims only, so that
-        // "it did not reach this pty" has had a fair chance to be wrong.
-        settle()
-    }
-
-    /// ANSI US virtual key codes for the handful of letters these tests type. ghostty
-    /// translates the physical key, so a wrong code produces a wrong byte rather than none.
-    private static func keyCode(for character: Character) -> UInt16 {
-        let codes: [Character: UInt16] = [
-            "k": 40, "q": 12, "w": 13, "x": 7, "y": 16, "z": 6,
-        ]
-        return codes[character] ?? 0
     }
 
     private static func bench(_ ids: [UUID], _ layout: Layout) -> BenchDocument.Bench {
@@ -518,17 +399,5 @@ final class Pty: CustomDebugStringConvertible {
     var debugDescription: String {
         let text = received
         return text.isEmpty ? "<nothing>" : String(reflecting: text)
-    }
-}
-
-/// One `Pty` per session, in creation order — which is `TerminalManager.sessions` order.
-@MainActor
-private final class PtyRegistry {
-    private(set) var all: [Pty] = []
-
-    func next() -> String? {
-        let pty = Pty()
-        all.append(pty)
-        return pty.command
     }
 }
