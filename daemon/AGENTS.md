@@ -43,7 +43,7 @@ knows nor needs the Rust toolchain, in either direction.
   or one whose hook claimed a mailbox through `bench hook` (#358) (handle, `wakeable`,
   `unread`), `null` for everyone else — the list is the mail directory
   too (#396); benchd counts the inboxes and passes them in. `fixtures/session-rows.json`
-  pins the reply helm's drawer will decode. `transcript` reads one Claude or pi transcript as
+  pins the reply helm's drawer will decode. `transcript` reads one Claude, pi or codex transcript as
   a log for `bench log` (#421), under the same rule: an unknown record is a named, skipped
   line. Tests
   build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or

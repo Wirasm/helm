@@ -67,8 +67,9 @@ Facts with edges:
   path instead of an id, such as a subagent row's `open.path`.
 - **`--since` takes `30m`, `2h`, `1d` or an RFC 3339 time**, and `-n` then keeps the last N of
   those (40 by default). `total` counts the entries after `--since`.
-- **Claude and pi only.** A codex id is refused with exit 3: codex rollouts mix injected
-  context into the prompt, so its log would mislead.
+- **Claude, pi and codex.** A codex row's `id` is its thread id, and its log is read from the
+  rollout's typed items, so injected context (AGENTS.md, environment, hook context) is left
+  out. A message from another codex agent shows as `user`; its payload is encrypted.
 - **A record it does not recognise is skipped, never guessed at.** Each one is printed on
   stderr as `bench: <path>:<line>: skipped, <why>` and listed in `unreadable` in the JSON.
   A non-empty `unreadable` means the harness changed its format; say so rather than
@@ -78,5 +79,5 @@ Facts with edges:
 
 ## Exit codes
 
-`0` ok · `2` no daemon (`sessions` only) · `3` refused: an unknown id, a codex rollout, a bad
-flag · `4` the file could not be read, or a pi session in a format this build does not read.
+`0` ok · `2` no daemon (`sessions` only) · `3` refused: an unknown id or a bad flag · `4` the
+file could not be read, or a pi session or codex rollout in a format this build does not read.

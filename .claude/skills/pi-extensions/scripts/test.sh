@@ -28,7 +28,7 @@
 # `sandbox` below points every root helm's conventions honour at a per-run temp directory, and
 # `assert_real_state_untouched` proves it worked. Read that block before adding a harness.
 #
-# Verified against pi 0.83.0 on 2026-08-02.
+# Verified against pi 0.83.0 on 2026-08-02; the pty harness re-measured on pi 0.99.2 on 2026-10-01.
 set -u
 
 # The project under test, derived from where this is RUN, never from where this file LIVES.
@@ -42,7 +42,8 @@ skip() { printf 'skip: %s\n' "$*"; }
 bad()  { printf 'not ok - %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
 
 # The installed pi package. Overridable so this can be pointed at a candidate upgrade.
-PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+# Runs before the sandbox moves TMPDIR, so npm is kept from leaving its compile cache there.
+PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-"$(NODE_DISABLE_COMPILE_CACHE=1 npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -104,6 +105,11 @@ sandbox() {
 	# from these. Pointed at the sandbox, it finds no daemon and says nothing.
 	export BENCH_DIR="$SANDBOX/bench"
 	unset BENCH_SUITE BENCH_SESSION
+	# A real pi leaves caches in the temp directory (`jiti`, `node-compile-cache`), which the
+	# check.sh `pi` part counts as a test that does not clean up. Every temp file of the run,
+	# the harnesses' own directories included, now goes with the sandbox.
+	mkdir -p "$SANDBOX/tmp" || return 1
+	export TMPDIR="$SANDBOX/tmp/"
 }
 
 # The guard the sandbox is worth nothing without: no session the gate ran (every harness runs
@@ -300,21 +306,30 @@ harness_rpc() {
 
 # ── pty ──────────────────────────────────────────────────────────────────────────────────
 # The one thing rpc cannot show: that a real interactive pi reaches a normal prompt with
-# our extension loaded. `script` gives it a pty; stdin is /dev/null so pi renders and exits.
+# our extension loaded. `script` gives it a pty. stdin is a pipe held open by a bounded
+# `sleep`, not /dev/null: since 0.99 pi draws its header only after the terminal answers its
+# colour query (or 100ms), and /dev/null's EOF reached pi as ctrl+d and quit it before that
+# (measured on pi 0.99.2, 2026-10-01).
 pty_one() {
 	local name=$1 cwd=$2 ext="$EXTENSIONS_DIR/$1/index.ts" raw="$2/$1.raw"
+	# The header's first line ends with the version (`v0.99.2`), the only stable text in it.
+	local banner="v$(pi_version)"
 	# A token unique to this run, planted in the child's argv via `env`. The cleanup below
 	# has to reach a grandchild (script's own child pi), and a bare `pkill -f <extension
 	# path>` would also kill a second, concurrent run of this suite — parallel CI, or two
 	# terminals. Matching the token keeps the kill inside this run.
 	local token="helm-pty-$$-$name"
 
+	# The sleep carries the token as its argv[0], so the pkill below ends it with pi. A fifo
+	# would give it a pid of its own, but macOS `script` refuses one ("tcgetattr/ioctl").
 	(
 		cd "$cwd" || exit 1
 		if script --version 2>/dev/null | grep -qi util-linux; then
-			script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
+			(exec -a "$token-stdin" sleep 30) |
+				script -q -c "env HELM_PTY_RUN='$token' pi --no-session --no-extensions -e '$ext'" /dev/null
 		else
-			script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
+			(exec -a "$token-stdin" sleep 30) |
+				script -q /dev/null env "HELM_PTY_RUN=$token" pi --no-session --no-extensions -e "$ext"
 		fi
 	) >"$raw" 2>&1 </dev/null &
 	local runner=$!
@@ -334,7 +349,7 @@ pty_one() {
 
 	local screen
 	screen=$(LC_ALL=C sed -e $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' -e $'s/\x1b\\][^\x07]*\x07//g' "$raw" | tr -d '\r')
-	if ! printf '%s' "$screen" | grep -q 'pi v'; then
+	if ! printf '%s' "$screen" | grep -qF "$banner"; then
 		bad "pty: $name — pi never rendered its banner; it did not reach a prompt"
 	elif ! printf '%s' "$screen" | grep -q "$name v"; then
 		bad "pty: $name — pi reached a prompt but the extension never reported"

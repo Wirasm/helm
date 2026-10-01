@@ -45,6 +45,7 @@ mod sessions;
 mod shell_env;
 mod shells;
 mod spawn;
+mod uploads;
 mod usage;
 mod waiting;
 
@@ -622,6 +623,7 @@ fn boot(
             )
             .map_err(StartError::Failed)?;
         }
+        uploads::clear(&c.root);
         // Ghostty's shell integration, for the shells terminal panes run (M5b). A failure is
         // logged and the shells start without it: prompt marks are missing, nothing else.
         if let Err(why) = shell_env::install(&c.root) {
@@ -844,8 +846,8 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         Err(_) => return,
     });
     let mut line = String::new();
-    // Read up to the larger cap `file/write`, `file/append` and `helm/answer` get; every other verb is held to
-    // `MAX_REQUEST_BYTES` once the line says which verb it is.
+    // Read up to the larger cap `file/write`, `file/append`, `helm/answer` and `browser/upload`
+    // get; every other verb is held to `MAX_REQUEST_BYTES` once the line says which verb it is.
     let mut limited = (&mut reader).take(FILE_REQUEST_MAX_BYTES as u64 + 1);
     if limited.read_line(&mut line).is_err() {
         respond(
@@ -895,7 +897,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
 
     let carries_a_document = matches!(
         Verb::parse(&request.verb),
-        Some(Verb::FileWrite | Verb::FileAppend | Verb::HelmAnswer)
+        Some(Verb::FileWrite | Verb::FileAppend | Verb::HelmAnswer | Verb::BrowserUpload)
     );
     if line.len() > MAX_REQUEST_BYTES && !carries_a_document {
         oversized(MAX_REQUEST_BYTES);
@@ -1508,6 +1510,11 @@ fn dispatch(
         }
 
         Some(Verb::BrowserConnect) => browser_connect(core, req),
+
+        Some(Verb::BrowserUpload) => {
+            let root = core.lock().unwrap().root.clone();
+            answered(req, uploads::upload(&root, &req.args))
+        }
 
         Some(Verb::BrowserStop) => match stop_browser(core, Duration::from_secs(5), Unwant::Yes) {
             Ok(pid) => (

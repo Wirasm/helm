@@ -47,6 +47,32 @@ pub enum Direction {
     Down,
 }
 
+/// A place on a bench named by ids (#178): into `slot` as a tab, before `before` or last, or a
+/// slot of its own beside `slot` (above or below it, or a column left or right of its column).
+/// Where a dropped tab goes (`pane/move`) and where a dropped file opens (`pane/open`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Place {
+    Tab {
+        slot: SlotId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<PaneId>,
+    },
+    Beside {
+        slot: SlotId,
+        side: Direction,
+    },
+}
+
+impl Place {
+    /// The slot the place is named against, which also names its bench.
+    pub fn slot(self) -> SlotId {
+        match self {
+            Place::Tab { slot, .. } | Place::Beside { slot, .. } => slot,
+        }
+    }
+}
+
 /// Which way a split opens: a new column right of the focused one, or a new row below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -656,6 +682,42 @@ impl Bench {
         self.normalize();
         self.follow(pane, focus);
         Ok(true)
+    }
+
+    /// Move a pane to a place: `move_pane_to_tab` or `move_pane_beside`.
+    pub fn move_pane_to(
+        &mut self,
+        pane: PaneId,
+        place: Place,
+        focus: Focus,
+    ) -> Result<bool, Refusal> {
+        match place {
+            Place::Tab { slot, before } => self.move_pane_to_tab(pane, slot, before, focus),
+            Place::Beside { slot, side } => self.move_pane_beside(pane, slot, side, focus),
+        }
+    }
+
+    /// Open a pane at a place (#178, a file dropped from Finder), answering the pane that shows
+    /// it. A surface this bench already shows is moved there rather than opened twice, as
+    /// `Placement::Existing` brings it forward rather than duplicating it.
+    ///
+    /// A new pane joins the place's slot as its last tab without taking anything, then moves
+    /// with the drag's own rules. With `Take` it is then shown, which also covers a place that
+    /// is where it already was: the move answers no change, and the operator still asked for it.
+    pub fn open_at(&mut self, pane: Pane, at: Place, focus: Focus) -> Result<PaneId, Refusal> {
+        let landed = match self.pane_showing(&pane.surface) {
+            Some(existing) => existing,
+            None => {
+                let id = pane.id;
+                self.place(pane, Placement::Tab(at.slot()), Focus::Leave)?;
+                id
+            }
+        };
+        self.move_pane_to(landed, at, focus)?;
+        if focus == Focus::Take {
+            self.show(landed, Focus::Take)?;
+        }
+        Ok(landed)
     }
 
     /// A divider moved: the column takes the fraction it was dragged to, and `neighbour` —
