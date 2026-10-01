@@ -258,24 +258,28 @@ pub fn unwired(harness: Harness, settings: &serde_json::Value, bench: &str) -> V
         .collect()
 }
 
-/// The events whose `bench hook codex` codex will not run until the operator trusts it, read
-/// from the answer to codex's own app-server `hooks/list`: its `trustStatus` is `untrusted` or
-/// `modified`, the two that put "Hooks need review" in front of him at startup (codex's
-/// `hook_needs_review`). Only this `bench`'s handlers count; his other hooks are his business.
+/// The events of [`CODEX_EVENTS`] for which codex will run no `bench hook codex`, read from the
+/// answer to codex's own app-server `hooks/list`: an event counts unless codex lists this
+/// `bench`'s handler for it as enabled and `trusted` (or `managed`). `untrusted` and `modified`
+/// are what put "Hooks need review" in front of the operator at startup; an event codex does not
+/// list at all (another `CODEX_HOME`, hooks turned off) runs nothing either.
 pub fn codex_needs_review(hooks_list: &serde_json::Value, bench: &str) -> Vec<String> {
     let command = codex_command(bench);
-    let mut events: Vec<String> = hooks_list["data"]
+    let runs: Vec<&str> = hooks_list["data"]
         .as_array()
         .into_iter()
         .flatten()
         .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
-        .filter(|h| h["command"] == command.as_str())
-        .filter(|h| matches!(h["trustStatus"].as_str(), Some("untrusted" | "modified")))
-        .filter_map(|h| h["eventName"].as_str().map(str::to_string))
+        .filter(|h| h["command"] == command.as_str() && h["enabled"] != false)
+        .filter(|h| matches!(h["trustStatus"].as_str(), Some("trusted" | "managed")))
+        .filter_map(|h| h["eventName"].as_str())
         .collect();
-    events.sort();
-    events.dedup();
-    events
+    // codex names an event in camelCase (`preToolUse`) where hooks.json has `PreToolUse`.
+    CODEX_EVENTS
+        .iter()
+        .filter(|event| !runs.iter().any(|r| r.eq_ignore_ascii_case(event)))
+        .map(|event| (*event).to_string())
+        .collect()
 }
 
 /// Who gets a mailbox (#427, the rule moved here from both writers): a session a host
@@ -525,25 +529,44 @@ mod tests {
 
     /// The entry shape is codex 0.159.3's `hooks/list` answer, trimmed to the fields read.
     #[test]
-    fn only_this_benchs_untrusted_or_changed_codex_hooks_need_review() {
+    fn a_codex_event_runs_the_bench_only_when_codex_trusts_this_benchs_hook() {
+        let ours = "'/b/bench' hook codex";
         let hook = |event: &str, command: &str, trust: &str| {
             serde_json::json!({ "eventName": event, "command": command, "trustStatus": trust,
                                 "source": "user", "enabled": true })
         };
-        let ours = "'/b/bench' hook codex";
-        let list = serde_json::json!({ "data": [{ "cwd": "/p", "warnings": [], "errors": [],
-            "hooks": [
-                hook("stop", ours, "trusted"),
-                hook("preToolUse", ours, "untrusted"),
-                hook("sessionStart", ours, "modified"),
-                hook("postToolUse", "~/.codex/notify.sh", "untrusted"),
-                hook("interrupt", "'/elsewhere/bench' hook codex", "untrusted"),
-            ] }] });
+        let camel = |e: &str| e[..1].to_ascii_lowercase() + &e[1..];
+        let mut hooks: Vec<serde_json::Value> = CODEX_EVENTS
+            .iter()
+            .map(|e| hook(&camel(e), ours, "trusted"))
+            .collect();
+        let list =
+            |hooks: &[serde_json::Value]| serde_json::json!({ "data": [{ "hooks": hooks }] });
+        assert!(codex_needs_review(&list(&hooks), "/b/bench").is_empty());
+
+        hooks[0]["trustStatus"] = "untrusted".into(); // SessionStart
+        hooks[1]["trustStatus"] = "modified".into(); // UserPromptSubmit
+        hooks[2]["enabled"] = false.into(); // PreToolUse
+        hooks.remove(3); // PostToolUse: codex does not list it
+        hooks.push(hook(
+            "postToolUse",
+            "'/elsewhere/bench' hook codex",
+            "trusted",
+        ));
         assert_eq!(
-            codex_needs_review(&list, "/b/bench"),
-            ["preToolUse", "sessionStart"]
+            codex_needs_review(&list(&hooks), "/b/bench"),
+            [
+                "SessionStart",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse"
+            ]
         );
-        assert!(codex_needs_review(&serde_json::json!({ "data": [] }), "/b/bench").is_empty());
+        assert_eq!(
+            codex_needs_review(&list(&[]), "/b/bench").len(),
+            CODEX_EVENTS.len(),
+            "a codex that lists no hook runs none"
+        );
     }
 
     #[test]

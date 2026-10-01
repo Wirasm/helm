@@ -728,11 +728,14 @@ fn codex_hooks_list() -> Result<Value, String> {
     let answer = wrote
         .map_err(|e| format!("cannot write to `codex app-server`: {e}"))
         .and_then(|()| {
-            rx.recv_timeout(CODEX_ANSWER_WAIT).map_err(|_| {
-                format!(
+            rx.recv_timeout(CODEX_ANSWER_WAIT).map_err(|e| match e {
+                std::sync::mpsc::RecvTimeoutError::Timeout => format!(
                     "`codex app-server` did not answer hooks/list within {}s",
                     CODEX_ANSWER_WAIT.as_secs()
-                )
+                ),
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    "`codex app-server` ended its output without answering hooks/list".into()
+                }
             })
         });
     drop(stdin);

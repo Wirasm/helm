@@ -4882,6 +4882,22 @@ fn wiring_check_fails_until_codex_trusts_its_hooks() {
     }
     let trusted = check("trusted");
     assert_eq!(trusted.code, 0, "{}", trusted.stdout);
+    // A codex that lists none of them (another CODEX_HOME, hooks off) runs none of them.
+    fs::write(h.join("codex-hooks-list.json"), r#"{"data": []}"#).unwrap();
+    let path = format!(
+        "{}:{}",
+        h.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let unlisted = bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
+    assert_eq!(unlisted.code, 3, "{}", unlisted.stdout);
+    assert_eq!(
+        json_of(&unlisted)["codex"]["needs_review"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
     assert!(
         json_of(&trusted)["codex"].get("then").is_none(),
         "{}",
@@ -4904,7 +4920,10 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
         "the operator's own statusline goes after `statusline`, never away"
     );
 
-    let unwired = bench(h, &["wiring", "--check"]);
+    // codex itself is a stub that trusts every hook: this test is about the files.
+    let path = codex_trusting(h, &plan["codex"]["merge"], "trusted");
+    let check = || bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
+    let unwired = check();
     assert_eq!(unwired.code, 3, "nothing is wired yet: {}", unwired.stdout);
     let report = json_of(&unwired);
     assert_eq!(
@@ -4936,7 +4955,7 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     write(".codex/hooks.json", &plan["codex"]["merge"]);
     fs::create_dir_all(h.join(".pi/agent/extensions/bench")).unwrap();
     fs::write(h.join(".pi/agent/extensions/bench/index.ts"), "").unwrap();
-    let half = json_of(&bench(h, &["wiring", "--check"]));
+    let half = json_of(&check());
     assert_eq!(half["claude"]["missing_events"], serde_json::json!([]));
     assert_eq!(
         half["claude"]["cross_session_inbound_accept"], false,
@@ -4945,8 +4964,6 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
 
     claude["crossSessionInbound"] = serde_json::json!("accept");
     write(".claude/settings.json", &claude);
-    let path = codex_trusting(h, &plan["codex"]["merge"], "trusted");
-    let check = || bench_as(h, &["wiring", "--check"], &[("PATH", &path)]);
     let wired = check();
     assert_eq!(wired.code, 0, "all wired: {}", wired.stdout);
     assert_eq!(
