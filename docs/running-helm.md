@@ -27,12 +27,18 @@ the badge asks for.
   decodes their output with the real types.
 
 **`just release-resume <session-id> [cwd]` swaps everything for an operator who is away (#404).**
-It builds (`make release`, `cargo install` of `bench` and `benchd`), quits helm by pid, restarts
-benchd (`launchctl kickstart -k` when the login agent from `just benchd-install` is loaded), swaps
-the bundle with `BundleSwap.script`, resumes that Claude Code session with `bench spawn --resume
---remote-control` in a pane of the new helm, then runs `bench restore --all` for the other panes.
-It detaches first, since the caller is normally in a pane the quit closes. Once helm is quit the
-session always comes back: a later failure resumes it outside helm with `claude --bg --resume`.
+It builds (`make release`, `cargo install` of `bench` and `benchd`, so the two always ship
+together), quits helm by pid, restarts benchd (`launchctl kickstart -k` when the login agent from
+`just benchd-install` is loaded), swaps the bundle with `BundleSwap.script`, waits for the old
+session to be gone, resumes it with `bench spawn --resume --remote-control` in a pane of the new
+helm, then runs `bench restore --all` for the other panes. The session must be one the run ends:
+inside the helm being quit, or inside the benchd being restarted, which is where every agent in a
+helm pane runs since M5b. Anything else is refused before the run starts, since resuming a
+session that survives would fork the conversation. Under launchd the restart waits up to 60
+seconds: macOS refuses a freshly installed benchd once, and launchd starts it again about ten
+seconds later. The script detaches first, since the caller is normally in a pane the run ends.
+Once helm is quit the session always comes back: a later failure resumes it outside helm with
+`claude --bg --resume`.
 The log is `~/.helm/build/release-resume.log`, last line `RESULT:`. Every target is a flag
 (`--bundle`, `--pid`, `--suite`, `--bench-suite`, `--cargo-root`, `--env`, `--no-remote-control`),
 which is how it is tested. Two things are easy to undo by accident: it relaunches through `env -i`,
