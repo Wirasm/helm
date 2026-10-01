@@ -102,6 +102,17 @@ struct ToyBench {
         return .init(columns: [.init(id: UUID(), slots: [slot], width: 1)], focusedSlot: slot.id)
     }
 
+    /// One slot per pane, stacked in one column, focus on the first — so "focused" and "mounted
+    /// first" are different answers and a test can tell them apart.
+    static func stacked(_ panes: [BenchDocument.Pane]) -> BenchDocument.Bench {
+        let slots = panes.map {
+            BenchDocument.Slot(
+                id: UUID(), panes: [$0], selected: $0.id, height: 1 / Double(panes.count))
+        }
+        return .init(
+            columns: [.init(id: UUID(), slots: slots, width: 1)], focusedSlot: slots[0].id)
+    }
+
     // MARK: - Workspaces
 
     private func workspace(_ path: String) -> BenchDocument.Workspace? {

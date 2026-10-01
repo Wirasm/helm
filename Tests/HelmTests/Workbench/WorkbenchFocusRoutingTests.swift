@@ -275,80 +275,24 @@ final class WorkbenchFocusRoutingTests: XCTestCase {
 
 // MARK: - Harness
 
-/// helm in a window, with two stacked slots and readable ptys.
-///
-/// Deliberately its own harness rather than `TerminalKeyboardTests`' — that one is private to
-/// its file, and the file holds the one test #152 must leave untouched. Reaching into it to
-/// share a fixture would mean editing exactly the file whose stability is the constraint.
+/// helm in a window, with two stacked slots and readable ptys (`WorkbenchWindow`), clicked the
+/// way the operator clicks.
 @MainActor
-private final class Bench {
-    let terminals: TerminalManager
-    let workbench: WorkbenchModel
-    let window: NSWindow
-    private let ptys = Registry()
-    private let workspacePath = NSTemporaryDirectory() + "focus-routing/"
-
-    /// The command closure is handed to `TerminalManager` during this object's own `init`, so
-    /// it cannot capture `self`. One `Pty` per session, in creation order.
-    @MainActor
-    final class Registry {
-        private(set) var all: [Pty] = []
-
-        func next() -> String? {
-            let pty = Pty()
-            all.append(pty)
-            return pty.command
-        }
-    }
-
-    /// The toy benchd the bench is drawn from (`ToyBench`), and helm's client for it.
-    private let server: FakeBenchd
-    private let client: BenchClient
-
+private final class Bench: WorkbenchWindow {
     /// `chromeBelow` puts a bar of that height under the bench, as the status bar sits under it
     /// in the app: somewhere a zoomed bench's off-screen slots lie under but cannot be clicked.
     init(terminals count: Int, chromeBelow: CGFloat = 0) throws {
-        _ = NSApplication.shared
-        NSApp.setActivationPolicy(.accessory)
-
-        let registry = ptys
-        terminals = TerminalManager(command: { registry.next() })
-        let ids = (0..<count).map { _ in UUID() }
-        (server, client) = try startToyBenchd(.only(workspacePath, Self.stacked(ids)))
-        let workbench = WorkbenchModel(terminals: terminals, client: client)
-        self.workbench = workbench
-        XCTAssertNotNil(client.document(atLeast: 1, within: 5), "benchd never answered")
-        XCTAssertNotNil(workbench.bench, "no bench was drawn")
-
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-
-        let hosting = NSHostingView(
-            rootView: VStack(spacing: 0) {
-                WorkbenchView(model: workbench, workspaceRoot: workspacePath)
-                Color.surfaceRaised.frame(height: chromeBelow)
+        let panes = (0..<count).map { _ in ToyBench.terminal() }
+        try super.init(
+            bench: ToyBench.stacked(panes),
+            workspacePath: NSTemporaryDirectory() + "focus-routing/",
+            root: { workbenchView in
+                VStack(spacing: 0) {
+                    workbenchView
+                    Color.surfaceRaised.frame(height: chromeBelow)
+                }
             })
-        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
-        window.contentView = hosting
-        settle()
     }
-
-    func close() {
-        window.contentView = nil
-        window.close()
-        for session in terminals.sessions { terminals.surfaces.close(session.id) }
-        client.stop()
-        server.stop()
-    }
-
-    /// Let AppKit, SwiftUI and ghostty run for a moment.
-    ///
-    /// **Not how anything is waited for** — see the same note on `TerminalKeyboardTests`'
-    /// harness. The fixed 0.6s this used to be is what #192 turned out to be measuring instead
-    /// of what it meant to measure; claims wait on their own observable now.
-    func settle() { Eventually.pump() }
 
     func slot(holding pane: Pane.ID) throws -> Slot.ID {
         try XCTUnwrap(workbench.bench?.slot(for: pane)?.id, "no slot holds pane \(pane)")
@@ -387,78 +331,5 @@ private final class Bench {
         }
         NSApp.sendEvent(event)
         settle()
-    }
-
-    /// A keystroke through the window, so it travels the responder chain — the question the
-    /// operator asks is *where does typing go*.
-    func type(_ text: String) {
-        for character in text {
-            let event = NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                characters: String(character), charactersIgnoringModifiers: String(character),
-                isARepeat: false, keyCode: Self.keyCode(for: character))
-            guard let event else {
-                return XCTFail("could not synthesise a key event for \(character)")
-            }
-            window.sendEvent(event)
-        }
-        // The byte's journey is waited for at the pty, by `Pty.received(_:)`, not budgeted here.
-        settle()
-    }
-
-    /// ANSI US virtual key codes. ghostty translates the physical key, so a wrong code
-    /// produces a wrong byte rather than none — which would surface as "the clicked terminal
-    /// received nothing", reading as a focus bug when it is a typo. Unknown characters fail
-    /// here rather than defaulting to a code that happens to mean `a`.
-    private static func keyCode(for character: Character) -> UInt16 {
-        let codes: [Character: UInt16] = ["x": 7, "z": 6]
-        guard let code = codes[character] else {
-            XCTFail("no key code for \(character) — add it rather than sending a wrong one")
-            return 0
-        }
-        return code
-    }
-
-    /// A key table gesture, resolved against the bench and sent as the operator, as a key does.
-    func command(_ gesture: VerbTemplate) {
-        if let verb = gesture.resolve(bench: workbench.bench, workspaces: [], active: nil) {
-            workbench.send(verb, by: .operatorGesture)
-        }
-        settle()
-    }
-
-    func pty(of pane: Pane.ID) throws -> Pty {
-        let session = try XCTUnwrap(
-            terminals.sessions.first { $0.id == pane }, "no session for pane \(pane)")
-        let pty = try XCTUnwrap(
-            ptys.all.first { $0.command == session.hostView.configuration.command },
-            "no pty registered for \(pane)")
-        // The surface is the precondition for the one test here that types. Without this, a
-        // ghostty that refused to build a surface reads as "the click did not route" — the
-        // #192 ambiguity, one suite over.
-        let budget: TimeInterval = 5
-        guard Eventually.holds(within: budget, { session.status == .running }) else {
-            throw MissingTerminalSurface(pane: pane, waited: budget)
-        }
-        // The surface is up; the recorder in it must also be in raw mode before anything is
-        // typed at it, or the keystroke waits in the line discipline for a newline.
-        guard Eventually.holds(within: budget, { pty.isReady }) else {
-            throw RecorderNeverStarted(pane: pane, pty: pty, waited: budget)
-        }
-        return pty
-    }
-
-    /// Two slots stacked in one column, focus put back on the first — so "focused" and "mounted
-    /// first" are different answers and a test can tell a click from a coincidence.
-    private static func stacked(_ ids: [UUID]) -> BenchDocument.Bench {
-        let slots = ids.map {
-            BenchDocument.Slot(
-                id: UUID(), panes: [ToyBench.terminal($0)], selected: $0,
-                height: 1 / Double(ids.count))
-        }
-        return .init(
-            columns: [.init(id: UUID(), slots: slots, width: 1)], focusedSlot: slots[0].id)
     }
 }
