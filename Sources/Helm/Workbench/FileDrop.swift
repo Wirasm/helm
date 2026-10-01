@@ -59,8 +59,18 @@ extension WorkbenchModel {
                 .paneOpenAt(target.place, surface: .canvas(path: first.path)),
                 by: .operatorGesture)
         else { return }
-        guard let slot = bench?.slot(for: landed)?.id else { return }
-        for file in files.dropFirst() {
+        let rest = files.dropFirst()
+        // The drawn document should hold the first pane; if it does not yet, say which files
+        // were left rather than dropping them silently.
+        guard let slot = bench?.slot(for: landed)?.id else {
+            if !rest.isEmpty {
+                verbFailed(
+                    "\(Self.names(Array(rest))) did not open: the first file's pane is not drawn yet"
+                )
+            }
+            return
+        }
+        for file in rest {
             send(
                 .paneOpenAt(.tab(slot: slot, before: nil), surface: .canvas(path: file.path)),
                 by: .operatorGesture)

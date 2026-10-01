@@ -104,6 +104,30 @@ final class FileDropTests: XCTestCase {
         XCTAssertNil(rig.model.paneDrag.drag, "the zone is gone after the drop")
     }
 
+    /// The rest are tabbed into the first file's slot, read off the drawn document. When that
+    /// pane is not in it (the frame never came), the rest are named rather than lost.
+    func testFilesLeftUnopenedBecauseTheFirstPaneIsNotDrawnAreNamed() throws {
+        let (rig, _) = try rig()
+        rig.server.answer = { request in
+            [
+                "id": request["id"] ?? "", "status": "ok",
+                "data": [
+                    "seq": 0, "changed": false, "pane_created": UUID().uuidString.lowercased(),
+                ],
+            ]
+        }
+        let sent = rig.server.verbs.count
+
+        rig.model.dropFiles(
+            ["/tmp/a.md", "/tmp/b.html"].map { URL(fileURLWithPath: $0) },
+            at: CGPoint(x: 400, y: 590))
+
+        XCTAssertEqual(rig.server.verbs.count, sent + 1, "only the first was sent")
+        XCTAssertTrue(
+            rig.model.verbFailure?.contains("b.html") == true,
+            rig.model.verbFailure ?? "said nothing")
+    }
+
     func testSeveralFilesOpenTheFirstAtThePlaceAndTheRestAsTabsBesideIt() throws {
         let (rig, slot) = try rig()
         let sent = rig.server.verbs.count
