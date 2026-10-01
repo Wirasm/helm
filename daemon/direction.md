@@ -189,7 +189,9 @@ shell (`shells.rs`), with the environment helm's panes gave their shells and Gho
 integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
 the panes keep their records, and `restore` (`bench restore --all`, `just resume-all`) gives
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
-pane's last directory. benchd writes both: which agent is in a pane from that agent's own hook
+pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `spawn --resume` with
+no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
+interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 

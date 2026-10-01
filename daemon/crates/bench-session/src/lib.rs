@@ -184,6 +184,20 @@ pub struct SpawnSpec {
 }
 
 impl SpawnSpec {
+    /// The spec that re-enters conversation `id` as this one ran it: the same agent, directory,
+    /// model, posture and caller flags, and no first prompt. An earlier spawn's prompt is never
+    /// sent again; benchd gives the resume its own notice when it wires the session.
+    pub fn resuming(&self, id: String) -> SpawnSpec {
+        SpawnSpec {
+            conversation: Conversation::Resume(id),
+            prompt_file: None,
+            settings: None,
+            codex_server: None,
+            codex_hook_trust: None,
+            ..self.clone()
+        }
+    }
+
     /// Whether the app-server holds this codex session's permissions, so its TUI must carry
     /// none: a served resume or fork, where codex exits on a permission flag ("Permission
     /// overrides are not supported when resuming a remote task", measured on 0.157.0, and
