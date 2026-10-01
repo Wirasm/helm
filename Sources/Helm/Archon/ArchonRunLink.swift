@@ -55,7 +55,7 @@ struct ArchonRunLink: Equatable, Sendable {
     }
 }
 
-/// What a click on a finished run does, behind one closure so the rail can be tested without
+/// What a click on a finished run does, behind one closure so the drawer can be tested without
 /// spawning anything.
 ///
 /// **Lazily, and only on click** — the alternative is asking GitHub about every finished run on

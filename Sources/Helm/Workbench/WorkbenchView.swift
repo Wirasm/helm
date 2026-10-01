@@ -98,7 +98,7 @@ extension WorkbenchView {
     /// Zooming, returning and moving focus while zoomed animate; nothing else does.
     ///
     /// Clipped, because a zoomed canvas runs past the bench on every side and must not paint
-    /// over the rail, the workspace bar or the status bar.
+    /// over the workspace bar or the status bar.
     fileprivate func camera(on bench: Workbench, in viewport: CGSize) -> some View {
         let camera =
             model.isZoomed ? BenchCamera.framing(bench, in: viewport) : .identity(viewport)
@@ -147,8 +147,8 @@ extension WorkbenchView {
 /// the bar's `+` and ⇧⌘O are one path with one behaviour (`WorkspacePicker`). A second picker
 /// here would be a second answer to "what does opening a workspace do".
 ///
-/// **`ViewThatFits` because the bench is not always a pane.** With the rail open and a short
-/// window this space is a band, and a column laid out for a full pane renders into a strip
+/// **`ViewThatFits` because the bench is not always a pane.** In a short window this space
+/// is a band, and a column laid out for a full pane renders into a strip
 /// with its rhythm collapsed — which is how the issue's capture looked. The horizontal form
 /// is the fallback, not a second design.
 private struct EmptyBench: View {

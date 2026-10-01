@@ -5,8 +5,8 @@ import IOKit.pwr_mgt
 ///
 /// **Two assertions, and the display one is not optional.** System sleep stops the agents. Display
 /// sleep does not since M5b (they run in benchd), but it stops helm: with every display asleep
-/// `ghostty_surface_new` fails (the CoreVideo `-6661` pair in `AGENTS.md`), so a pane an agent
-/// opens while the operator is away never gets a terminal. `release-resume.sh` holds
+/// `ghostty_surface_new` fails (the CoreVideo `-6661` pair in `docs/testing.md`), so a pane an
+/// agent opens while the operator is away never gets a terminal. `release-resume.sh` holds
 /// `caffeinate -d` for the same reason. The cost is a lit screen while this is on.
 ///
 /// **`isOn` means the assertions are held**, not that they were asked for: when IOKit refuses,

@@ -65,7 +65,7 @@ final class CanvasSurfaceTests: XCTestCase {
     // MARK: The seam
 
     /// **Three copies of one string, and a JavaScript file cannot compile against a Swift
-    /// constant** — so the gate is a test that reads every half (`AGENTS.md`).
+    /// constant** — so the gate is a test that reads every half (`docs/testing.md`).
     ///
     /// The third copy is the one that makes this a contract rather than a constant with a single
     /// reader: `.claude/skills/helm-board/board.html` is the artifact template that *declares*

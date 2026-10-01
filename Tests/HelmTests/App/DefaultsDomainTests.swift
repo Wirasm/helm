@@ -123,7 +123,7 @@ final class DefaultsDomainTests: XCTestCase {
             "and nothing it writes may appear in the operator's domain")
     }
 
-    /// **Polarity**, pinned rather than eyeballed. `AGENTS.md` has `winshot --list` and
+    /// **Polarity**, pinned rather than eyeballed. `docs/running-helm.md` has `winshot --list` and
     /// `bench get screenshot --window` telling two helms apart by this title, so backwards is not a
     /// cosmetic bug — it is a safety mechanism pointing at the wrong instance.
     func testOnlyANonCanonicalDomainReadsAsIsolated() {

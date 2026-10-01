@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The drawer shown over the bench (#356), drawn from benchd's document.
 ///
-/// **An overlay, never a column.** `RootView` puts it over the bench and the rail rather than
+/// **An overlay, never a column.** `RootView` puts it over the bench rather than
 /// beside them, so opening one changes no column's width, no slot's height and no pane on
 /// screen: the layout under it is the one the document describes, drawn by `WorkbenchView`
 /// exactly as it was. The empty side of the overlay draws nothing and so takes no clicks; the

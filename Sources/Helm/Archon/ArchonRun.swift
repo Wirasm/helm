@@ -137,7 +137,7 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
 
-    /// Stopped, waiting for a person. The status that gets the rail's top line.
+    /// Stopped, waiting for a person. The status that gets the drawer's top line.
     var isPaused: Bool { status == ArchonRunStatus.paused }
 
     /// The two statuses that put a run in the inbox.
@@ -234,7 +234,7 @@ struct ArchonNode: Codable, Equatable, Sendable {
         }
     }
 
-    /// The stage's name — `parse-request`, `implement`, `validate`. What the rail's subline
+    /// The stage's name — `parse-request`, `implement`, `validate`. What the drawer's subline
     /// says, because it is the thing that *advances*.
     ///
     /// **Node keys are camelCase while the run's own are snake_case**, which is a real
@@ -292,7 +292,7 @@ struct ArchonRunsResponse: Codable, Equatable, Sendable {
     /// run on the machine instead.
     ///
     /// **Load-bearing, not a curiosity.** A git worktree is not the codebase's registered
-    /// directory, so a workspace opened the way `AGENTS.md` tells agents to open one falls back
+    /// directory, so a workspace opened on a worktree, where agents work, falls back
     /// — verified: 1 run scoped from the main checkout, 128 unscoped from its worktree. Archon
     /// went out of its way to say so in `--json` rather than let an agent mistake a global
     /// answer for a project one; helm passes that on for the same reason.
