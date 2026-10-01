@@ -9,8 +9,9 @@ import SwiftUI
 /// exactly as it was. The empty side of the overlay draws nothing and so takes no clicks; the
 /// bench beside the drawer stays usable.
 ///
-/// Which drawer is open, what it holds and which of its panes is showing are the document's.
-/// Where it sits and how wide it is are helm's: `[drawer.<name>]` in the keymap file, else
+/// Which drawer is open, what it holds and which of its panes is showing are the document's, and
+/// so is the edge it sits on once the operator has dragged it there (#178). How wide it is, and
+/// the edge until then, are helm's: `[drawer.<name>]` in the keymap file, else
 /// `DrawerStyle.builtIn(for:)`.
 struct DrawerHost: View {
     @ObservedObject var model: WorkbenchModel
@@ -19,7 +20,9 @@ struct DrawerHost: View {
     var body: some View {
         GeometryReader { geo in
             if let drawer = model.openDrawer {
-                let style = keymap.style(for: drawer.name)
+                let style = keymap.style(for: drawer.name).placed(drawer.name, by: model.document)
+                let frame = DrawerFrame(
+                    name: drawer.name, area: geo.frame(in: .named(BenchDrag.space)), style: style)
                 let panel = DrawerPanel(model: model, drawer: drawer, edge: style.edge)
                 Group {
                     if style.edge == .bottom {
@@ -32,6 +35,12 @@ struct DrawerHost: View {
                     maxWidth: .infinity, maxHeight: .infinity, alignment: style.edge.alignment
                 )
                 .transition(.move(edge: style.edge.slidesFrom))
+                // Where a drag of its header is resolved against (`DrawerDrop`).
+                .onChange(of: frame, initial: true) { model.drag.drawer = frame }
+                .onDisappear {
+                    if model.drag.drawer?.name == drawer.name { model.drag.drawer = nil }
+                    model.drag.abandon(.drawer(drawer.name))
+                }
             }
         }
         .animation(.easeOut(duration: 0.12), value: model.openDrawer?.name)
@@ -106,6 +115,15 @@ private struct DrawerPanel: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(Color.surfaceRaised)
+        // The header is the drawer's handle (#178): dragged to another window edge, the drawer
+        // moves there (`DrawerDrop`). Four points of travel before it starts, so a click on a
+        // tab or the hide button stays a click. Escape cancels it.
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .named(BenchDrag.space))
+                .onChanged { model.dragTab(.drawer(drawer.name), to: $0.location) }
+                .onEnded { model.dropTab(.drawer(drawer.name), at: $0.location) }
+        )
     }
 
     @ViewBuilder

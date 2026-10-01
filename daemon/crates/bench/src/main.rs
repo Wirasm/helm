@@ -12,7 +12,7 @@
 //!
 //! These are helm's spool codes, kept on purpose.
 
-use bench_doc::{DrawerName, Surface};
+use bench_doc::{DrawerEdge, DrawerName, Surface};
 use bench_wire::{
     Actor, BENCH_URL, CLIENT_READ_TIMEOUT, DAEMON_IO_TIMEOUT, EXIT_NO_DAEMON, Endpoint, Harness,
     HookArgs, HookReply, JustRunArgs, LayoutVerb, MailListArgs, MailReadArgs, MailSendArgs,
@@ -135,6 +135,9 @@ fn usage() -> &'static str {
      \x20                                         is what a new drawer starts with: browser,\n\
      \x20                                         sessions, archon, worktrees, terminal or\n\
      \x20                                         file:<path>\n\
+     \x20     drawer place <name>                 put a drawer against that window edge: where\n\
+     \x20           <left|right|bottom>           his drawers sit is the operator's, so an agent\n\
+     \x20                                         needs --asked\n\
      \x20     just <recipe> [args...]             run a recipe from <root>/rules/justfile here;\n\
      \x20                                         answers {run, log}, and just/finished says how\n\
      \x20                                         it ended\n\
@@ -259,7 +262,7 @@ fn run() -> i32 {
     }
     if verb == "drawer" {
         if positional.is_empty() {
-            return refuse("drawer needs a subcommand: toggle");
+            return refuse("drawer needs a subcommand: toggle, place");
         }
         verb = format!("drawer/{}", positional.remove(0));
     }
@@ -400,6 +403,23 @@ fn run() -> i32 {
             // The wire type's own encoding, so the CLI cannot spell an argument benchd does
             // not read.
             serde_json::to_value(LayoutVerb::DrawerToggle { drawer, surface })
+                .map(|v| v["args"].clone())
+                .unwrap_or(Value::Null)
+        }
+        "drawer/place" => {
+            let [name, edge] = positional.as_slice() else {
+                return refuse(
+                    "drawer place needs a drawer name and an edge: left, right or bottom",
+                );
+            };
+            let drawer = match DrawerName::new(name) {
+                Ok(d) => d,
+                Err(why) => return refuse(&why),
+            };
+            let Ok(edge) = serde_json::from_value::<DrawerEdge>(json!(edge)) else {
+                return refuse(&format!("an edge is left, right or bottom, not {edge:?}"));
+            };
+            serde_json::to_value(LayoutVerb::DrawerPlace { drawer, edge })
                 .map(|v| v["args"].clone())
                 .unwrap_or(Value::Null)
         }

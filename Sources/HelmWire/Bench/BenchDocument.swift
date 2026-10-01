@@ -20,19 +20,26 @@ package struct BenchDocument: Codable, Equatable, Sendable {
     package var drawers: [Drawer]
     /// The drawer shown over the bench, by name. One at a time.
     package var openDrawer: String?
+    /// The edge the operator put each drawer against (#178), by drawer name. It outlives the
+    /// drawer; a drawer with no entry is drawn where the keymap file or the built-in table says.
+    /// Absent on the wire when empty.
+    package var drawerEdges: [String: DrawerEdge]
 
     package init(
-        workspaces: [Workspace], active: String?, drawers: [Drawer] = [], openDrawer: String? = nil
+        workspaces: [Workspace], active: String?, drawers: [Drawer] = [], openDrawer: String? = nil,
+        drawerEdges: [String: DrawerEdge] = [:]
     ) {
         self.workspaces = workspaces
         self.active = active
         self.drawers = drawers
         self.openDrawer = openDrawer
+        self.drawerEdges = drawerEdges
     }
 
     private enum CodingKeys: String, CodingKey {
         case workspaces, active, drawers
         case openDrawer = "open_drawer"
+        case drawerEdges = "drawer_edges"
     }
 
     package init(from decoder: any Decoder) throws {
@@ -41,6 +48,8 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         active = try c.decodeIfPresent(String.self, forKey: .active)
         drawers = try c.decodeIfPresent([Drawer].self, forKey: .drawers) ?? []
         openDrawer = try c.decodeIfPresent(String.self, forKey: .openDrawer)
+        drawerEdges =
+            try c.decodeIfPresent([String: DrawerEdge].self, forKey: .drawerEdges) ?? [:]
     }
 
     package func encode(to encoder: any Encoder) throws {
@@ -49,6 +58,13 @@ package struct BenchDocument: Codable, Equatable, Sendable {
         try c.encodeIfPresent(active, forKey: .active)
         if !drawers.isEmpty { try c.encode(drawers, forKey: .drawers) }
         try c.encodeIfPresent(openDrawer, forKey: .openDrawer)
+        if !drawerEdges.isEmpty { try c.encode(drawerEdges, forKey: .drawerEdges) }
+    }
+
+    /// The window edge a drawer is drawn against (`bench-doc`'s `DrawerEdge`): the document's
+    /// when the operator placed it, and the spelling the keymap's `[drawer.<name>] edge` uses.
+    package enum DrawerEdge: String, Codable, Equatable, Sendable, CaseIterable {
+        case left, right, bottom
     }
 
     /// A drawer: panes shown over the bench instead of in it. Never empty — benchd removes a

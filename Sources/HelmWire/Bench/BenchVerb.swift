@@ -126,6 +126,9 @@ package enum BenchVerb: Equatable, Sendable {
     /// Show a drawer over the bench, or hide it if it is the one shown. `surface` is what a
     /// drawer that does not exist yet starts with. Opening is the operator's focus.
     case drawerToggle(name: String, surface: Surface? = nil)
+    /// Put a drawer against an edge of the window (#178, the operator dragging it there). Kept in
+    /// the document; where his drawers sit is the operator's, so an agent needs `asked`.
+    case drawerPlace(name: String, edge: BenchDocument.DrawerEdge)
 
     /// The wire name, which is also the request's `verb`.
     package var name: String {
@@ -146,6 +149,7 @@ package enum BenchVerb: Equatable, Sendable {
         case .focusWaiting: "focus/waiting"
         case .layoutResize: "layout/resize"
         case .drawerToggle: "drawer/toggle"
+        case .drawerPlace: "drawer/place"
         }
     }
 }
@@ -170,7 +174,7 @@ package struct BenchRequest: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case id, verb, args, by, asked }
     private enum ArgKeys: String, CodingKey {
         case path, before, workspace, surface, direction, pane, to, name, agent, slot, divider,
-            fraction, drawer, at
+            fraction, drawer, at, edge
     }
     fileprivate enum MoveTagKeys: String, CodingKey { case step, workspace }
     fileprivate enum PlaceTagKeys: String, CodingKey { case tab, beside }
@@ -227,9 +231,23 @@ package struct BenchRequest: Codable, Equatable, Sendable {
             try Self.encode(
                 divider, into: a.nestedContainer(keyedBy: DividerKeys.self, forKey: .divider))
             try a.encode(fraction, forKey: .fraction)
+        case .drawerToggle, .drawerPlace:
+            try Self.encodeDrawer(verb, into: &a)
+        }
+    }
+
+    /// The verbs that act on a drawer as a whole: `{drawer, surface?}` or `{drawer, edge}`.
+    private static func encodeDrawer(
+        _ verb: BenchVerb, into a: inout KeyedEncodingContainer<ArgKeys>
+    ) throws {
+        switch verb {
         case let .drawerToggle(name, surface):
             try a.encode(name, forKey: .drawer)
             try a.encodeIfPresent(surface, forKey: .surface)
+        case let .drawerPlace(name, edge):
+            try a.encode(name, forKey: .drawer)
+            try a.encode(edge, forKey: .edge)
+        default: break
         }
     }
 
@@ -308,10 +326,8 @@ package struct BenchRequest: Codable, Equatable, Sendable {
                 ? .slots(member: member, against: against)
                 : .columns(member: member, against: against)
             verb = .layoutResize(divider, fraction: try a.decode(Double.self, forKey: .fraction))
-        case "drawer/toggle":
-            verb = .drawerToggle(
-                name: try a.decode(String.self, forKey: .drawer),
-                surface: try a.decodeIfPresent(Surface.self, forKey: .surface))
+        case "drawer/toggle", "drawer/place":
+            verb = try Self.decodeDrawer(name, from: a)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .verb, in: c, debugDescription: "not a layout verb: \(name)")
@@ -320,6 +336,18 @@ package struct BenchRequest: Codable, Equatable, Sendable {
 }
 
 extension BenchRequest {
+    private static func decodeDrawer(
+        _ name: String, from a: KeyedDecodingContainer<ArgKeys>
+    ) throws -> BenchVerb {
+        let drawer = try a.decode(String.self, forKey: .drawer)
+        if name == "drawer/place" {
+            return .drawerPlace(
+                name: drawer, edge: try a.decode(BenchDocument.DrawerEdge.self, forKey: .edge))
+        }
+        return .drawerToggle(
+            name: drawer, surface: try a.decodeIfPresent(Surface.self, forKey: .surface))
+    }
+
     /// `{between, member, against}`: which divider of `layout/resize`.
     fileprivate static func encode(
         _ divider: BenchDivider, into d: KeyedEncodingContainer<DividerKeys>

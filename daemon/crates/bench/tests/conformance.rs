@@ -3091,6 +3091,7 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
         document["workspaces"], workspaces,
         "opening a drawer re-lays-out nothing"
     );
+
     drop(daemon);
 
     let daemon = DaemonGuard::start(&home.dir, None);
@@ -3104,6 +3105,72 @@ fn an_agent_badges_a_drawer_and_only_the_operator_opens_it() {
     )
     .unwrap();
     assert_eq!(record["version"], bench_wire::DOCUMENT_RECORD_VERSION);
+}
+
+/// #178: where a drawer sits is the operator's. The CLI speaks for an agent, so it is refused
+/// without --asked and changes nothing; the operator's drag is applied, moves no focus and no
+/// workspace, and is kept across a restart.
+#[test]
+fn only_the_operator_moves_a_drawer_and_it_stays_where_he_put_it() {
+    m4_proof();
+    let home = TestHome::claim("drawer-edge");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let (_, _, held) = working_bench(&daemon.socket);
+    let get = |socket: &Path| {
+        ok_data(layout(
+            socket,
+            "bench/get",
+            serde_json::Value::Null,
+            None,
+            false,
+        ))["document"]
+            .clone()
+    };
+    ok_data(layout(
+        &daemon.socket,
+        "pane/open",
+        serde_json::json!({ "drawer": "notes", "surface": { "kind": "canvas", "source": { "kind": "file", "path": "/tmp/m4-proof/drawers.md" } } }),
+        None,
+        false,
+    ));
+    let before = get(&daemon.socket);
+
+    let refused = bench(&home.dir, &["drawer", "place", "notes", "bottom"]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(refused.stderr.contains("--asked"), "{}", refused.stderr);
+    assert_eq!(
+        get(&daemon.socket),
+        before,
+        "a refused placement changes nothing"
+    );
+
+    let placed = ok_data(layout(
+        &daemon.socket,
+        "drawer/place",
+        serde_json::json!({ "drawer": "notes", "edge": "bottom" }),
+        operator(),
+        false,
+    ));
+    assert_eq!(placed["changed"], true, "{placed}");
+    assert_eq!(
+        placed["focused_pane_after"],
+        held.as_str(),
+        "the keyboard stayed"
+    );
+    let document = get(&daemon.socket);
+    assert_eq!(document["drawer_edges"]["notes"], "bottom");
+    assert_eq!(
+        document["workspaces"], before["workspaces"],
+        "no workspace moved"
+    );
+    drop(daemon);
+
+    let daemon = DaemonGuard::start(&home.dir, None);
+    assert_eq!(
+        get(&daemon.socket)["drawer_edges"]["notes"],
+        "bottom",
+        "the edge came back from bench.json"
+    );
 }
 
 /// #356: placement comes from `<root>/rules/placement.toml`, reread on the next verb with no
