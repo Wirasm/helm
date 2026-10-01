@@ -225,6 +225,9 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         spawner.join().unwrap();
         let _ = std::fs::remove_dir_all(&root);
-        assert!(errors.is_empty() && none == 0, "spawn errors {errors:?}, empty output {none}");
+        assert!(
+            errors.is_empty() && none == 0,
+            "spawn errors {errors:?}, empty output {none}"
+        );
     }
 }
