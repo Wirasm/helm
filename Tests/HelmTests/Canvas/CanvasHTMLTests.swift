@@ -29,7 +29,7 @@ final class CanvasHTMLTests: XCTestCase {
 
     func testDocumentPageEmbedsSourceAndWiresMarked() {
         let page = CanvasHTML.documentPage(markdown: "# Hello \"plan\"\nline two", theme: .light)
-        XCTAssertTrue(page.contains("marked.parse(source)"))
+        XCTAssertTrue(page.contains("marked.lexer(source)"))
         // The source arrives as a JS string literal, not as page markup.
         XCTAssertTrue(
             page.contains("var source = " + CanvasHTML.jsString("# Hello \"plan\"\nline two")))

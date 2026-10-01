@@ -210,7 +210,8 @@ final class WorkbenchModel: ObservableObject {
             else {
                 return .notSent(.noOrigin)
             }
-            return deliver(annotation, on: canvas, markedIn: pane)
+            return deliver(
+                annotation, on: canvas, liveFile: model.liveFileIfPresent, markedIn: pane)
         }
         model.forkRoute = { [weak self] in
             self?.forkRoute(for: pane) ?? .unavailable(CanvasForkRoute.noOpener)
@@ -268,7 +269,7 @@ final class WorkbenchModel: ObservableObject {
     /// do is *make* the decision — `CanvasNoteRoute.route` is pure and tested on its own, and
     /// this only supplies it with a live lookup.
     private func deliver(
-        _ annotation: CanvasAnnotation, on canvas: URL, markedIn pane: Pane.ID
+        _ annotation: CanvasAnnotation, on canvas: URL, liveFile: URL?, markedIn pane: Pane.ID
     ) -> CanvasNoteDelivery {
         let opener = document?.pane(pane)?.opener.map(CanvasOrigin.init(terminal:))
         let route = CanvasNoteRoute.route(origin: opener) { origin in
@@ -276,7 +277,7 @@ final class WorkbenchModel: ObservableObject {
             // opened this canvas is not there any more, and the operator is told so.
             document?.pane(origin.terminal) == nil ? nil : notes.handle(in: origin.terminal)
         }
-        return notes.send(annotation, on: canvas, along: route)
+        return notes.send(annotation, on: canvas, liveFile: liveFile, along: route)
     }
 
     func browser(for pane: Pane) -> BrowserPaneModel {

@@ -46,6 +46,8 @@ CI's jobs are `build · test · format` (`lint`, then `swift`), `skill gates` (`
 - CI sets `HELM_CHECK_HEADLESS=1`, which skips `TerminalKeyboardTests` and
   `WorkbenchFocusRoutingTests`: a runner has no active display and those suites need a real
   ghostty surface. A regression in either passes CI, so run `just check` locally before the PR.
+- CI sets `HELM_CHECK_MIN_FREE_GB=0`, which turns off the gate's free-space floor (20 GB on the
+  repo's volume by default). A runner's disk is not ours to manage.
 - CI tests the merge commit, not your branch tip. Two PRs merged 56 seconds apart on 2026-08-06,
   each green on its own branch, and `development` did not compile.
 

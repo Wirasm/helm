@@ -187,6 +187,8 @@ enum DropDestination: Equatable {
     case workspace(String)
     /// A gap in the workspace bar: before that workspace, or last.
     case bar(before: String?)
+    /// An edge of the window: where a dragged drawer goes (`DrawerDrop`).
+    case drawerEdge(DrawerStyle.Edge)
 }
 
 /// Where one slot is drawn, in `BenchDrag.space`: the whole slot, its tab strip, and each tab.
@@ -218,12 +220,13 @@ extension CGRect {
 
 // MARK: - The live drag
 
-/// What is being dragged: a pane's tab on the bench, a workspace's tab in the bar, or files from
-/// outside helm (`FileDrop`).
+/// What is being dragged: a pane's tab on the bench, a workspace's tab in the bar, files from
+/// outside helm (`FileDrop`), or an open drawer by its header (`DrawerDrop`).
 enum DragItem: Equatable {
     case pane(Pane.ID)
     case workspace(WorkspacePath)
     case files
+    case drawer(String)
 }
 
 /// The drag in progress and the frames it is resolved against. Its own object so that only the
@@ -243,6 +246,8 @@ final class BenchDrag: ObservableObject {
 
     var slots: [Slot.ID: SlotFrames] = [:]
     var bar = BarFrames()
+    /// The open drawer's style and where it is drawn; nil until one has been shown.
+    var drawer: DrawerFrame?
     /// What is being dragged and what the pointer is over. nil between drags.
     @Published private(set) var live: (item: DragItem, target: DropTarget?)? {
         didSet { live == nil ? stopEscape() : startEscape() }
@@ -299,7 +304,9 @@ extension WorkbenchModel {
     /// bar is drawn over the bench, so it answers first wherever it is.
     func dragTab(_ item: DragItem, to point: CGPoint) {
         let target: DropTarget?
-        if drag.bar.strip.contains(point), let document {
+        if case .drawer = item {
+            target = drag.drawer.flatMap { DrawerDrop.resolve(at: point, frame: $0) }
+        } else if drag.bar.strip.contains(point), let document {
             target = WorkspaceDrop.resolve(item, at: point, document: document, frames: drag.bar)
         } else if case let .pane(pane) = item, let bench {
             target = PaneDrop.resolve(pane: pane, at: point, bench: bench, frames: drag.slots)
@@ -327,6 +334,7 @@ extension WorkbenchModel {
         case let (.pane(pane), .place(place)): .paneMove(pane, .place(place))
         case let (.pane(pane), .workspace(path)): .paneMove(pane, .workspace(path))
         case let (.workspace(path), .bar(before)): .workspaceMove(path: path.value, before: before)
+        case let (.drawer(name), .drawerEdge(edge)): .drawerPlace(name: name, edge: edge)
         default: nil
         }
     }

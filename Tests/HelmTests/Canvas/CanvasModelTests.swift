@@ -53,6 +53,9 @@ final class CanvasModelTests: XCTestCase {
     ) throws -> CanvasPageSelection {
         var payload = payload
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        payload["anchorKind"] =
+            payload["anchorKind"] ?? (payload["id"] is String ? "element" : "excerpt")
+        if payload["anchorKind"] as? String == "excerpt" { payload["source"] = payload["text"] }
         switch CanvasPageSelection.decode(payload) {
         case let .success(.selected(selection)):
             return .selected(selection)
@@ -214,7 +217,7 @@ final class CanvasModelTests: XCTestCase {
         }
         guard
             case let .selected(selection) = try CanvasPageSelection.decode([
-                "kind": "selection", "id": "phase-2", "text": "Phase 2",
+                "kind": "selection", "anchorKind": "element", "id": "phase-2", "text": "Phase 2",
             ]).get()
         else {
             return XCTFail("a body with a selection in it is one")

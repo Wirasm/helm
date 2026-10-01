@@ -184,6 +184,12 @@ It names the file and the pointers, never what they mean: read the file for the 
 mailed because you opened the canvas; the newest agent to `bench open` it is the one mailed, and
 that holds across a helm restart. A canvas nobody opened with `bench open` mails nobody.
 
+**Claude Code labels this mail as another Claude session's, "not typed by your user"**, even when
+the operator's own click on your page caused it. That wording is the harness's, not benchd's: mail
+`from: operator` is his, so act on it as his. A mark he makes on the page reaches you the same way,
+and on a canvas with a live file its note says to answer in that file with
+`bench file write <path> --expect`, not by editing the page.
+
 **To change the data, read it, change it, and write it naming what you read:**
 
 ```bash
@@ -195,9 +201,10 @@ python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["reply"] = "on
 rm -f "$READ" "$NEW"
 ```
 
-- **Exit 3 from `bench file write` means the operator changed the file since you read it**, and
-  nothing was written. Read it again and make your change on what is there. A new file is
-  `--expect /dev/null`.
+- **Exit 3 with "changed since you read it" means the operator changed the file first**, and
+  nothing was written. Read it again and make your change on what is there. Every other refusal
+  (stdin empty or not JSON, say) is exit 3 too and names its cause on stderr: fix that rather than
+  retrying. A new file is `--expect /dev/null`.
 - **Make the new text a file first, as above, rather than piping into `bench file write`.** A
   pipe whose first step fails still hands over nothing. `bench` refuses an empty write, and for a
   live file a write that is not JSON, but a file your shell stopped at is the plain version.
@@ -207,6 +214,27 @@ rm -f "$READ" "$NEW"
 - **The open page gets your write in about a fifth of a second**, through `helmCanvasUpdate` with
   `file: "tasks.data.json"`; a page that defines no handler is reloaded, which is also how a plain
   page shows your data.
+
+**The worked example is a review page with a status per finding** (prp-companion's live mode).
+Each finding is a card whose `id` is the finding's (`R1`, `R2`); the live file holds only what
+changes after the review was written, keyed by the same ids:
+
+```json
+{
+  "review": "pr-534-review.md",
+  "findings": {
+    "R1": { "status": "fixed", "reply": "Is this fixed on development now?", "note": "Yes: files.rs:118 refuses an empty write." },
+    "R2": { "status": "question", "reply": "Which of the two fixes is simpler?" }
+  }
+}
+```
+
+The operator clicks Open / Fixed / Won't fix / Question on a card or types a one-line `reply`; the
+page writes the file, and you get one mail naming `/findings/R2/status` and `/findings/R2/reply`.
+You answer in `note`, one sentence, with the read-change-write above; the card shows it without a
+reload, scroll and all. Each field has one writer, which keeps the two sides from fighting:
+`reply` is his, `note` is yours, and a `question` stays open until he closes it. The id is the whole
+join: card id, file key and mail pointer are the same name, so nothing maps one to another.
 
 Neither exists on a **markdown** canvas: helm generates that page, so there is no script of yours
 on it to register a handler or write a file.
@@ -305,13 +333,24 @@ Four things follow, and they are the whole of what you need to know:
 - **He hands you the path; you read the file.** That is the interface, for his notes and for an
   artifact of yours he has changed.
 
-**A mermaid node is addressable in four families only.** helm hands back the identifier from your
-```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for
-and edit (helm #113). That holds for **flowchart, class, state and er**. `mindmap` and
-`sequenceDiagram` put no author-written identifier in the rendered output, so a mark degrades to
-quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressable nodes at all.
-For a diagram the operator must be able to point at, those four families or your own HTML ids are
-the options that work.
+**Mermaid nodes are addressable in flowchart, class, state and er diagrams.** helm hands
+back the identifier from your fence: a node named `phase2` comes back as `phase2`. Flowchart
+subgraphs, state composites and class namespaces also preserve their authored identifier:
+`subgraph zone[The Zone]` anchors to `zone`, even with a CSS class named `node`.
+Selections in mindmap, sequenceDiagram, gitGraph, pie and other unsupported diagram elements
+say they are not anchorable. They do not become notes with renderer ids or guessed quotes.
+
+**Markdown marks carry literal source excerpts.** A selection over rendered bold text names
+the enclosing source block, including `**` markers. Nested lists and blockquotes name their
+whole top-level block. The note heading is `source "..." text "..."`; both values are JSON
+strings with escapes for newlines, quotes and backslashes. The second value retains the
+selected words. Decode the source string before matching it against the source file.
+Blocks over 2,000 characters and selections across separate blocks cannot be anchored.
+An authored `<div id="phase">` remains an identifier anchor; id-less raw HTML needs an id.
+
+**HTML marks use your authored ids.** Give a block an `id` when the operator needs to comment
+on it. An id-less selection with no named ancestor says it is not anchorable. See
+[canvas anchor rules](../../../docs/canvas-anchors.md) for the complete per-kind contract.
 
 **Check a mark's label against the node its identifier names now.** A mark carries both, in the
 mail and in the sidecar: `` `#phase2` — "Phase 2: migrate" ``. An identifier you reused for a
