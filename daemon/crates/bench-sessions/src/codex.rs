@@ -13,28 +13,29 @@ pub fn sessions_dir(home: &Path) -> PathBuf {
     home.join(".codex/sessions")
 }
 
-/// The rollout of thread `id`. A thread id is a UUIDv7, whose first 48 bits are its creation
-/// time in epoch ms, and the day directory is that time in codex's local zone: so the UTC day
-/// and the days either side are looked in first, and the whole tree only when those miss.
+/// The rollout of thread `id`: [`dated_rollout`], else anywhere in the tree. For `bench log`,
+/// which takes any id once; the session list asks [`dated_rollout`] on every build.
 pub fn rollout(home: &Path, id: &str) -> Option<PathBuf> {
+    dated_rollout(home, id).or_else(|| find(&sessions_dir(home), &format!("-{id}.jsonl"), 3))
+}
+
+/// The rollout of thread `id` in its own day directory. A thread id is a UUIDv7, whose first
+/// 48 bits are its creation time in epoch ms, and the day directory is that time in codex's
+/// local zone: so the UTC day and the days either side are looked in.
+pub fn dated_rollout(home: &Path, id: &str) -> Option<PathBuf> {
     let root = sessions_dir(home);
     let suffix = format!("-{id}.jsonl");
-    let dated = created_ms(id).into_iter().flat_map(|ms| {
-        [-1i64, 0, 1].map(|d| {
-            let t = OffsetDateTime::from_unix_timestamp(ms / 1000 + d * 86_400)
-                .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-            root.join(format!(
-                "{:04}/{:02}/{:02}",
-                t.year(),
-                t.month() as u8,
-                t.day()
-            ))
-        })
-    });
-    dated
-        .into_iter()
-        .find_map(|dir| find(&dir, &suffix, 0))
-        .or_else(|| find(&root, &suffix, 3))
+    let ms = created_ms(id)?;
+    [-1i64, 0, 1].into_iter().find_map(|d| {
+        let t = OffsetDateTime::from_unix_timestamp(ms / 1000 + d * 86_400).ok()?;
+        let dir = root.join(format!(
+            "{:04}/{:02}/{:02}",
+            t.year(),
+            t.month() as u8,
+            t.day()
+        ));
+        find(&dir, &suffix, 0)
+    })
 }
 
 /// The epoch ms a UUIDv7 was minted at, from its first twelve hex digits.
@@ -118,6 +119,11 @@ mod tests {
         assert_eq!(created_ms(id), Some(1_790_840_096_752));
         assert_eq!(rollout(&home, id), Some(dated));
         assert_eq!(rollout(&home, "x9"), Some(odd));
+        assert_eq!(
+            dated_rollout(&home, "x9"),
+            None,
+            "the session list never walks the tree"
+        );
         assert_eq!(rollout(&home, "01a0f663-0000-7000-8000-000000000000"), None);
 
         fs::write(

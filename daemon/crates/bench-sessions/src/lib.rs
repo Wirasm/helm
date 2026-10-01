@@ -90,8 +90,9 @@ pub struct HookedAgent {
     pub pid: u32,
     pub activity: Activity,
     pub handle: String,
-    /// When its hook last reported, in epoch ms: which of two threads one process ran (codex's
-    /// `/new` keeps the spawn's handle) is the one running now.
+    /// When benchd last heard from it, in epoch ms: its last hook, or a reconcile that found it
+    /// still there. Picks which of two threads one process ran (codex's `/new` keeps the
+    /// spawn's handle) is the one running now.
     pub reported_ms: u64,
 }
 
@@ -558,7 +559,8 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
             },
             // codex names its thread after the spawn: the id reaches the record with the
             // first hook's claim (`mail/claimed`).
-            Harness::Codex => codex::rollout(inputs.home, &h.id),
+            // Only its day directory: a gone rollout must not walk the tree on every build.
+            Harness::Codex => codex::dated_rollout(inputs.home, &h.id),
         };
         let Some(transcript) = transcript else {
             continue;
