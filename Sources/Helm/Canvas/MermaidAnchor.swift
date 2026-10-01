@@ -53,9 +53,10 @@ enum MermaidAnchor {
         guard !diagramIndex.isEmpty, diagramIndex.allSatisfy(\.isNumber) else { return nil }
         rest = rest[rest.index(after: indexEnd)...]
 
-        // Clusters omit the family and counter. Class is the evidence that the suffix
-        // is an authored subgraph id rather than an edge or filter's bookkeeping.
-        if elementClass.split(whereSeparator: \.isWhitespace).contains("cluster") {
+        // Cluster groups omit the family and counter. Ordinary nodes can also carry
+        // an authored CSS class named `cluster`; their `node` class keeps normal reduction.
+        let classes = elementClass.split(whereSeparator: \.isWhitespace)
+        if classes.contains("cluster"), !classes.contains("node") {
             return rest.isEmpty ? nil : String(rest)
         }
 

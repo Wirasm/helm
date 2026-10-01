@@ -153,6 +153,50 @@ final class CanvasSourceAnchorTests: XCTestCase {
         XCTAssertEqual(decoded, source)
     }
 
+    func testMermaidClusterClassOnNodesDoesNotHideTheirSourceIdentifiers() async throws {
+        let cases = [
+            (
+                "flowchart TD\nphase[Ship]:::cluster\nclassDef cluster fill:red",
+                ".node.cluster", "phase"
+            ),
+            (
+                "stateDiagram-v2\nidle --> running\nclassDef cluster fill:red\nclass idle cluster",
+                ".node.cluster", "idle"
+            ),
+            (
+                "classDiagram\nclass Animal\ncssClass \"Animal\" cluster",
+                ".node.cluster", "Animal"
+            ),
+            (
+                "erDiagram\nCUSTOMER ||--o{ ORDER : places\nclassDef cluster fill:red\nclass CUSTOMER cluster",
+                ".node.cluster", "CUSTOMER"
+            ),
+            (
+                "flowchart TD\nsubgraph flowchart-phase-0[Zone]\nphase[Ship]\nend",
+                ".cluster", "flowchart-phase-0"
+            ),
+            (
+                "stateDiagram-v2\nstate Composite {\nidle --> running\n}",
+                ".statediagram-cluster", "Composite"
+            ),
+            (
+                "classDiagram\nnamespace Namespace {\nclass Animal\n}",
+                ".cluster", "Namespace"
+            ),
+        ]
+        for (diagram, selector, identifier) in cases {
+            let page = try Page(markdown: "```mermaid\n\(diagram)\n```\n")
+            defer { page.close() }
+            let messages = try await page.select([selector])
+            let note = try XCTUnwrap(
+                CanvasAnnotation.decode(posted: messages[0], comment: "change"))
+            guard case let .selection(.element(id, _)) = note.mark else {
+                return XCTFail("expected an authored Mermaid identifier for \(identifier)")
+            }
+            XCTAssertEqual(id, identifier, diagram)
+        }
+    }
+
     func testMalformedSourceMetadataReportsARefusal() throws {
         let page = try CanvasScriptRuntime()
         page.evaluateFromSwift(
