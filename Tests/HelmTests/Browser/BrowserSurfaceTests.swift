@@ -16,6 +16,8 @@ final class BrowserSurfaceTests: XCTestCase {
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
         func paste(_ payload: BrowserPaste) { pasted.append(payload) }
+        func setComposition(_: String, selection _: NSRange) {}
+        func textCaretRect() async -> CGRect? { nil }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
 

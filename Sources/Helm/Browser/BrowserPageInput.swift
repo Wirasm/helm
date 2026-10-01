@@ -8,6 +8,7 @@ final class BrowserPageInput {
         case mouse(BrowserPaneModel.MouseEvent)
         case key(BrowserPaneModel.KeyEvent)
         case text(String)
+        case composition(BrowserComposition)
         case paste(BrowserPaste)
     }
 
@@ -86,6 +87,8 @@ final class BrowserPageInput {
             dest.connection.send("Input.dispatchKeyEvent", key, session: dest.session)
         case let .text(text):
             dest.connection.send("Input.insertText", Text(text: text), session: dest.session)
+        case let .composition(composition):
+            dest.connection.send("Input.imeSetComposition", composition, session: dest.session)
         case let .paste(payload):
             await paste(payload, to: dest, revision: revision)
         }

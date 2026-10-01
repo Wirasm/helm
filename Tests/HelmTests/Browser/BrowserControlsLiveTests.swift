@@ -169,6 +169,35 @@ final class BrowserControlsLiveTests: BrowserControlLiveCase {
         XCTAssertTrue(canceled)
     }
 
+    func testCompositionWaitsForPasteThenCommitsInOrder() async throws {
+        for secure in [true, false] {
+            try await show(
+                pastePage() + """
+                    <script>window.timeline=[]; window.drained=false;
+                    field.addEventListener('paste',()=>timeline.push('paste'));
+                    field.addEventListener('compositionstart',()=>timeline.push('composition'));
+                    document.addEventListener('keyup',e=>{if(e.key==='F8') drained=true});
+                    </script>
+                    """, secure: secure)
+            board.setString("first", forType: .string)
+            surface.paste(nil)
+            surface.setMarkedText(
+                "あ", selectedRange: .init(location: 1, length: 0),
+                replacementRange: .init(location: NSNotFound, length: 0))
+            surface.insertText("é", replacementRange: .init(location: NSNotFound, length: 0))
+            pane.key(
+                .init(
+                    type: "keyUp", modifiers: 0, key: "F8", code: "F8", windowsVirtualKeyCode: 119))
+            try await eventually("the queued composition commit is drained") {
+                try await self.read("drained", as: Bool.self)
+            }
+            let timeline = try await read("timeline", as: [String].self)
+            let value = try await read("field.value", as: String.self)
+            XCTAssertEqual(timeline, ["paste", "composition"])
+            XCTAssertEqual(value, "firsté")
+        }
+    }
+
     func testImageOnlyPasteDoesNotNeedAStringOnTheClipboard() async throws {
         try await show(pastePage(cancel: true))
         let bitmap = try XCTUnwrap(
