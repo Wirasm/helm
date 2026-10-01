@@ -128,6 +128,31 @@ impl Agent {
     }
 }
 
+/// A codex benchd resumed on its own app-server (`spawn::wire`) can be woken before its hooks
+/// report: codex fires `SessionStart` with a session's first turn (measured on 0.157.0), and a
+/// resumed session takes no turn until somebody starts one, so without this its mail could only
+/// wait. It counts as busy until its app-server says the thread is idle ([`reconcile`]), so no
+/// turn is started on a thread its TUI has not loaded yet. Anything else is left to its hooks.
+pub fn serve_resumed(c: &mut Core, session: &bench_session::Session) -> Result<(), String> {
+    let (Some(socket), bench_session::Conversation::Resume(thread)) =
+        (&session.spec.codex_server, &session.spec.conversation)
+    else {
+        return Ok(());
+    };
+    let channel = Channel::CodexServer(PathBuf::from(socket));
+    let mut agent = Agent::new(session.handle.clone(), Some(channel), session.pid, None);
+    agent.set_activity(Activity::Busy);
+    let key = SessionKey {
+        harness: Harness::Codex,
+        id: thread.clone(),
+    };
+    c.agents.insert(key, Some(agent));
+    c.append(
+        "agent/state",
+        json!({ "harness": "codex", "session": thread, "handle": session.handle, "activity": Activity::Busy, "event": "resume" }),
+    )
+}
+
 pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let mut args: HookArgs = serde_json::from_value(args.clone())
         .map_err(|e| Refusal::Refused(format!("hook args: {e}")))?;

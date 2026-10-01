@@ -16,7 +16,7 @@
 //! session it would have shown.
 
 use crate::layout::{self, Change, Committed};
-use crate::{Core, claude_settings, sessions};
+use crate::{Core, claude_settings, hook, sessions};
 use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
@@ -138,12 +138,7 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
         (c.root.clone(), c.notices.clone())
     };
     let mut spec = plan.spec.clone();
-    if plan.agent == AgentKind::Claude {
-        spec.settings = Some(claude_settings(&root).map_err(|why| (Status::Error, why))?);
-    }
-    if plan.agent == AgentKind::Codex {
-        spec.codex_server = Some(codex_server_socket(&root, id)?);
-    }
+    wire(&mut spec, &root, id).map_err(|why| (Status::Error, why))?;
     Session::spawn(
         id.to_string(),
         handle.to_string(),
@@ -154,6 +149,19 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
         notices,
     )
     .map_err(|why| (Status::Error, why))
+}
+
+/// What an agent's session `id` needs from this root to report to benchd and be woken by it:
+/// claude's settings (its hooks), and codex's own app-server socket (#454). Every route that
+/// starts an agent, `spawn`, `restore` and `resume`, goes through here, so none starts one
+/// benchd cannot reach.
+pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
+    match spec.agent {
+        AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
+        AgentKind::Codex => spec.codex_server = Some(codex_server_socket(root, id)?),
+        _ => {}
+    }
+    Ok(())
 }
 
 /// What an agent benchd starts learns about itself: its session, its address and this root, so
@@ -174,6 +182,7 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
+    hook::serve_resumed(core, session).map_err(|why| (Status::Error, why))?;
     core.append(
         "session/spawned",
         json!({
@@ -247,7 +256,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             let forked_from =
                 sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.as_deref());
             (
-                Conversation::Resume(resumable(agent, id)?),
+                Conversation::Resume(conversation_id("--resume", id)?),
                 Posture::resuming(forked_from),
             )
         }
@@ -322,17 +331,6 @@ fn logged_args(req: &Request, spec: &SpawnSpec) -> Value {
         map.insert("prompt_file".into(), json!(spec.prompt_file));
     }
     args
-}
-
-/// A conversation to re-enter: only a runtime that takes its id from the caller.
-fn resumable(agent: AgentKind, id: &str) -> Result<String, String> {
-    if !agent.mints_session_id() {
-        return Err(format!(
-            "{} names its own sessions after the fact, so --resume is not supported for it — spawn fresh, or use claude or pi",
-            agent.name()
-        ));
-    }
-    conversation_id("--resume", id)
 }
 
 /// A conversation id from the caller (`flag` names where it came from): one that cannot be read
@@ -432,15 +430,11 @@ fn place(
 /// an idle codex's turn. Session ids restart at s1 with the daemon, so a server that died
 /// uncleanly under an earlier daemon can have left this socket (codex then refuses to bind:
 /// "File exists"). No live session holds this id, so what is there is stale.
-fn codex_server_socket(root: &std::path::Path, id: &str) -> Outcome<String> {
+fn codex_server_socket(root: &std::path::Path, id: &str) -> Result<String, String> {
     let socket = bench_wire::codex_server_socket(root, id);
     if let Some(dir) = socket.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| {
-            (
-                Status::Error,
-                format!("cannot create {}: {e}", dir.display()),
-            )
-        })?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let _ = std::fs::remove_file(&socket);
     let _ = std::fs::remove_file(socket.with_extension("sock.log"));

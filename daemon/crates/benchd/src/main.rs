@@ -1013,10 +1013,72 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
 fn unresumable(agent: bench_session::AgentKind, sid: &str) -> String {
     match agent {
         bench_session::AgentKind::Codex => format!(
-            "codex names its own sessions after the fact, so session {sid} cannot be re-entered — spawn fresh, or use claude or pi where the bench mints the id"
+            "codex names its own sessions after the fact, so session {sid} holds no id to re-enter — `bench spawn --agent codex --resume <thread id>` re-enters a codex conversation"
         ),
         other => format!("{} has no conversation to resume", other.name()),
     }
+}
+
+/// `bench resume <session>`: re-enter an exited session's conversation as a new session, under
+/// its handle, in the posture it ran in.
+fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Status, String)> {
+    let refused = |why: String| (Status::Refused, why);
+    let errored = |why: String| (Status::Error, why);
+    let parsed: SessionArgs = serde_json::from_value(req.args.clone())
+        .map_err(|e| refused(format!("resume args: {e}")))?;
+    let sid = parsed.session.as_str();
+    let old = core.lock().unwrap().sessions.get(sid).cloned();
+    let Some(old) = old else {
+        return Err(refused(format!(
+            "no session {sid:?} in this daemon's lifetime — resume across a daemon restart is not built yet"
+        )));
+    };
+    if old.is_live() {
+        return Err(refused(format!(
+            "session {sid} is still live — `bench attach {sid}` instead"
+        )));
+    }
+    let mut spec = old.spec.clone();
+    // The same conversation, and the same posture: a fork stays read-only (#531).
+    let Some(runtime) = spec.conversation.id() else {
+        return Err(refused(unresumable(spec.agent, sid)));
+    };
+    spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
+    // Re-entering is not a new message: the first prompt was the spawn's.
+    spec.prompt_file = None;
+    let (id, root, notices) = {
+        let mut c = core.lock().unwrap();
+        let id = format!("s{}", c.next_session);
+        c.next_session += 1;
+        (id, c.root.clone(), c.notices.clone())
+    };
+    // A new session id, so codex gets an app-server of its own rather than the exited
+    // session's socket.
+    spawn::wire(&mut spec, &root, &id).map_err(errored)?;
+    let session = Session::spawn(
+        id.clone(),
+        old.handle.clone(),
+        &spec,
+        40,
+        140,
+        &spawn::agent_env(&root, &id, &old.handle),
+        notices,
+    )
+    .map_err(refused)?;
+    let mut c = core.lock().unwrap();
+    c.sessions.remove(sid);
+    c.sessions.insert(id.clone(), Arc::clone(&session));
+    hook::serve_resumed(&mut c, &session).map_err(errored)?;
+    c.append(
+        "session/resumed",
+        json!({ "session": id, "from": sid, "runtime_session": session.runtime_session }),
+    )
+    .map_err(errored)?;
+    Ok(json!({
+        "session": session.id,
+        "from": sid,
+        "pid": session.pid,
+    }))
 }
 
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]
@@ -1247,76 +1309,17 @@ fn dispatch(
         Some(Verb::Close) => (close_session(core, req), AfterResponse::Done),
 
         Some(Verb::Resume) => {
-            let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {
-                Ok(a) => a,
-                Err(e) => return (refused(format!("resume args: {e}")), AfterResponse::Done),
+            let (status, reason, data) = match resume_session(core, req) {
+                Ok(data) => (Status::Ok, None, Some(data)),
+                Err((status, why)) => (status, Some(why), None),
             };
-            let sid = parsed.session.as_str();
-            let old = {
-                let c = core.lock().unwrap();
-                c.sessions.get(sid).cloned()
+            let response = Response {
+                id: req.id.clone(),
+                status,
+                reason,
+                data,
             };
-            let Some(old) = old else {
-                return (
-                    refused(format!(
-                        "no session {sid:?} in this daemon's lifetime — resume across a daemon restart is not built yet"
-                    )),
-                    AfterResponse::Done,
-                );
-            };
-            if old.is_live() {
-                return (
-                    refused(format!(
-                        "session {sid} is still live — `bench attach {sid}` instead"
-                    )),
-                    AfterResponse::Done,
-                );
-            }
-            let mut spec = old.spec.clone();
-            // The same conversation, and the same posture: a fork stays read-only (#531).
-            let Some(runtime) = spec.conversation.id() else {
-                return (refused(unresumable(spec.agent, sid)), AfterResponse::Done);
-            };
-            spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
-            // Re-entering is not a new message: the first prompt was the spawn's.
-            spec.prompt_file = None;
-            let (id, root, notices) = {
-                let mut c = core.lock().unwrap();
-                let id = format!("s{}", c.next_session);
-                c.next_session += 1;
-                (id, c.root.clone(), c.notices.clone())
-            };
-            let session = match Session::spawn(
-                id.clone(),
-                old.handle.clone(),
-                &spec,
-                40,
-                140,
-                &spawn::agent_env(&root, &id, &old.handle),
-                notices,
-            ) {
-                Ok(s) => s,
-                Err(why) => return (refused(why), AfterResponse::Done),
-            };
-            {
-                let mut c = core.lock().unwrap();
-                c.sessions.remove(sid);
-                c.sessions.insert(id.clone(), Arc::clone(&session));
-                if let Err(why) = c.append(
-                    "session/resumed",
-                    json!({ "session": id, "from": sid, "runtime_session": session.runtime_session }),
-                ) {
-                    return (errored(why), AfterResponse::Done);
-                }
-            }
-            (
-                ok(json!({
-                    "session": session.id,
-                    "from": sid,
-                    "pid": session.pid,
-                })),
-                AfterResponse::Done,
-            )
+            (response, AfterResponse::Done)
         }
 
         Some(Verb::MailSend) => {

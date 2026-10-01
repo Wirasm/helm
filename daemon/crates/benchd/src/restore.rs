@@ -15,7 +15,7 @@
 //! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
 //! second, forking resume.
 
-use crate::{Core, claude_settings, sessions, shells, spawn};
+use crate::{Core, hook, sessions, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, RestoreArgs};
@@ -186,11 +186,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         .and_then(|h| h.handle().map(str::to_string))
         .filter(|h| !core.sessions.values().any(|s| &s.handle == h))
         .unwrap_or_else(|| id.clone());
-    let settings = match kind {
-        AgentKind::Claude => Some(claude_settings(&core.root)?),
-        _ => None,
-    };
-    let spec = SpawnSpec {
+    let mut spec = SpawnSpec {
         agent: kind,
         cwd: agent.cwd.clone(),
         model: None,
@@ -199,9 +195,10 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         posture,
         prompt_file: None,
         extra_args: Vec::new(),
-        settings,
+        settings: None,
         codex_server: None,
     };
+    spawn::wire(&mut spec, &core.root, &id)?;
     let session = Session::spawn(
         id.clone(),
         handle.clone(),
@@ -212,6 +209,7 @@ fn resume(core: &mut Core, pane: PaneId, agent: &ResumableAgent) -> Result<Arc<S
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
+    hook::serve_resumed(core, &session)?;
     let _ = core.append(
         "session/spawned",
         json!({
