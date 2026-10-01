@@ -136,8 +136,8 @@ fn usage() -> &'static str {
      \x20                                         sessions, archon, worktrees, terminal or\n\
      \x20                                         file:<path>\n\
      \x20     drawer place <name>                 put a drawer against that window edge: where\n\
-     \x20           <left|right|bottom>           his drawers sit is the operator's, so an agent\n\
-     \x20                                         needs --asked\n\
+     \x20           <left|right|bottom>           his drawers sit is the operator's, so refused\n\
+     \x20                                         from an agent\n\
      \x20     just <recipe> [args...]             run a recipe from <root>/rules/justfile here;\n\
      \x20                                         answers {run, log}, and just/finished says how\n\
      \x20                                         it ended\n\
