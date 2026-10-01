@@ -201,9 +201,10 @@ python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["reply"] = "on
 rm -f "$READ" "$NEW"
 ```
 
-- **Exit 3 from `bench file write` means the operator changed the file since you read it**, and
-  nothing was written. Read it again and make your change on what is there. A new file is
-  `--expect /dev/null`.
+- **Exit 3 with "changed since you read it" means the operator changed the file first**, and
+  nothing was written. Read it again and make your change on what is there. Every other refusal
+  (stdin empty or not JSON, say) is exit 3 too and names its cause on stderr: fix that rather than
+  retrying. A new file is `--expect /dev/null`.
 - **Make the new text a file first, as above, rather than piping into `bench file write`.** A
   pipe whose first step fails still hands over nothing. `bench` refuses an empty write, and for a
   live file a write that is not JSON, but a file your shell stopped at is the plain version.
