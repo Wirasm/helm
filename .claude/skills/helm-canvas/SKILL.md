@@ -313,6 +313,12 @@ quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressab
 For a diagram the operator must be able to point at, those four families or your own HTML ids are
 the options that work.
 
+**Check a mark's label against the node its identifier names now.** A mark carries both, in the
+mail and in the sidecar: `` `#phase2` — "Phase 2: migrate" ``. An identifier you reused for a
+different node in a rewrite still resolves, silently, to the new one, and helm cannot tell. If the
+label no longer describes what that identifier names, the mark predates the rewrite: ask the
+operator rather than act on it (helm #319).
+
 **Sibling `fetch` reports a real status** — 200 for bytes, 404 for a sibling that is not there, 403
 for one the boundary refuses — so `res.ok` and `res.status` mean what they mean (helm #201).
 

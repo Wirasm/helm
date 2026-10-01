@@ -65,7 +65,7 @@ struct HelmApp: App {
     var body: some Scene {
         // Titled from the domain, so an instance running on an isolated suite says so
         // where an agent outside the process can read it — `winshot --list` matches on
-        // window titles, and `AGENTS.md` records that two helms are otherwise identical
+        // window titles, and `docs/running-helm.md` records that two helms are otherwise identical
         // by name. Unset, this is the literal "helm" it has always been.
         WindowGroup(DefaultsDomain.windowTitle) {
             RootView(client: .live())

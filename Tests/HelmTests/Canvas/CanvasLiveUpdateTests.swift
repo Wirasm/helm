@@ -201,8 +201,7 @@ final class CanvasLiveUpdateTests: XCTestCase {
     }
 
     /// **A demand is a rise, not a value — and a rebuilt pane must not read the model's history
-    /// as a fresh press.** Found by review, and it is the counter-desync `AGENTS.md` warns about
-    /// twice over.
+    /// as a fresh press.** Found by review.
     ///
     /// `CanvasModel.reloadDemand` outlives the coordinator by design — the model belongs to the
     /// pane and the coordinator to SwiftUI, which rebuilds `HTMLCanvasWebView` whenever the

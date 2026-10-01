@@ -58,8 +58,7 @@ final class WorkbenchModel: ObservableObject {
     /// **Here rather than on a canvas, because the failure is that there is no canvas.** Every
     /// other thing helm says about a note is a strip inside its own pane; this one happens before
     /// a pane exists, so it has to be said on the bench. A keystroke that silently does nothing is
-    /// the shape of failure `AGENTS.md` records paying for repeatedly, and it is what this exists
-    /// to stop being.
+    /// a failure this project has paid for repeatedly, and this exists to stop it.
     ///
     /// Cleared by the next attempt that works, and by a timer — it is a receipt about a moment,
     /// not something to dismiss.
