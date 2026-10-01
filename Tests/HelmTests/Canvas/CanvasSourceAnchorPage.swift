@@ -79,6 +79,47 @@ final class CanvasSourceAnchorPage: NSObject, WKScriptMessageHandler {
         return messages
     }
 
+    /// A second visible copy makes quote fallback ambiguous, so an ID test can only pass
+    /// through identifier lookup. The echo has no id and cannot match the captured source id.
+    func repeatLabel(_ text: String) async throws {
+        let echoed: String = try await withCheckedThrowingContinuation { continuation in
+            webView.callAsyncJavaScript(
+                "var echo = document.createElement('p'); echo.textContent = text; document.body.appendChild(echo); return echo.textContent;",
+                arguments: ["text": text], in: nil, in: CanvasFileCoordinator.bridgeWorld
+            ) { result in
+                continuation.resume(with: result.map { ($0 as? String) ?? "" })
+            }
+        }
+        XCTAssertEqual(echoed, text)
+    }
+
+    /// Exercise the real sidecar parser and Swift-to-page hover bridge after capture.
+    func hover(_ annotation: CanvasAnnotation) async throws -> Bool {
+        let note = try XCTUnwrap(
+            CanvasNotes.entries(in: CanvasNotes.entry(annotation, at: Date())).first)
+        let hover = CanvasNoteHover()
+        hover.webView = webView
+        hover.hover(note, entered: true)
+        defer { hover.clear() }
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if hover.status[note.id] != nil { return false }
+            let painted: String = try await withCheckedThrowingContinuation { continuation in
+                webView.evaluateJavaScript(
+                    "String(!!window.CSS && CSS.highlights.has('helm-note'));", in: nil,
+                    in: CanvasFileCoordinator.bridgeWorld
+                ) { result in
+                    continuation.resume(with: result.map { ($0 as? String) ?? "false" })
+                }
+            }
+            if painted == "true" { return true }
+            // Polling lets an interval elapse; only a highlight or a reported refusal decides.
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Hover neither painted nor reported a refusal within its deadline")
+        return false
+    }
+
     // Poll an observable with a deadline; elapsed time alone never passes an assertion.
     private func wait(_ ready: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(15)

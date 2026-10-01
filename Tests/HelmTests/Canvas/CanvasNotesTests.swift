@@ -71,7 +71,8 @@ final class CanvasNotesTests: XCTestCase {
         let heading = entry.split(separator: "\n").first { $0.hasPrefix("## ") }
         XCTAssertEqual(
             heading, "## source \"first line\\nsecond line\" text \"first line\\nsecond line\"",
-            "a newline in a heading would break the markdown the agent is meant to read")
+            "the heading preserves literal source and selected words without breaking markdown structure"
+        )
     }
 
     // MARK: - Appending
@@ -188,8 +189,7 @@ final class CanvasNotesMarkTests: XCTestCase {
     }
 
     /// The geometry tools left in #385, and the sidecars they wrote did not. A heading is prose
-    /// to every reader — nothing parses one back into a mark — so an old note still counts and
-    /// still shows, exactly as it did.
+    /// to every reader. Its heading is not a current mark, but still counts and shows.
     @MainActor
     func testASidecarWrittenByTheOldGeometryToolsStillReads() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())

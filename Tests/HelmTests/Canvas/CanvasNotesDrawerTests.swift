@@ -215,6 +215,20 @@ final class CanvasNotesDrawerTests: XCTestCase {
         XCTAssertEqual(model.notesText, "the plan reads well, but the ordering is off.\n")
     }
 
+    func testSidecarReloadClearsHoverResultsForPositionalNoteIDs() throws {
+        try writeSidecar("## legacy geometry\n\nOld note\n")
+        let model = CanvasModel()
+        model.open(file)
+        let note = try XCTUnwrap(CanvasNotes.entries(in: model.notesText ?? "").first)
+        model.noteHover.hover(note, entered: true)
+        XCTAssertNotNil(model.noteHover.status[note.id])
+
+        try writeSidecar("## \"a different note\"\n\nNew note at the same index\n")
+        model.refreshNotes()
+        XCTAssertTrue(model.noteHover.status.isEmpty)
+        XCTAssertEqual(model.notes, CanvasNotes.entries(in: model.notesText ?? "").map(\.heading))
+    }
+
     func testAnEmptySidecarHasNothingToRender() throws {
         try writeSidecar("   \n\n")
         let model = CanvasModel()

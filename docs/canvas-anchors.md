@@ -23,6 +23,11 @@ selected rendered text beside the identifier so the agent can check that the art
 means what the operator marked. Authored HTML ids such as `content`, `actor0` or
 `mermaid-0` remain authored ids outside Mermaid; their spelling does not decide provenance.
 
+If an identifier label or historical quotation contains a newline, tab, quote or backslash,
+its lossless form is `text <JSON-string>`, for example `` `#phase2` — text "first\nsecond" ``
+or `text "first\nsecond"`. JSON-decode the string after `text`; simple raw-quoted labels keep
+their existing spelling. Source and selected text use the same `CanvasNotes.jsonString` encoder.
+
 A source heading looks like `source "First **bold** line.\nSecond line.\n" text "bold"`.
 Both values are JSON strings from the same encoder. Decoding them recovers the exact
 source block and selected words, including newlines, quotes and backslashes. The source block can be larger than the selected words:
@@ -40,3 +45,10 @@ composites use state-family reduction, like ordinary state nodes.
 
 Existing sidecars remain readable. Historical quoted-text headings do not acquire a source
 guarantee. They describe rendered text and should be checked against the current artifact.
+
+Hovering a note highlights its verified identifier, exact source block and selected words, or
+unique historical rendered quotation. It scrolls an offscreen match into view. A selector with
+a mismatched label falls through to verified text lookup; source excerpts must still match exactly.
+Missing, duplicate or unsupported targets report that the note cannot be found. A missing page
+reports that highlighting is unavailable. Closing the drawer or leaving the note
+clears the temporary highlight without clearing a selection awaiting a comment.

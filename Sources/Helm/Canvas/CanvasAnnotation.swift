@@ -209,7 +209,8 @@ extension CanvasAnnotation {
         }
     }
 
-    private static func validID(_ id: String) -> String? {
+    /// Shared by page decoding and the sidecar parser; neither may silently repair an id.
+    static func validID(_ id: String) -> String? {
         guard !id.isEmpty, id.count <= maximumIDLength,
             id.unicodeScalars.allSatisfy(allowedIDCharacters.contains)
         else { return nil }
@@ -219,7 +220,7 @@ extension CanvasAnnotation {
     /// Control characters out — a selection that carries them is not text the operator
     /// pointed at — and length bounded. Refused rather than truncated: half a quotation
     /// anchors to the wrong place just as confidently as a whole one.
-    private static func sanitizedText(_ raw: Any?) -> String? {
+    static func sanitizedText(_ raw: Any?) -> String? {
         guard let raw = raw as? String else { return nil }
         let stripped = String(
             String.UnicodeScalarView(

@@ -47,6 +47,8 @@ enum MermaidAnchor {
     /// identifier, or an id the agent authored by hand. Nil means the diagram element
     /// is not anchorable.
     ///
+    /// Paired with canvas-annotation.js's sourceID for hover. CanvasHoverIntegrationTests
+    /// renders every supported family/group, captures it, decodes here, and hovers that id.
     /// Pure: no WebKit, no page, no I/O.
     static func sourceIdentifier(in renderedID: String, role: RendererRole = .node) -> String? {
         guard renderedID.hasPrefix("mermaid-") else { return nil }

@@ -146,6 +146,133 @@
     return node && node.nodeType === 3 ? node.parentNode : node;
   }
 
+  // Paired with MermaidAnchor.sourceIdentifier(in:role:) in Swift. The real-vendor capture
+  // → Swift decode → sidecar → hover test in CanvasHoverIntegrationTests catches drift.
+  function sourceID(anchor) {
+    if (anchor.anchorKind === "element") { return anchor.id; }
+    if (anchor.anchorKind !== "mermaid") { return null; }
+    var suffix = /^mermaid-\d+-(.+)$/.exec(anchor.id || "");
+    if (!suffix) { return null; }
+    if (anchor.rendererRole === "cluster") { return suffix[1]; }
+    if (anchor.rendererRole !== "node" && anchor.rendererRole !== "stateCluster") { return null; }
+    var node = /^(flowchart|classId|state|entity)-(.+)-\d+$/.exec(suffix[1]);
+    if (!node || (anchor.rendererRole === "stateCluster" && node[1] !== "state")) { return null; }
+    return node[2];
+  }
+
+  function words(text) { return String(text || "").replace(/\s+/g, " ").trim(); }
+
+  function addressable(node) {
+    if (inPageSurface(node) || helmFrame(node)) { return false; }
+    var captured = anchorFor(node, "");
+    // Capture owns diagram provenance and renderer roles. Unsupported diagrams cannot be
+    // recovered by label alone; historical prose quotes outside diagrams still can.
+    return captured.anchorKind !== "mermaid" || sourceID(captured) !== null;
+  }
+
+  function verified(node, text) {
+    return node && addressable(node) && words(node.textContent).includes(words(text))
+      && node.getClientRects().length
+      && getComputedStyle(node).visibility !== "hidden"
+      && words(node.innerText === undefined ? node.textContent : node.innerText).includes(words(text));
+  }
+
+  // Map normalized rendered text back to DOM offsets, across inline markup.
+  function quoteRange(node, quote) {
+    var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    var positions = [], normalized = "", leaf;
+    while ((leaf = walker.nextNode())) {
+      var parent = leaf.parentElement;
+      if (!parent || !addressable(parent) || parent.closest("script, style, [hidden]")) { continue; }
+      if (!parent.getClientRects().length || getComputedStyle(parent).visibility === "hidden") { continue; }
+      for (var i = 0; i < leaf.textContent.length; i++) {
+        var char = leaf.textContent[i];
+        if (/\s/.test(char)) {
+          if (!normalized || normalized.endsWith(" ")) { continue; }
+          char = " ";
+        }
+        normalized += char;
+        positions.push({ node: leaf, offset: i });
+      }
+    }
+    var needle = words(quote), start = normalized.indexOf(needle);
+    if (!needle || start < 0) { return null; }
+    if (normalized.indexOf(needle, start + 1) >= 0) { return { ambiguous: true }; }
+    var first = positions[start], last = positions[start + needle.length - 1];
+    var range = document.createRange();
+    range.setStart(first.node, first.offset);
+    range.setEnd(last.node, last.offset + 1);
+    return range;
+  }
+
+  function resolveAnchor(anchor) {
+    if (!anchor || !words(anchor.text)
+        || ["element", "quote", "excerpt"].indexOf(anchor.anchorKind) < 0) { return null; }
+    if (anchor.anchorKind === "excerpt") {
+      var blocks = Array.from(document.querySelectorAll("[data-helm-source]")).filter(function (node) {
+        var captured = anchorFor(node, anchor.text);
+        return captured.anchorKind === "excerpt" && captured.source === anchor.source;
+      });
+      if (blocks.length !== 1 || !verified(blocks[0], anchor.text)) { return null; }
+      var excerptRange = quoteRange(blocks[0], anchor.text);
+      return excerptRange && !excerptRange.ambiguous ? { node: blocks[0], range: excerptRange } : null;
+    }
+    if (anchor.anchorKind === "element") {
+      var direct = document.getElementById(anchor.id);
+      if (verified(direct, anchor.text)) { return { node: direct }; }
+      var matches = Array.from(document.querySelectorAll("[id]")).filter(function (node) {
+        return sourceID(anchorFor(node, anchor.text)) === anchor.id && verified(node, anchor.text);
+      });
+      if (matches.length === 1) { return { node: matches[0] }; }
+      if (matches.length > 1) { return null; }
+    }
+    // Smallest prose blocks avoid a match manufactured across unrelated paragraphs.
+    var ranges = [], ambiguous = false;
+    Array.from(document.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, td, th, pre, blockquote, div, section, article, [id]"))
+      .filter(function (node) { return verified(node, anchor.text); })
+      .forEach(function (node) {
+        var range = quoteRange(node, anchor.text);
+        if (range && range.ambiguous) { ambiguous = true; return; }
+        if (range && !ranges.some(function (other) {
+          return other.range.startContainer === range.startContainer && other.range.startOffset === range.startOffset
+            && other.range.endContainer === range.endContainer && other.range.endOffset === range.endOffset;
+        })) { ranges.push({ node: elementFor(range.commonAncestorContainer), range: range }); }
+      });
+    return !ambiguous && ranges.length === 1 ? ranges[0] : null;
+  }
+
+  var hoverSheet = null;
+  window.__helmClearNote = function () {
+    if (hoverSheet) { hoverSheet.replaceSync(""); }
+    if (window.CSS && window.CSS.highlights) { window.CSS.highlights.delete("helm-note"); }
+  };
+  window.__helmHoverNote = function (anchor) {
+    window.__helmClearNote();
+    var found = resolveAnchor(anchor), colour = tint();
+    if (!found) { return "not-found"; }
+    if (!colour || !window.CSS || !window.CSS.highlights || !window.Highlight) { return "unavailable"; }
+    if (!hoverSheet) { hoverSheet = new window.CSSStyleSheet(); }
+    var rule = "::highlight(helm-note){background-color:" + colour + "}";
+    var range = found.range;
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(found.node);
+      var selector = "#" + window.CSS.escape(found.node.id);
+      rule += selector + "{outline:2px solid " + colour + ";outline-offset:2px}"
+        + selector + " :is(rect,path,polygon,circle,ellipse){stroke:" + colour + ";stroke-width:3px}";
+    }
+    hoverSheet.replaceSync(rule);
+    if (document.adoptedStyleSheets.indexOf(hoverSheet) < 0) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.concat([hoverSheet]);
+    }
+    window.CSS.highlights.set("helm-note", new window.Highlight(range));
+    var rect = found.node.getBoundingClientRect();
+    if (rect.top < 0 || rect.bottom > window.innerHeight) {
+      found.node.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    return "found";
+  };
+
   // The text mark, painted (#308).
   //
   // A text mark was once the browser's own selection, which greys the instant the comment

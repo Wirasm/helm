@@ -131,6 +131,7 @@ final class CanvasModel: ObservableObject {
     /// persisted — the drawer is temporary, and a pane that restored with half the artifact
     /// covered would be answering a question nobody asked.
     @Published private(set) var showsNotes = false
+    let noteHover = CanvasNoteHover()
 
     /// A transient "that worked" line. Separate from `notesFailure` because a silent copy is
     /// indistinguishable from a dead click, and because the operator has to know their
@@ -152,7 +153,11 @@ final class CanvasModel: ObservableObject {
     /// touches the disk every time SwiftUI redraws it, which for a pane sharing a bench with
     /// live terminals is a great many times a second. One read per refresh, and everything
     /// else about the sidecar is derived from this string rather than read again.
-    @Published private(set) var notesText: String?
+    @Published private(set) var notesText: String? {
+        didSet {
+            if notesText != oldValue { noteHover.reset() }
+        }
+    }
 
     /// Every note in this canvas's sidecar, by heading — for the header's `Notes (n)`. Not
     /// tallied in memory: the sidecar IS the memory, and an agent or an editor may have

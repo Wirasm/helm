@@ -352,6 +352,11 @@ An authored `<div id="phase">` remains an identifier anchor; id-less raw HTML ne
 on it. An id-less selection with no named ancestor says it is not anchorable. See
 [canvas anchor rules](../../../docs/canvas-anchors.md) for the complete per-kind contract.
 
+**Escaped sidecar labels use `text <JSON-string>`.** A selection with a newline, tab, quote or
+backslash is written as `text "first\nsecond"`, or `` `#phase2` — text "first\nsecond" ``.
+JSON-decode the string after `text` to recover the selected words; do not search for the literal
+escape sequences. Simple labels and historical raw-quoted headings keep their original spelling.
+
 **Check a mark's label against the node its identifier names now.** A mark carries both, in the
 mail and in the sidecar: `` `#phase2` — "Phase 2: migrate" ``. An identifier you reused for a
 different node in a rewrite still resolves, silently, to the new one, and helm cannot tell. If the

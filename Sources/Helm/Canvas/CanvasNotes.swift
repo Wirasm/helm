@@ -55,20 +55,90 @@ enum CanvasNotes {
 
     /// The mark as a heading an agent reads without being taught anything: the anchor.
     ///
-    /// Sidecars written before #385 also hold geometry headings — `circled …`, `arrow … → …`,
-    /// `pointed at …`. They are prose to every reader (`headings(in:)`, the drawer, an agent),
-    /// so they still read; nothing parses a heading back into a `Mark`.
-    private static func describe(_ mark: CanvasAnnotation.Mark) -> String {
+    /// Historical geometry headings remain readable but cannot become a current mark.
+    static func describe(_ mark: CanvasAnnotation.Mark) -> String {
         switch mark {
         case let .selection(anchor): name(anchor)
         }
     }
 
+    /// Parse the exact heading format we write, not arbitrary operator prose.
+    static func mark(in heading: String) -> CanvasAnnotation.Mark? {
+        if heading.hasPrefix("source ") { return sourceMark(in: heading) }
+        if heading.hasPrefix("`#"), let boundary = heading.range(of: "` — ") {
+            let id = String(
+                heading[heading.index(heading.startIndex, offsetBy: 2)..<boundary.lowerBound])
+            guard let text = headingText(String(heading[boundary.upperBound...])) else {
+                return nil
+            }
+            guard CanvasAnnotation.validID(id) == id,
+                CanvasAnnotation.sanitizedText(text) == text
+            else { return nil }
+            return .selection(.element(id: id, text: text))
+        }
+        guard let text = headingText(heading) else { return nil }
+        guard CanvasAnnotation.sanitizedText(text) == text else { return nil }
+        return .selection(.quote(text))
+    }
+
+    /// JSON strings can themselves contain ` text `, so read the two encoded values rather
+    /// than splitting on that delimiter inside arbitrary source bytes.
+    private static func sourceMark(in heading: String) -> CanvasAnnotation.Mark? {
+        let pattern = #"^source ("(?:[^"\\]|\\.)*") text ("(?:[^"\\]|\\.)*")$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+            let match = expression.firstMatch(
+                in: heading, range: NSRange(heading.startIndex..., in: heading)),
+            let sourceRange = Range(match.range(at: 1), in: heading),
+            let textRange = Range(match.range(at: 2), in: heading),
+            let source = try? JSONDecoder().decode(
+                String.self, from: Data(heading[sourceRange].utf8)),
+            let text = try? JSONDecoder().decode(String.self, from: Data(heading[textRange].utf8))
+        else { return nil }
+        let mark = CanvasAnnotation.Mark.selection(.excerpt(source: source, text: text))
+        return CanvasAnnotation.Mark.decode(
+            [
+                "anchorKind": "excerpt", "source": source, "text": text,
+            ], as: .selection) == mark ? mark : nil
+    }
+
+    struct Note: Identifiable {
+        let id: Int
+        let heading: String
+        let text: String
+        var mark: CanvasAnnotation.Mark? { CanvasNotes.mark(in: heading) }
+    }
+
+    /// Keep the full entry, including its comment and timestamp, under one hover target.
+    static func entries(in text: String) -> [Note] {
+        var entries: [Note] = []
+        var lines: [String] = []
+        var heading = ""
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("## ") {
+                if !lines.isEmpty {
+                    entries.append(
+                        Note(
+                            id: entries.count, heading: heading, text: lines.joined(separator: "\n")
+                        ))
+                }
+                heading = String(line.dropFirst(3))
+                lines = [line]
+            } else {
+                lines.append(line)
+            }
+        }
+        if !lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            entries.append(
+                Note(id: entries.count, heading: heading, text: lines.joined(separator: "\n")))
+        }
+        return entries
+    }
+
     /// The anchor with its text, for a mark about one thing.
     private static func name(_ anchor: CanvasAnnotation.Anchor) -> String {
         switch anchor {
-        case let .element(id, text): "`#\(id)` — \"\(singleLine(text))\""
-        case let .quote(text): "\"\(singleLine(text))\""
+        case let .element(id, text): "`#\(id)` — \(quoted(text))"
+        case let .quote(text): quoted(text)
         case let .excerpt(source, text): "source \(jsonString(source)) text \(jsonString(text))"
         case .unanchored: preconditionFailure("Unanchored selections cannot become notes")
         }
@@ -120,12 +190,8 @@ enum CanvasNotes {
     /// read of one file — two reads could disagree, and then the header would be counting
     /// notes the drawer is not showing.
     ///
-    /// **Still a rendering, not a parse.** Nothing here turns a heading back into a `Mark`;
-    /// that is #199's, along with the round-trip drift it brings.
     static func headings(in text: String) -> [String] {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { $0.hasPrefix("## ") }
-            .map { String($0.dropFirst(3)) }
+        entries(in: text).map(\.heading).filter { !$0.isEmpty }
     }
 
     /// The sidecar as the drawer reads it: the file's own text, with the timestamp's `<sub>`
@@ -161,10 +227,23 @@ enum CanvasNotes {
         return text
     }
 
-    /// Newlines out of a heading — a multi-line selection would otherwise break the
-    /// markdown structure the agent is meant to read.
-    private static func singleLine(_ text: String) -> String {
-        text.split(whereSeparator: \.isNewline).joined(separator: " ")
+    /// Simple headings keep their original spelling. An explicit `text` prefix distinguishes
+    /// escaped JSON from historical raw quotes (whose backslashes were literal).
+    private static func quoted(_ text: String) -> String {
+        if !text.contains(where: { $0.isNewline || $0 == "\"" || $0 == "\\" || $0 == "\t" }) {
+            return "\"\(text)\""
+        }
+        return "text " + jsonString(text)
+    }
+
+    private static func headingText(_ heading: String) -> String? {
+        if heading.hasPrefix("text ") {
+            return try? JSONDecoder().decode(String.self, from: Data(heading.dropFirst(5).utf8))
+        }
+        guard heading.hasPrefix("\""), heading.hasSuffix("\""), heading.count >= 2 else {
+            return nil
+        }
+        return String(heading.dropFirst().dropLast())
     }
 
     private static func stamp(_ date: Date) -> String {
