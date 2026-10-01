@@ -58,17 +58,35 @@ enum BenchExecutable {
                 asked: "benchd is reached over TCP, so its own bench is not here", looked: looked))
     }
 
-    /// Why a pane cannot run a `bench`: there is none, or helm's own is another build than the
-    /// benchd over TCP it would talk to. Its `description` is what the pane says.
+    /// Why a pane cannot run a `bench`: there is none, helm's own is another build than the
+    /// benchd over TCP it would talk to, or it did not say which build in time. Its
+    /// `description` is what the pane says.
     enum Unusable: Error, Equatable {
         case notFound(NotFound)
         case otherBuild(OtherBuild)
+        case noAnswer(NoAnswer)
 
         var description: String {
             switch self {
             case let .notFound(missing): missing.description
             case let .otherBuild(other): other.description
+            case let .noAnswer(slow): slow.description
             }
+        }
+    }
+
+    /// `bench --version` was still running at the deadline, so it said nothing about its
+    /// build. Not a verdict: a binary's first run after it is written can wait seconds on
+    /// macOS while other new binaries are checked, and its next run takes milliseconds.
+    struct NoAnswer: Error, Equatable {
+        let bench: String
+        let seconds: TimeInterval
+
+        var description: String {
+            "helm's bench (\(bench)) did not say its version within \(Int(seconds)) seconds, so "
+                + "helm cannot tell whether it is the same build as the benchd it reaches over "
+                + "TCP. A freshly installed bench can be that slow on its first run; close this "
+                + "pane and reopen it to ask again."
         }
     }
 
@@ -98,8 +116,9 @@ enum BenchExecutable {
     }
 
     /// The version a `bench` says it is (`bench --version`), or nil when it says none: it is
-    /// older than the flag, cannot run, or took longer than two seconds.
-    static func version(of bench: String) -> String? {
+    /// older than the flag or cannot run. Throws `NoAnswer` when it is still running after
+    /// `seconds`, which says nothing about its version.
+    static func version(of bench: String, within seconds: TimeInterval = 2) throws(NoAnswer) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: bench)
         process.arguments = ["--version"]
@@ -107,11 +126,11 @@ enum BenchExecutable {
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(seconds)
         while process.isRunning, Date() < deadline { usleep(10_000) }
         if process.isRunning {
             process.terminate()
-            return nil
+            throw NoAnswer(bench: bench, seconds: seconds)
         }
         guard process.terminationStatus == 0 else { return nil }
         let printed = String(
