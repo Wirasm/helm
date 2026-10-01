@@ -154,13 +154,19 @@ final class SessionsModelTests: XCTestCase {
 
     func testAStatusLineSaysWhatItIsDoingAndSince() {
         let now = Date(timeIntervalSince1970: 10_000)
-        func running(_ activity: String, _ detail: String?, at seconds: UInt64) -> BenchSessionRow {
+        func running(
+            _ activity: String, _ detail: String?, branch: String? = nil, at seconds: UInt64
+        ) -> BenchSessionRow {
             BenchSessionRow(
-                harness: "claude", id: "s", cwd: "/w",
+                harness: "claude", id: "s", cwd: "/w", branch: branch,
                 state: .running(activity: activity, detail: detail),
                 open: .focusPane(UUID()), updatedAtMs: seconds * 1000)
         }
         XCTAssertEqual(SessionLine.status(running("busy", nil, at: 9_880), now: now), "busy · 2m")
+        XCTAssertEqual(
+            SessionLine.status(
+                running("busy", nil, branch: "feat/session-branch", at: 9_880), now: now),
+            "feat/session-branch · busy · 2m")
         XCTAssertEqual(
             SessionLine.status(running("waiting", "permission prompt", at: 7_600), now: now),
             "waiting: permission prompt · 40m")

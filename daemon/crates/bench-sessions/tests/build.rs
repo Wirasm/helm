@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -50,6 +51,25 @@ impl Drop for Fixture {
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
+}
+
+fn git(args: &[&str], dir: &Path) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn jsonl<L: std::fmt::Display>(records: &[L]) -> String {
@@ -332,6 +352,42 @@ fn rows_are_scoped_to_the_repo_and_every_worktree_including_one_outside_it() {
     let from_outer = f.build_with(&mut Cache::default(), &f.outer().join("src"));
     assert_eq!(from_outer.list.workspace, ws);
     assert_eq!(ids(&from_outer), ids(&built));
+}
+
+#[test]
+fn rows_read_the_current_branch_from_real_linked_worktrees() {
+    let mut f = Fixture::new();
+    fs::remove_dir_all(f.ws()).unwrap();
+    fs::remove_dir_all(f.outer()).unwrap();
+    fs::create_dir_all(f.ws()).unwrap();
+    git(&["init", "-q", "-b", "main"], &f.ws());
+    write(&f.ws().join("tracked"), "one\n");
+    git(&["add", "tracked"], &f.ws());
+    git(&["commit", "-q", "-m", "initial"], &f.ws());
+
+    let named_path = f.inner();
+    let detached_path = f.outer();
+    let named = Fixture::s(named_path.clone());
+    let detached = Fixture::s(detached_path.clone());
+    git(
+        &["worktree", "add", "-q", "-b", "feat/session-branch", &named],
+        &f.ws(),
+    );
+    git(&["worktree", "add", "-q", "--detach", &detached], &f.ws());
+    let named = Fixture::s(named_path.canonicalize().unwrap());
+    let detached = Fixture::s(detached_path.canonicalize().unwrap());
+    let workspace = f.ws().canonicalize().unwrap();
+    f.claude(101, "named", &named, json!({}));
+    f.claude(102, "detached", &detached, json!({}));
+    f.pane(PANE, Some(101));
+    f.pane(PANE2, Some(102));
+
+    let built = f.build_with(&mut Cache::default(), &workspace);
+    assert_eq!(
+        row(&built, "named").unwrap().branch.as_deref(),
+        Some("feat/session-branch")
+    );
+    assert_eq!(row(&built, "detached").unwrap().branch, None);
 }
 
 fn assistant(stop: Value, blocks: &[&str]) -> Value {

@@ -65,6 +65,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var parent: String?
     package var name: String?
     package var cwd: String
+    /// The short branch checked out in the row's worktree when benchd built the list.
+    package var branch: String?
     package var state: State
     package var open: Open
     package var updatedAtMs: UInt64
@@ -87,19 +89,20 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case harness, id, parent, name, cwd, state, open
+        case harness, id, parent, name, cwd, branch, state, open
         case updatedAtMs = "updated_at_ms"
     }
 
     package init(
         harness: String, id: String, parent: String? = nil, name: String? = nil, cwd: String,
-        state: State, open: Open, updatedAtMs: UInt64
+        branch: String? = nil, state: State, open: Open, updatedAtMs: UInt64
     ) {
         self.harness = harness
         self.id = id
         self.parent = parent
         self.name = name
         self.cwd = cwd
+        self.branch = branch
         self.state = state
         self.open = open
         self.updatedAtMs = updatedAtMs
@@ -112,6 +115,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         parent = try c.decodeIfPresent(String.self, forKey: .parent)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         cwd = try c.decode(String.self, forKey: .cwd)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
         state = try c.decode(State.self, forKey: .state)
         open = try c.decode(Open.self, forKey: .open)
         updatedAtMs = try c.decode(UInt64.self, forKey: .updatedAtMs)

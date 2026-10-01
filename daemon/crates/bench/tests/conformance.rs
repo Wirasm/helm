@@ -3786,7 +3786,7 @@ fn the_bench_sessions_skills_snippets_execute() {
         outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     assert!(
-        outputs[0].contains(&format!("pi {pi_session} running")),
+        outputs[0].contains(&format!("pi {pi_session} - running")),
         "the live session is listed: {}",
         outputs[0]
     );

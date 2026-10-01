@@ -55,6 +55,9 @@ pub struct SessionRow {
     pub cwd: String,
     /// The worktree root the row was scoped by: the repo or one of its worktrees.
     pub root: String,
+    /// The short branch checked out in `root` when the list was built. `None` for a detached
+    /// HEAD, a non-git root, or git metadata that could not be read. Always sent.
+    pub branch: Option<String>,
     pub state: SessionState,
     pub host: Host,
     pub open: OpenAction,
@@ -401,6 +404,20 @@ mod tests {
                 .iter()
                 .all(|r| r.as_object().unwrap().contains_key("mail")),
             "every row says whether it has a mailbox"
+        );
+        assert!(list.rows.iter().any(|r| r.branch.is_none()));
+        assert!(
+            list.rows
+                .iter()
+                .any(|r| r.branch.as_deref() == Some("feat/drawer"))
+        );
+        assert!(
+            value["list"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.as_object().unwrap().contains_key("branch")),
+            "every row says which branch its root has"
         );
         assert_eq!(list.operator.handle, crate::OPERATOR_HANDLE);
 

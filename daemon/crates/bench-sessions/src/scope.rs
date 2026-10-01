@@ -82,16 +82,24 @@ fn within(cwd: &str, root: &str) -> bool {
         || root == "/"
 }
 
+pub(crate) fn branch_of(root: &str) -> Option<String> {
+    let dotgit = Path::new(root).join(".git");
+    let gitdir = if dotgit.is_dir() {
+        dotgit
+    } else {
+        git_dir_of_worktree(&dotgit)?
+    };
+    let head = fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string)
+}
+
 /// A linked worktree's `.git` file says `gitdir: <repo>/.git/worktrees/<name>`, and that
 /// directory's `commondir` (usually `../..`) leads back to `<repo>/.git`.
 fn common_dir_of_worktree(dotgit_file: &Path) -> Option<PathBuf> {
-    let text = fs::read_to_string(dotgit_file).ok()?;
-    let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
-    let gitdir = if gitdir.starts_with('/') {
-        PathBuf::from(gitdir)
-    } else {
-        dotgit_file.parent()?.join(gitdir)
-    };
+    let gitdir = git_dir_of_worktree(dotgit_file)?;
     let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
     let common = common.trim();
     let common = if common.starts_with('/') {
@@ -100,6 +108,16 @@ fn common_dir_of_worktree(dotgit_file: &Path) -> Option<PathBuf> {
         gitdir.join(common)
     };
     Some(PathBuf::from(lexical(&common)))
+}
+
+fn git_dir_of_worktree(dotgit_file: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(dotgit_file).ok()?;
+    let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
+    Some(if gitdir.starts_with('/') {
+        PathBuf::from(gitdir)
+    } else {
+        dotgit_file.parent()?.join(gitdir)
+    })
 }
 
 fn lexical(p: &Path) -> String {
