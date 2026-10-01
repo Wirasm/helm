@@ -377,7 +377,8 @@ impl Document {
     /// Move a pane to another workspace's bench (#178, a tab dropped on a workspace tab), as a
     /// tab of that bench's focused slot: the drop said "put it there", which is not the question
     /// the placement rules answer about a new pane. Its own bench gives it up by `close`'s rule,
-    /// so a workspace's last pane cannot leave.
+    /// so a workspace's last pane cannot leave, and a bench that already shows its surface refuses
+    /// it, the one `pane/open` would bring forward instead (`Surface::already_shows`).
     ///
     /// With `Take` focus follows the pane, as it does every move: that workspace becomes the one
     /// on screen with the pane focused. `Ok(false)` when it is already there.
@@ -391,6 +392,17 @@ impl Document {
         let to = self.index_of(path)?;
         if from == to {
             return Ok(false);
+        }
+        let surface = &self.workspaces[from]
+            .bench
+            .pane(pane)
+            .ok_or(Refusal::UnknownPane(pane))?
+            .surface;
+        if let Some(shown) = self.workspaces[to].bench.pane_showing(surface) {
+            return Err(Refusal::AlreadyShown {
+                pane: shown,
+                workspace: path.clone(),
+            });
         }
         self.commit(focus, |doc| {
             let moved = doc.workspaces[from].bench.remove(pane)?;

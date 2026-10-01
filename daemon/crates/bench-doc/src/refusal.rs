@@ -21,6 +21,12 @@ pub enum Refusal {
         slot: SlotId,
     },
     UnknownWorkspace(StandardPath),
+    /// A pane moved to a workspace whose bench already shows its surface (`Surface::already_shows`):
+    /// a bench holds one pane per canvas file, one browser, one view of a session.
+    AlreadyShown {
+        pane: PaneId,
+        workspace: StandardPath,
+    },
     NoActiveWorkspace,
     /// The bench's last pane: a bench with nothing in it is not a state worth reaching.
     LastPane(PaneId),
@@ -58,6 +64,10 @@ impl fmt::Display for Refusal {
                 )
             }
             Refusal::UnknownWorkspace(path) => write!(f, "no workspace {path} is open"),
+            Refusal::AlreadyShown { pane, workspace } => write!(
+                f,
+                "workspace {workspace} already shows that in pane {pane} — show that pane instead"
+            ),
             Refusal::NoActiveWorkspace => write!(f, "no workspace is active"),
             Refusal::LastPane(id) => write!(
                 f,

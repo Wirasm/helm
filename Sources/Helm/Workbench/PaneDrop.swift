@@ -277,10 +277,8 @@ extension WorkbenchModel {
     /// bar is drawn over the bench, so it answers first wherever it is.
     func dragTab(_ item: DragItem, to point: CGPoint) {
         let target: DropTarget?
-        if drag.bar.strip.contains(point) {
-            target = WorkspaceDrop.resolve(
-                item, at: point, order: document?.workspaces.map { WorkspacePath($0.path) } ?? [],
-                active: workspacePath, bench: bench, frames: drag.bar)
+        if drag.bar.strip.contains(point), let document {
+            target = WorkspaceDrop.resolve(item, at: point, document: document, frames: drag.bar)
         } else if case let .pane(pane) = item, let bench {
             target = PaneDrop.resolve(pane: pane, at: point, bench: bench, frames: drag.slots)
         } else {

@@ -25,13 +25,28 @@ final class WorkspaceDropTests: XCTestCase {
         return frames
     }
 
-    private let pane = Pane(content: .terminal())
-    private lazy var twoPanes = Workbench(panes: [pane, Pane(content: .terminal())])
+    private let pane = UUID()
 
-    private func resolve(_ item: DragItem, _ x: CGFloat, bench: Workbench? = nil) -> DropTarget? {
+    /// `a` on screen holding `panes` (by default the dragged terminal and one more); `b` and `c`
+    /// a terminal each, and `b` also whatever `bShows` adds.
+    private func document(
+        _ panes: [BenchDocument.Pane]? = nil, bShows: [BenchDocument.Pane] = []
+    ) -> BenchDocument {
+        let mine = panes ?? [ToyBench.terminal(pane), ToyBench.terminal()]
+        return BenchDocument(
+            workspaces: [
+                .init(path: a.value, bench: ToyBench.bench(mine)),
+                .init(path: b.value, bench: ToyBench.bench([ToyBench.terminal()] + bShows)),
+                .init(path: c.value, bench: ToyBench.bench([ToyBench.terminal()])),
+            ],
+            active: a.value)
+    }
+
+    private func resolve(
+        _ item: DragItem, _ x: CGFloat, in document: BenchDocument? = nil
+    ) -> DropTarget? {
         WorkspaceDrop.resolve(
-            item, at: CGPoint(x: x, y: 17), order: order, active: a, bench: bench ?? twoPanes,
-            frames: bar)
+            item, at: CGPoint(x: x, y: 17), document: document ?? self.document(), frames: bar)
     }
 
     // MARK: - Reordering
@@ -61,19 +76,32 @@ final class WorkspaceDropTests: XCTestCase {
     // MARK: - A pane onto a workspace
 
     func testAPaneDroppedOnAnotherWorkspacesTabMovesThere() throws {
-        let target = try XCTUnwrap(resolve(.pane(pane.id), 160))
-        XCTAssertEqual(target.verb, .paneMove(pane.id, .workspace(b.value)))
+        let target = try XCTUnwrap(resolve(.pane(pane), 160))
+        XCTAssertEqual(target.verb, .paneMove(pane, .workspace(b.value)))
         XCTAssertEqual(target.preview, bar.tabs[b], "the tab it goes to is the zone")
         XCTAssertNil(target.seam)
     }
 
     func testNoZoneForAPaneOverItsOwnWorkspaceAGapOrWhenItIsTheLastPane() {
-        XCTAssertNil(resolve(.pane(pane.id), 50), "its own workspace")
-        XCTAssertNil(resolve(.pane(pane.id), 110), "the gap between two tabs")
-        XCTAssertNil(resolve(.pane(pane.id), 600), "the bar past the tabs")
+        XCTAssertNil(resolve(.pane(pane), 50), "its own workspace")
+        XCTAssertNil(resolve(.pane(pane), 110), "the gap between two tabs")
+        XCTAssertNil(resolve(.pane(pane), 600), "the bar past the tabs")
         XCTAssertNil(
-            resolve(.pane(pane.id), 160, bench: Workbench(panes: [pane])),
+            resolve(.pane(pane), 160, in: document([ToyBench.terminal(pane)])),
             "a workspace's last pane cannot leave it")
+    }
+
+    /// A bench holds one pane per canvas file (benchd's `already_shows`), so a canvas dropped on a
+    /// workspace already showing that file has no zone, while one showing something else does.
+    func testNoZoneForACanvasOnAWorkspaceAlreadyShowingItsFile() {
+        let plan = BenchDocument.Pane(id: pane, surface: .canvas(path: "/x/plan.md"))
+        let doc = document(
+            [plan, ToyBench.terminal()],
+            bShows: [.init(id: UUID(), surface: .canvas(path: "/x/plan.md"))])
+        XCTAssertNil(resolve(.pane(pane), 160, in: doc), "b already shows plan.md")
+        XCTAssertEqual(
+            resolve(.pane(pane), 260, in: doc)?.verb, .paneMove(pane, .workspace(c.value)),
+            "c does not")
     }
 
     // MARK: - The drop

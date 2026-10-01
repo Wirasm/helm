@@ -259,3 +259,44 @@ fn the_pane_lands_in_the_slot_that_workspace_has_focused() {
     let bench = &doc.workspace(&b).unwrap().bench;
     assert_eq!(bench.slot_for(moving).map(|s| s.id), Some(focused));
 }
+
+/// A bench holds one pane per surface (`Surface::already_shows`): a canvas of a file the target
+/// already shows is refused, naming the pane that shows it.
+#[test]
+fn a_pane_cannot_join_a_bench_that_already_shows_its_surface() {
+    let mut doc = three();
+    let moving = add_canvas(&mut doc, &path("/w/a"), "/x.md", Focus::Take);
+    let b = path("/w/b");
+    let there = add_canvas(&mut doc, &b, "/x.md", Focus::Leave);
+    let before = doc.clone();
+
+    assert_eq!(
+        doc.move_pane_to_workspace(moving, &b, Focus::Take),
+        Err(Refusal::AlreadyShown {
+            pane: there,
+            workspace: b.clone()
+        })
+    );
+    assert_eq!(doc, before);
+
+    assert!(
+        doc.move_pane_to_workspace(moving, &path("/w/c"), Focus::Take)
+            .unwrap(),
+        "a bench showing something else takes it"
+    );
+}
+
+fn add_canvas(
+    doc: &mut Document,
+    at: &StandardPath,
+    file: &str,
+    focus: Focus,
+) -> bench_doc::PaneId {
+    let pane = canvas(file);
+    let id = pane.id;
+    doc.edit(Target::Workspace(at.clone()), focus, |b| {
+        b.split(Split::Right, pane, focus)
+    })
+    .unwrap();
+    id
+}

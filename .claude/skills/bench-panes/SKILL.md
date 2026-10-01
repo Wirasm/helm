@@ -107,7 +107,8 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   - `--beside <slot> --side <left|right|up|down>`: a slot of its own above or below that slot,
     or a column left or right of its column. Against the pane's own slot, a tab becomes a pane.
   - `--workspace <path>`: into that workspace, as a tab of its focused slot. A workspace's last
-    pane cannot leave it.
+    pane cannot leave it, and a workspace already showing that file (or the browser) refuses it:
+    `bench show` the pane it names instead.
 - `bench split <right|down>` opens a new column or row. A split still halves the column he is in;
   that is a layout change, not a focus change. Moving the pane that holds his keyboard needs
   `--asked`.

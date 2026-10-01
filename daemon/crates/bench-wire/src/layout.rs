@@ -231,8 +231,8 @@ pub enum MoveTo {
         slot: SlotId,
         side: Direction,
     },
-    /// Another workspace's bench, where its placement rules put it. The document's to apply,
-    /// since it crosses benches.
+    /// Another workspace's bench, as a tab of its focused slot. The document's to apply, since
+    /// it crosses benches.
     Workspace(StandardPath),
 }
 

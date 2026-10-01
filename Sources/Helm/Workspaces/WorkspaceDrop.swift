@@ -9,25 +9,30 @@ import SwiftUI
 /// without a window. benchd decides what the move does.
 enum WorkspaceDrop {
     /// What the pointer at `point`, over the bar, would do with `item`. nil wherever the drop
-    /// would change nothing: a workspace in its own place, a pane over its own workspace or a
-    /// gap, a pane its bench cannot give up (benchd refuses a workspace's last pane), and a
-    /// workspace anywhere but the bar.
+    /// would change nothing or benchd would refuse it: a workspace in its own place, a pane over
+    /// its own workspace or a gap, a pane its bench cannot give up (a workspace's last pane), a
+    /// pane whose surface the target already shows, and a workspace anywhere but the bar.
     ///
-    /// `order` is the document's, which is the order the bar draws its tabs in.
+    /// The bar draws its tabs in the document's order, so that is the order read here.
     static func resolve(
-        _ item: DragItem, at point: CGPoint, order: [WorkspacePath], active: WorkspacePath?,
-        bench: Workbench?, frames: BarFrames
+        _ item: DragItem, at point: CGPoint, document: BenchDocument, frames: BarFrames
     ) -> DropTarget? {
-        let tabs = order.compactMap { path in frames.tabs[path].map { (path: path, frame: $0) } }
+        let tabs = document.workspaces.compactMap { workspace in
+            frames.tabs[WorkspacePath(workspace.path)].map { (workspace: workspace, frame: $0) }
+        }
         switch item {
         case let .workspace(path):
-            return gap(for: path, at: point.x, tabs: tabs, strip: frames.strip)
+            let order = tabs.map { (path: WorkspacePath($0.workspace.path), frame: $0.frame) }
+            return gap(for: path, at: point.x, tabs: order, strip: frames.strip)
         case let .pane(pane):
             guard let over = tabs.first(where: { $0.frame.contains(point) }),
-                over.path != active, (bench?.panes.count ?? 0) > 1
+                let from = document.workspaces.first(where: { $0.path == document.active }),
+                over.workspace.path != from.path, from.bench.panes.count > 1,
+                let surface = from.bench.panes.first(where: { $0.id == pane })?.surface,
+                !over.workspace.bench.panes.contains(where: { $0.surface.alreadyShows(surface) })
             else { return nil }
             return DropTarget(
-                verb: .paneMove(pane, .workspace(over.path.value)), preview: over.frame)
+                verb: .paneMove(pane, .workspace(over.workspace.path)), preview: over.frame)
         }
     }
 
