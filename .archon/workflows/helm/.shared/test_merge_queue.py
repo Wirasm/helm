@@ -6,6 +6,7 @@ Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .archon/workflows
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -367,7 +368,7 @@ class PruneMerged(unittest.TestCase):
         self.addCleanup(sleeper.kill)
 
         said = merge_queue.prune_merged(["gone", "dirty", "unmerged", "busy"],
-                                        script=self.repo / "scripts" / "prune-worktrees.sh")
+                                        checkout=self.repo)
 
         self.assertFalse(gone.exists(), said)
         for kept in (unnamed, dirty, unmerged, busy):
@@ -389,12 +390,41 @@ class PruneMerged(unittest.TestCase):
         (bin_dir / "lsof").chmod(0o755)
         path = f"{bin_dir}:{os.environ['PATH']}"
         with mock.patch.dict(os.environ, {"PATH": path}):
-            said = merge_queue.prune_merged(["busy"], script=self.repo / "scripts" / "prune-worktrees.sh")
+            said = merge_queue.prune_merged(["busy"], checkout=self.repo)
         self.assertTrue(busy.exists(), said)
         self.assertIn("cannot list", said)
 
+    def prune_from_a_copy(self, branches, cwd):
+        """`prune_merged` as Archon runs it: the pack is a frozen copy under
+        workflow-source/runs/<id>/project, with no scripts/ and no worktrees beside it, and the
+        node's cwd is the checkout the queue was launched with."""
+        shared = self.tmp / "workflow-source" / "runs" / "r1" / "project" / ".archon" / "workflows" / "helm" / ".shared"
+        shared.mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(merge_queue.__file__), shared / "merge_queue.py")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import merge_queue; "
+                "print(merge_queue.prune_merged(sys.argv[2:]), end='')")
+        return subprocess.run([sys.executable, "-c", code, str(shared), *branches], cwd=cwd,
+                              check=True, capture_output=True, text=True, timeout=600).stdout
+
+    def test_a_run_from_archons_copy_prunes_the_checkout_it_was_launched_in(self):
+        gone = self.worktree("gone", merge=True)
+        queue_checkout = self.repo / ".worktrees" / "merge-queue"
+        self.git("worktree", "add", "-q", "--detach", str(queue_checkout), "origin/development")
+
+        said = self.prune_from_a_copy(["gone"], cwd=queue_checkout)
+
+        self.assertFalse(gone.exists(), said)
+        self.assertIn("remove gone", said)
+        self.assertTrue(queue_checkout.exists(), "the queue's own checkout is on no branch")
+
+    def test_a_cwd_outside_any_checkout_is_not_pruned(self):
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        said = self.prune_from_a_copy(["gone"], cwd=outside)
+        self.assertTrue(said.startswith("not pruned: "), said)
+
     def test_nothing_merged_runs_nothing(self):
-        self.assertEqual(merge_queue.prune_merged([], script=self.tmp / "absent.sh"), "")
+        self.assertEqual(merge_queue.prune_merged([], checkout=self.tmp), "")
 
 
 if __name__ == "__main__":
