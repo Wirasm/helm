@@ -39,9 +39,10 @@ enum BrowserFormScript {
           const r = this.getBoundingClientRect(), w = this.ownerDocument.defaultView;
           const p = {bubbles:true, cancelable:true, composed:true, button:0,
             clientX:r.x+r.width/2, clientY:r.y+r.height/2, pointerType:'mouse'};
-          let allowed = true, forwarded = null;
+          let allowed = true;
+          const forwarded = [];
           const root = control.getRootNode();
-          const observe = event => { if (event.target === control) forwarded = event; };
+          const observe = event => { if (event.target === control) forwarded.push(event); };
           // Observe before target handlers: stopping propagation alone does not cancel a click.
           root.addEventListener('click', observe, true);
           try {
@@ -53,7 +54,9 @@ enum BrowserFormScript {
             root.removeEventListener('click', observe, true);
           }
           // If propagation stopped before observation, leave the page's widget in charge.
-          return allowed && (this === control || (!!forwarded && !forwarded.defaultPrevented));
+          // A handler may dispatch another click; it cannot erase an earlier cancellation.
+          return allowed && (this === control || (forwarded.length > 0 &&
+            forwarded.every(event => !event.defaultPrevented)));
         }
         """
 

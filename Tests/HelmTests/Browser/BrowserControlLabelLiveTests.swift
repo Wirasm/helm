@@ -5,7 +5,8 @@ import XCTest
 @MainActor
 final class BrowserControlLabelLiveTests: BrowserControlLiveCase {
     private func activate(
-        _ kind: String, target: String, cancel: Bool = true, stop: Bool = false
+        _ kind: String, target: String, cancel: Bool = true, stop: Bool = false,
+        reenter: Bool = false
     ) async throws {
         let field =
             kind == "select"
@@ -18,7 +19,10 @@ final class BrowserControlLabelLiveTests: BrowserControlLiveCase {
             \(field)
             <script>window.clicks=0; window.drained=false;
               field.addEventListener('click', e=>{clicks++;
-                if (\(cancel)) e.preventDefault(); if (\(stop)) e.stopImmediatePropagation();
+                if (\(cancel) && (!\(reenter) || clicks===1)) e.preventDefault();
+                if (\(stop)) e.stopImmediatePropagation();
+                if (\(reenter) && clicks===1)
+                  field.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
               }, {capture:\(stop)});
               document.addEventListener('keyup',()=>window.drained=true);
             </script>
@@ -47,7 +51,7 @@ final class BrowserControlLabelLiveTests: BrowserControlLiveCase {
             XCTAssertEqual(value, kind == "select" ? "Second" : "2026-10-02")
         }
         let clicks = try await read("clicks", as: Int.self)
-        XCTAssertEqual(clicks, 1, "do not dispatch a second control click")
+        XCTAssertEqual(clicks, reenter ? 2 : 1, "helm must not add another control click")
     }
 
     func testSelectLabelHonorsForwardedCancellation() async throws {
@@ -83,5 +87,25 @@ final class BrowserControlLabelLiveTests: BrowserControlLiveCase {
     }
     func testDateCapturePropagationAloneStillAllowsDefault() async throws {
         try await activate("date", target: "label", cancel: false, stop: true)
+    }
+    func testReentrantSelectCancellationCannotBeOverwritten() async throws {
+        for target in ["field", "label", "child"] {
+            try await activate("select", target: target, reenter: true)
+        }
+    }
+    func testReentrantDateCancellationCannotBeOverwritten() async throws {
+        for target in ["field", "label", "child"] {
+            try await activate("date", target: target, reenter: true)
+        }
+    }
+    func testUncanceledReentrantSelectStillOpensAndCommits() async throws {
+        for target in ["field", "label", "child"] {
+            try await activate("select", target: target, cancel: false, reenter: true)
+        }
+    }
+    func testUncanceledReentrantDateStillOpensAndCommits() async throws {
+        for target in ["field", "label", "child"] {
+            try await activate("date", target: target, cancel: false, reenter: true)
+        }
     }
 }
