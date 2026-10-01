@@ -22,7 +22,9 @@ The `bench` CLI is on your PATH or named by `$BENCH`. The `bench-panes`, `bench-
 1. Find your own handle, so agents can mail you: `$BENCH_HANDLE` in a session benchd spawned,
    else `bench mail who --pane "$HELM_PANE"` in a helm pane. With neither, you have no mailbox and
    nothing can wake you. Check the fleet on a bounded loop instead (step 5).
-2. Create the run file `$PRP_DIR/orchestration/<YYYY-MM-DD-slug>.md` from `templates/run.md`.
+2. Create the run file `$PRP_DIR/orchestration/<YYYY-MM-DD-slug>.md` from this skill's
+   `templates/run.md`, not prp-orchestrate's: the spawn snippet appends launches to the end of the
+   file, which is where this template keeps its Event log.
    `$PRP_DIR` is the project's prp store (`~/.prp/<key>/`; any prp skill's resolver finds it).
 3. Gate once with the operator: a table of workstream, skill, harness and model, dependencies,
    and what runs in parallel. Record his answers as standing decisions. Then drive the run

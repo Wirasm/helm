@@ -27,7 +27,7 @@ one (that is how #192 was settled).
 
 | Gate | Alone | Notes |
 | --- | --- | --- |
-| `daemon` | `bash daemon/test.sh` | Rust only. Read `daemon/AGENTS.md` and `daemon/direction.md` first. It also runs the `bench-*`, `helm-canvas` and `helm-orchestrate` skills' snippets against a real benchd. |
+| `daemon` | `bash daemon/test.sh` | Rust only. Read `daemon/AGENTS.md` and `daemon/direction.md` first. It also runs the `bash` blocks in the `bench-*`, `helm-canvas` and `helm-orchestrate` skills' `SKILL.md` against a real benchd. |
 | `pi` | `bash .claude/skills/pi-extensions/scripts/test.sh` | Needs node and `npm install` in `pi/`. See `pi/AGENTS.md`. |
 | `helm-board` (in `skills`) | `bash .claude/skills/helm-board/test.sh` | Executes `board-core.js` in node (ownership diff, overlap resolution, state report), checks `new-board.sh`'s refusals and re-hashes the vendored `@quickdrawjs/core` against its pin. |
 | `post-canvas` (in `skills`) | `bash .claude/skills/post-canvas/test.sh` | Builds stored runs in a temp `ARCHON_HOME`, runs the driver with `--no-push`, and runs the `SKILL.md` snippet under zsh with `PRP_HOME` redirected. |
