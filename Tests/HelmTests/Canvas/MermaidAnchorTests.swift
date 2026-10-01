@@ -40,7 +40,7 @@ final class MermaidAnchorTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            Set(acrossEdits.compactMap(MermaidAnchor.sourceIdentifier(in:))), ["phase2"],
+            Set(acrossEdits.compactMap { MermaidAnchor.sourceIdentifier(in: $0) }), ["phase2"],
             "the raw id moves on almost any edit; the fence identifier does not")
     }
 
