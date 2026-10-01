@@ -42,7 +42,8 @@ skip() { printf 'skip: %s\n' "$*"; }
 bad()  { printf 'not ok - %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
 
 # The installed pi package. Overridable so this can be pointed at a candidate upgrade.
-PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+# Runs before the sandbox moves TMPDIR, so npm is kept from leaving its compile cache there.
+PI_PACKAGE_DIR=${PI_PACKAGE_DIR:-"$(NODE_DISABLE_COMPILE_CACHE=1 npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -104,6 +105,11 @@ sandbox() {
 	# from these. Pointed at the sandbox, it finds no daemon and says nothing.
 	export BENCH_DIR="$SANDBOX/bench"
 	unset BENCH_SUITE BENCH_SESSION
+	# A real pi leaves caches in the temp directory (`jiti`, `node-compile-cache`), which the
+	# check.sh `pi` part counts as a test that does not clean up. Every temp file of the run,
+	# the harnesses' own directories included, now goes with the sandbox.
+	mkdir -p "$SANDBOX/tmp" || return 1
+	export TMPDIR="$SANDBOX/tmp/"
 }
 
 # The guard the sandbox is worth nothing without: no session the gate ran (every harness runs
