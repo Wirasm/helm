@@ -103,6 +103,9 @@
   // One simple selector: `[attribute]` or a tag name — enough for `closest` and the fixture.
   function matches(node, selector) {
     var one = selector.trim();
+    if (one.charAt(0) === ".") {
+      return (node.getAttribute("class") || "").split(/\s+/).indexOf(one.slice(1)) >= 0;
+    }
     if (one.charAt(0) === "[") {
       var name = one.slice(1, -1);
       if (name === "id") {
@@ -319,8 +322,10 @@
   // on a `<text>`/`<p>` inside the `<g>` carrying the id, so a resolver that read only the
   // marked element's own id would anchor no diagram at all (#113).
   named.appendChild(node("span", "", "two", box(120, 1150, 60, 40)));
-  content.appendChild(node("p", "", "First unnamed block", box(20, 1220, 700, 40)));
-  content.appendChild(node("p", "", "Second unnamed block", box(20, 1290, 700, 40)));
+  var firstUnnamed = content.appendChild(node("p", "", "First unnamed block", box(20, 1220, 700, 40)));
+  firstUnnamed.setAttribute("data-helm-source", JSON.stringify("First **unnamed** block\n"));
+  var secondUnnamed = content.appendChild(node("p", "", "Second unnamed block", box(20, 1290, 700, 40)));
+  secondUnnamed.setAttribute("data-helm-source", JSON.stringify("Second unnamed block\n"));
 
   function find(id) {
     var hits = descendants(documentElement).filter(function (el) {
@@ -437,6 +442,7 @@
     // difference, which is the point; `CanvasAnchorTests` says why that matters.
     asHTMLArtifact: function () {
       content.removeAttribute("data-helm-frame");
+      descendants(content).forEach(function (el) { el.removeAttribute("data-helm-source"); });
     },
     select: function (id, text) {
       selectWithin(find(id), text);

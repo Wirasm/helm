@@ -1041,14 +1041,12 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
             "session {sid} is still live — `bench attach {sid}` instead"
         )));
     }
-    let mut spec = old.spec.clone();
-    // The same conversation, and the same posture: a fork stays read-only (#531).
-    let Some(runtime) = spec.conversation.id() else {
-        return Err(refused(unresumable(spec.agent, sid)));
+    // The same conversation, and the same posture: a fork stays read-only (#531). Never the
+    // spawn's first prompt: `spawn::wire` gives the resume its notice instead.
+    let Some(runtime) = old.spec.conversation.id() else {
+        return Err(refused(unresumable(old.spec.agent, sid)));
     };
-    spec.conversation = bench_session::Conversation::Resume(runtime.to_string());
-    // Re-entering is not a new message: the first prompt was the spawn's.
-    spec.prompt_file = None;
+    let mut spec = old.spec.resuming(runtime.to_string());
     let (id, root, notices) = {
         let mut c = core.lock().unwrap();
         let id = format!("s{}", c.next_session);

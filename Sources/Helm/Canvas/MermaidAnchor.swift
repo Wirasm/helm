@@ -31,38 +31,24 @@ import Foundation
 /// with the source name nowhere in the DOM, so there is nothing to recover and this
 /// returns nil rather than inventing one.
 enum MermaidAnchor {
+    /// Renderer-owned group structure, not the author's CSS classes. State composites
+    /// use the same family/counter ID shape as nodes; other clusters carry a direct suffix.
+    enum RendererRole: String {
+        case node, cluster, stateCluster
+    }
+
     /// Diagram families whose node ids carry the source identifier, in the shape
     /// `mermaid-<diagram>-<family>-<identifier>-<counter>`. Verified by rendering each
     /// family in a WKWebView against the vendored build.
     private static let families = ["flowchart", "classId", "state", "entity"]
 
-    /// Whether this id was minted by the renderer rather than written by the agent.
-    ///
-    /// The distinction matters because "cannot reduce" has two very different causes. An id
-    /// the agent authored (`phase-2`, `overview`) is already the greppable thing and must
-    /// pass through untouched. An id mermaid minted that carries no author identifier —
-    /// `mermaid-0-node_1` from a mindmap, an edge, a marker def — is renderer bookkeeping:
-    /// keeping it produces an anchor that survives a re-render and means nothing to an agent
-    /// grepping the source, which is the anchor #113 exists to abolish. Those degrade to a
-    /// quote instead.
-    ///
-    /// **A ceiling, stated rather than hidden:** `sequenceDiagram` emits `actor0` and
-    /// `root-0` with no `mermaid-` prefix at all, so they are indistinguishable from an id an
-    /// agent wrote by hand. helm cannot tell, and does not guess.
-    static func isRenderGenerated(_ id: String) -> Bool {
-        guard id.hasPrefix("mermaid-") else { return false }
-        let rest = id.dropFirst("mermaid-".count)
-        guard let end = rest.firstIndex(where: { !$0.isNumber }) else { return true }
-        guard end != rest.startIndex else { return false }
-        return rest[end] == "-" || rest[end] == "_"
-    }
-
     /// The fence identifier inside a rendered mermaid node id, or nil if `renderedID`
     /// is not one — an edge, a marker def, the `<svg>` itself, a family that encodes no
-    /// identifier, or an id the agent authored by hand. Nil means "leave it alone".
+    /// identifier, or an id the agent authored by hand. Nil means the diagram element
+    /// is not anchorable.
     ///
     /// Pure: no WebKit, no page, no I/O.
-    static func sourceIdentifier(in renderedID: String) -> String? {
+    static func sourceIdentifier(in renderedID: String, role: RendererRole = .node) -> String? {
         guard renderedID.hasPrefix("mermaid-") else { return nil }
         var rest = renderedID.dropFirst("mermaid-".count)
 
@@ -73,8 +59,15 @@ enum MermaidAnchor {
         guard !diagramIndex.isEmpty, diagramIndex.allSatisfy(\.isNumber) else { return nil }
         rest = rest[rest.index(after: indexEnd)...]
 
+        // Flowchart subgraphs and class namespaces omit the family and counter.
+        // Their authored suffix may itself resemble a node ID, so never reduce it further.
+        if role == .cluster {
+            return rest.isEmpty ? nil : String(rest)
+        }
+
         // <family>
         guard let family = families.first(where: { rest.hasPrefix("\($0)-") }) else { return nil }
+        guard role != .stateCluster || family == "state" else { return nil }
         rest = rest.dropFirst(family.count + 1)
 
         // <identifier>-<counter>, taking the LAST dash: an identifier may itself contain

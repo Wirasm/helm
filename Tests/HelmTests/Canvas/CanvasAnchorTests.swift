@@ -9,7 +9,7 @@ import XCTest
 /// `<article id="content">` — every block came back as the whole document under an id that
 /// occurs nowhere in the `.md` file, rendered in exactly the form that means "grep for this".
 /// The geometry tools that shared `resolve` left in #385; the text mark keeps the rule through
-/// `nameFor`.
+/// `anchorFor`.
 ///
 /// **The fixture is why it survived.** Every element `canvas-dom-stub.js` shipped carried an id,
 /// and when the marked element has its own id the walk stops on its first iteration. The defect
@@ -101,10 +101,12 @@ final class CanvasAnchorTests: XCTestCase {
     /// The payload run through the real decoder and the real note writer. This is the criterion
     /// that matters: an unanchorable block must **never** be rendered as `` `#…` ``, and that
     /// is a fact about `CanvasNotes`' output, not about a JSON field.
-    func testAnUnanchorableBlockReachesTheAgentAsAQuoteAndNeverAsAnID() throws {
+    func testAnUnnamedMarkdownBlockReachesTheAgentAsLiteralSourceAndNeverAsAnID() throws {
         let page = try CanvasScriptRuntime()
         mark("unnamed", inBlockWithText: Self.first.text, at: Self.first.at, on: page)
-        XCTAssertEqual(try decodedMark(page), .selection(.quote("unnamed")))
+        XCTAssertEqual(
+            try decodedMark(page),
+            .selection(.excerpt(source: "First **unnamed** block\n", text: "unnamed")))
 
         let annotation = try XCTUnwrap(
             CanvasAnnotation.decode(posted: try XCTUnwrap(page.lastPosted), comment: "a comment"))
