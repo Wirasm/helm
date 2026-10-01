@@ -1,10 +1,11 @@
 //! The two places a pane can be dropped (#178): into a slot as a tab (`move_pane_to_tab`), and
 //! beside a slot (`move_pane_beside`). helm resolves where the pointer is; these are the rules
-//! for what happens there. The keyboard's step move is `move_pane.rs`.
+//! for what happens there, and a file dropped from Finder opening at one (`open_at`). The
+//! keyboard's step move is `move_pane.rs`.
 
 mod common;
 
-use bench_doc::{Bench, Direction, Focus, PaneId, Refusal, SlotId, Split};
+use bench_doc::{Bench, Direction, Focus, PaneId, Place, Refusal, SlotId, Split};
 use common::*;
 use std::collections::HashSet;
 
@@ -349,4 +350,150 @@ fn a_lone_pane_on_its_neighbours_facing_edge_stays_where_it_is() {
         "the far edge still moves it"
     );
     assert_eq!(shape(&pair), vec![vec![vec![rr]], vec![vec![l]]]);
+}
+
+// MARK: - A file opened at a place (Finder)
+
+#[test]
+fn a_file_opens_as_a_tab_at_the_gap_it_was_dropped_in() {
+    let (mut bench, t, r) = tabs_and_one();
+    let left = slot(&bench, 0, 0);
+    let plan = canvas("/tmp/plan.md");
+    let p = plan.id;
+
+    let landed = bench
+        .open_at(
+            plan,
+            Place::Tab {
+                slot: left,
+                before: Some(t[1]),
+            },
+            Focus::Take,
+        )
+        .unwrap();
+
+    assert_eq!(landed, p);
+    assert_eq!(
+        shape(&bench),
+        vec![vec![vec![t[0], p, t[1], t[2]]], vec![vec![r]]]
+    );
+    assert_eq!(bench.focused_pane().map(|p| p.id), Some(p));
+    assert_invariants(&bench, "a file into a gap");
+}
+
+#[test]
+fn a_file_opens_last_when_no_tab_is_named_and_still_takes_the_keyboard() {
+    let (mut bench, t, r) = tabs_and_one();
+    let right = slot(&bench, 1, 0);
+    let plan = canvas("/tmp/plan.md");
+    let p = plan.id;
+
+    bench
+        .open_at(
+            plan,
+            Place::Tab {
+                slot: right,
+                before: None,
+            },
+            Focus::Take,
+        )
+        .unwrap();
+
+    // The move to "last" is a no-op for a pane that was just put last; the show is not.
+    assert_eq!(shape(&bench), vec![vec![t.to_vec()], vec![vec![r, p]]]);
+    assert_eq!(bench.focused_pane().map(|p| p.id), Some(p));
+}
+
+#[test]
+fn a_file_dropped_on_an_edge_opens_in_a_slot_of_its_own_on_that_side() {
+    let (mut bench, t, r) = tabs_and_one();
+    let right = slot(&bench, 1, 0);
+    let plan = canvas("/tmp/plan.md");
+    let p = plan.id;
+
+    bench
+        .open_at(
+            plan,
+            Place::Beside {
+                slot: right,
+                side: Direction::Up,
+            },
+            Focus::Take,
+        )
+        .unwrap();
+
+    assert_eq!(
+        shape(&bench),
+        vec![vec![t.to_vec()], vec![vec![p], vec![r]]]
+    );
+    assert_eq!(bench.focused_pane().map(|p| p.id), Some(p));
+    assert_invariants(&bench, "a file beside a slot");
+}
+
+#[test]
+fn a_file_the_bench_already_shows_moves_there_rather_than_opening_twice() {
+    let shown = canvas("/tmp/plan.md");
+    let s = shown.id;
+    let other = terminal();
+    let o = other.id;
+    let mut bench = bench_of(vec![other, shown], Some(o));
+    let only = slot(&bench, 0, 0);
+
+    let landed = bench
+        .open_at(
+            canvas("/tmp/plan.md"),
+            Place::Beside {
+                slot: only,
+                side: Direction::Right,
+            },
+            Focus::Take,
+        )
+        .unwrap();
+
+    assert_eq!(landed, s, "the pane already showing it");
+    assert_eq!(shape(&bench), vec![vec![vec![o]], vec![vec![s]]]);
+    assert_eq!(bench.panes().count(), 2, "nothing opened twice");
+}
+
+#[test]
+fn an_agents_open_at_a_place_moves_no_focus() {
+    let (mut bench, _, _) = tabs_and_one();
+    let right = slot(&bench, 1, 0);
+    let before = (bench.focused_slot(), bench.focused_pane().map(|p| p.id));
+
+    bench
+        .open_at(
+            canvas("/tmp/plan.md"),
+            Place::Beside {
+                slot: right,
+                side: Direction::Down,
+            },
+            Focus::Leave,
+        )
+        .unwrap();
+
+    assert_eq!(
+        (bench.focused_slot(), bench.focused_pane().map(|p| p.id)),
+        before
+    );
+    assert_eq!(bench.panes().count(), 5, "opened all the same");
+}
+
+#[test]
+fn a_file_opened_at_a_slot_that_is_not_there_is_refused() {
+    let (mut bench, _, _) = tabs_and_one();
+    let was = shape(&bench);
+    let nowhere = SlotId::mint();
+
+    let refused = bench.open_at(
+        canvas("/tmp/plan.md"),
+        Place::Tab {
+            slot: nowhere,
+            before: None,
+        },
+        Focus::Take,
+    );
+
+    assert_eq!(refused, Err(Refusal::UnknownSlot(nowhere)));
+    assert_eq!(shape(&bench), was);
 }

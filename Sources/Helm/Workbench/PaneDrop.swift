@@ -21,15 +21,19 @@ enum PaneDrop {
     /// How deep, as a share of the slot, the band on each edge that splits rather than tabs.
     static let edgeBand: CGFloat = 0.25
 
-    /// What the pointer at `point` would do with `pane`: a destination for `pane/move` and
-    /// the drop zone that shows it. nil off the bench and wherever the drop would leave the pane
-    /// where it is — a zone there would promise a move that does not happen.
+    /// What the pointer at `point` would do with `pane`: a place for `pane/move` and the drop
+    /// zone that shows it. nil off the bench and wherever the drop would leave the pane where it
+    /// is — a zone there would promise a move that does not happen.
+    ///
+    /// `pane` nil is a file dragged in from outside (`FileDrop`), to open at the place: nothing it
+    /// could land on is where it already is, and a slot's middle is nowhere, because the body
+    /// under it is the pane's own — a terminal or a page decides what a drop on it does.
     ///
     /// Those no-ops are benchd's rules (`move_pane_to_tab`, `move_pane_beside`), read here only
     /// to decide whether to draw. benchd stays the authority: it answers a no-op it is sent with
     /// `changed: false`.
     static func resolve(
-        pane: Pane.ID, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
+        pane: Pane.ID?, at point: CGPoint, bench: Workbench, frames: [Slot.ID: SlotFrames]
     ) -> PaneDropTarget? {
         let from = Address.of(pane, in: bench)
         let standing = from.map {
@@ -59,7 +63,7 @@ enum PaneDrop {
         let column: Int
         let slot: Int
 
-        static func of(_ pane: Pane.ID, in bench: Workbench) -> Address? {
+        static func of(_ pane: Pane.ID?, in bench: Workbench) -> Address? {
             for (c, column) in bench.columns.enumerated() {
                 if let s = column.slots.firstIndex(where: { $0.panes.contains { $0.id == pane } }) {
                     return Address(column: c, slot: s)
@@ -76,7 +80,7 @@ enum PaneDrop {
 
     /// One slot under the pointer, and the dragged pane's standing in it.
     private struct Place {
-        let pane: Pane.ID
+        let pane: Pane.ID?
         let slot: Slot
         let drawn: SlotFrames
         /// The dragged pane's own slot, whether it is alone there and in its column, and the
@@ -95,7 +99,7 @@ enum PaneDrop {
             let seamX =
                 before.map { $0.frame.minX - 2 } ?? (tabs.last?.frame.maxX ?? drawn.strip.minX) + 2
             return PaneDropTarget(
-                move: .tab(slot: slot.id, before: before?.id), preview: drawn.body,
+                place: .tab(slot: slot.id, before: before?.id), preview: drawn.body,
                 seam: CGRect(
                     x: seamX - 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
@@ -115,12 +119,12 @@ enum PaneDrop {
         }
 
         /// The middle of a slot is "as its last tab". Its own slot's middle is nowhere: dropping
-        /// a tab back onto the body it came from should not reorder it.
+        /// a tab back onto the body it came from should not reorder it. A file's is nowhere too.
         private func middle() -> PaneDropTarget? {
-            guard !isOwn else { return nil }
+            guard pane != nil, !isOwn else { return nil }
             let end = slot.panes.compactMap { drawn.tabs[$0.id]?.maxX }.max() ?? drawn.strip.minX
             return PaneDropTarget(
-                move: .tab(slot: slot.id, before: nil), preview: drawn.body,
+                place: .tab(slot: slot.id, before: nil), preview: drawn.body,
                 seam: CGRect(
                     x: end + 1, y: drawn.strip.minY + 3, width: 2,
                     height: max(drawn.strip.height - 6, 0)))
@@ -132,7 +136,7 @@ enum PaneDrop {
             let region = vertical ? drawn.body : columnFrame
             let preview = region.half(side)
             return PaneDropTarget(
-                move: .beside(slot: slot.id, side: side), preview: preview,
+                place: .beside(slot: slot.id, side: side), preview: preview,
                 seam: preview.edgeBar(side, thickness: 3))
         }
 
@@ -165,7 +169,7 @@ enum PaneDrop {
 /// Where a drop would go, and the drop zone that says so: `preview` is the region the pane will
 /// occupy and `seam` the bar where it enters — the edge it splits, or the gap in a tab strip.
 struct PaneDropTarget: Equatable {
-    let move: BenchMoveTo
+    let place: BenchPlace
     let preview: CGRect
     let seam: CGRect
 }
@@ -205,10 +209,11 @@ extension CGRect {
 @MainActor
 final class PaneDragModel: ObservableObject {
     var frames: [Slot.ID: SlotFrames] = [:]
-    /// The pane being dragged and what the pointer is over. nil between drags.
-    @Published private(set) var drag: (pane: Pane.ID, target: PaneDropTarget?)?
+    /// The pane being dragged, or nil for a file from outside, and what the pointer is over.
+    /// nil between drags.
+    @Published private(set) var drag: (pane: Pane.ID?, target: PaneDropTarget?)?
 
-    func update(_ pane: Pane.ID, target: PaneDropTarget?) {
+    func update(_ pane: Pane.ID?, target: PaneDropTarget?) {
         drag = (pane, target)
     }
 
@@ -238,6 +243,6 @@ extension WorkbenchModel {
     func dropPane(_ pane: Pane.ID, at point: CGPoint) {
         dragPane(pane, to: point)
         guard let target = paneDrag.end() else { return }
-        send(.paneMove(pane, target.move), by: .operatorGesture)
+        send(.paneMove(pane, .place(target.place)), by: .operatorGesture)
     }
 }

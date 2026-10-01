@@ -338,21 +338,6 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertFalse(written.contains("drawer"), written)
     }
 
-    /// benchd refuses a `pane/open` naming a workspace and a drawer, and reads a null as absent;
-    /// helm's decode draws the same line.
-    func testPaneOpenNamesAWorkspaceOrADrawerNeverBoth() throws {
-        func decode(_ args: String) throws -> BenchVerb {
-            let line = #"{"id":"x","verb":"pane/open","args":"# + args + "}"
-            return try JSONDecoder().decode(BenchRequest.self, from: Data(line.utf8)).verb
-        }
-        let browser = #""surface":{"kind":"browser"}"#
-        XCTAssertEqual(
-            try decode(#"{"drawer":"notes","workspace":null,"# + browser + "}"),
-            .paneOpenInDrawer("notes", surface: .browser))
-        XCTAssertThrowsError(
-            try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
-    }
-
     /// A kind helm does not know is kept as `unsupported`, never dropped: the daemon owns the pane.
     func testASurfaceKindThisBuildDoesNotKnowIsKeptNotDropped() throws {
         let pane = """
@@ -416,5 +401,33 @@ final class BenchWireConformanceTests: XCTestCase {
                 XCTAssertEqual(error.variable, row.refused, "\(row.env)")
             }
         }
+    }
+}
+
+// pane/open's exclusive destinations, kept out of the class body for its size limit.
+extension BenchWireConformanceTests {
+    /// benchd refuses a `pane/open` naming more than one of a workspace, a drawer and a place,
+    /// and reads a null as absent; helm's decode draws the same line.
+    func testPaneOpenNamesOneOfAWorkspaceADrawerOrAPlace() throws {
+        func decode(_ args: String) throws -> BenchVerb {
+            let line = #"{"id":"x","verb":"pane/open","args":"# + args + "}"
+            return try JSONDecoder().decode(BenchRequest.self, from: Data(line.utf8)).verb
+        }
+        let browser = #""surface":{"kind":"browser"}"#
+        XCTAssertEqual(
+            try decode(#"{"drawer":"notes","workspace":null,"# + browser + "}"),
+            .paneOpenInDrawer("notes", surface: .browser))
+        XCTAssertThrowsError(
+            try decode(#"{"drawer":"notes","workspace":"/tmp/w","# + browser + "}"))
+
+        let slot = "00000002-0000-4000-8000-000000000002"
+        let at = #""at":{"tab":{"slot":""# + slot + #""}},"#
+        XCTAssertEqual(
+            try decode("{" + at + #""workspace":null,"# + browser + "}"),
+            .paneOpenAt(.tab(slot: UUID(uuidString: slot)!, before: nil), surface: .browser))
+        XCTAssertThrowsError(try decode("{" + at + #""workspace":"/tmp/w","# + browser + "}"))
+        XCTAssertThrowsError(try decode("{" + at + #""drawer":"notes","# + browser + "}"))
+        XCTAssertEqual(
+            try decode(#"{"at":null,"# + browser + "}"), .paneOpen(surface: .browser))
     }
 }

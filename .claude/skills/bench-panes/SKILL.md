@@ -77,6 +77,13 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   it: do not pass one unless the operator asked. codex and pi refuse `--fork`.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
+- codex must already trust `--cwd` itself, or it stops at "Trust this folder?". A trusted parent
+  does not count, and `--arg` cannot skip it. `bench sessions` shows the stop as `waiting_for:
+  "trust prompt"`. Trusting a folder is the operator's call: ask him to run `cd <dir> && codex`
+  once, or to choose "Trust and continue" in the spawned pane.
+- `bench status` shows which `claude`, `codex` and `pi` a spawn runs (`agents`: path, the file it
+  links to, version). That is benchd's `PATH`, not yours, so it can differ from `codex --version`
+  in your shell.
 - **A quiet agent may be blocked on a prompt no flag removes.** Claude Code keeps some guardrails
   under any posture, a dangerous `rm` among them (#283). Do not reach for a new flag: read its
   state with `bench sessions --all` (the `bench-sessions` skill) or watch its pane.

@@ -27,9 +27,10 @@ pub const FILE_CHANGED: &str = "file/changed";
 /// document over 5 MB on its own side.
 pub const FILE_READ_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The largest `file/write`, `file/append` or `helm/answer` request line. Those carry a document
-/// (a capture's PNG, for `helm/answer`), which never reaches the event log, so they are not held
-/// to `MAX_REQUEST_BYTES`: a 5 MB draft plus the `unchanged` copy it is compared with, escaped,
+/// The largest `file/write`, `file/append`, `helm/answer` or `browser/upload` request line. Those
+/// carry a document (a capture's PNG, for `helm/answer`; a file for a page's input, for
+/// `browser/upload`), which never reaches the event log, so they are not held to
+/// `MAX_REQUEST_BYTES`: a 5 MB draft plus the `unchanged` copy it is compared with, escaped,
 /// fits, and so does a retina window's PNG in base64.
 pub const FILE_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 

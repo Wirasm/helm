@@ -32,6 +32,15 @@ final class BrowserPaneModel: ObservableObject {
     @Published private(set) var zoom: [String: Double] = [:]
     /// Bumped to ask the view to put the keyboard in the address field (⌘L, a new tab).
     @Published private(set) var addressRequests = 0
+    /// Bumped to ask the view for its find field (⌘F, #549).
+    @Published private(set) var findRequests = 0
+    /// Something the pane could not do for the operator — an upload benchd refused — until he
+    /// dismisses it.
+    @Published private(set) var notice: String?
+    /// What the browser downloaded while the pane watched (#549).
+    let downloads: BrowserDownloads
+    /// Pages asking for a file (#549).
+    let uploads = BrowserUploads()
     /// Links the operator ⌘-clicked before the browser was reachable, oldest first. Each
     /// opens as a tab once the pane connects, so a click made while benchd's browser is
     /// still starting is not lost.
@@ -67,6 +76,7 @@ final class BrowserPaneModel: ObservableObject {
 
     init(endpoint: BenchEndpoint?) {
         self.endpoint = endpoint
+        downloads = BrowserDownloads(endpoint: endpoint)
         startWatching()
     }
 
@@ -130,6 +140,10 @@ final class BrowserPaneModel: ObservableObject {
                 // event after it. One opened in the instant between is picked up by its next
                 // `targetInfoChanged`, which `changed` treats as a creation.
                 try await connection.call("Target.setDiscoverTargets", Discover(discover: true))
+                // Downloads land where Chrome puts them anyway; this only has Chrome say so.
+                try? await connection.call(
+                    "Browser.setDownloadBehavior",
+                    DownloadBehavior(behavior: "default", eventsEnabled: true))
                 let reported = try await connection.call(
                     "Target.getTargets", returning: TargetInfos.self)
                 listed = true
@@ -188,16 +202,12 @@ final class BrowserPaneModel: ObservableObject {
             }
         case "Page.javascriptDialogOpening", "Page.javascriptDialogClosed":
             handleDialog(event)
+        case "Browser.downloadWillBegin", "Browser.downloadProgress":
+            downloads.handle(event)
+        case "Page.fileChooserOpened":
+            handleChooser(event)
         case "Page.frameStartedLoading", "Page.frameStoppedLoading":
-            guard event.sessionId == session, let frame = event.params(FrameEvent.self) else {
-                return
-            }
-            if event.method == "Page.frameStartedLoading" {
-                loadingFrames.insert(frame.frameId)
-            } else {
-                loadingFrames.remove(frame.frameId)
-            }
-            if loading != !loadingFrames.isEmpty { loading = !loadingFrames.isEmpty }
+            handleLoading(event)
         default:
             break
         }
@@ -279,6 +289,10 @@ final class BrowserPaneModel: ObservableObject {
                 session = attached.sessionId
                 sessionTargets[attached.sessionId] = target
                 try await connection.call("Page.enable", session: attached.sessionId)
+                // A file input then reports to the pane rather than doing nothing (#549).
+                connection.send(
+                    "Page.setInterceptFileChooserDialog", Intercept(enabled: true),
+                    session: attached.sessionId)
                 connection.send("Page.bringToFront", session: attached.sessionId)
                 await fit(target: target, session: attached.sessionId)
             } catch {
@@ -428,6 +442,7 @@ final class BrowserPaneModel: ObservableObject {
         case .forward: goForward()
         case let .showTab(index): show(tabAt: index)
         case let .zoom(step): zoom(step)
+        case .find: findRequests += 1
         }
     }
 
@@ -452,6 +467,61 @@ final class BrowserPaneModel: ObservableObject {
     }
 }
 
+// MARK: - Find, files and loading
+
+// In an extension so the class body stays the pane's connection and tabs; same file, so the
+// private state is still the model's alone.
+extension BrowserPaneModel {
+    /// A frame of the shown tab started or stopped loading.
+    private func handleLoading(_ event: CDPConnection.Event) {
+        guard event.sessionId == session, let frame = event.params(FrameEvent.self) else {
+            return
+        }
+        if event.method == "Page.frameStartedLoading" {
+            loadingFrames.insert(frame.frameId)
+        } else {
+            loadingFrames.remove(frame.frameId)
+        }
+        if loading != !loadingFrames.isEmpty { loading = !loadingFrames.isEmpty }
+    }
+
+    /// A page on show asked for a file. Only one the operator's own click opened gets a panel
+    /// (`BrowserUploads`); the chosen files go to the input as paths on benchd's machine.
+    private func handleChooser(_ event: CDPConnection.Event) {
+        guard let held = event.sessionId, held == session, let endpoint,
+            let chooser = event.params(BrowserUploads.Chooser.self), uploads.operatorAsked
+        else { return }
+        uploads.answer(
+            chooser, endpoint: endpoint,
+            deliver: { [weak self] paths in
+                self?.connection?.send(
+                    "DOM.setFileInputFiles",
+                    SetFiles(files: paths, backendNodeId: chooser.backendNodeId), session: held)
+            },
+            failed: { [weak self] why in self?.notice = why })
+    }
+
+    func dismissNotice() { notice = nil }
+
+    /// The next match for `text` on the page on show, selected and scrolled into view by the
+    /// page's own `window.find` (case-insensitive, wrapping). `fromTop` starts again from the top,
+    /// as typing does. nil when there is no page to search: none on show, or one stopped under a
+    /// dialog, where the evaluate would wait for the answer.
+    func find(_ text: String, backwards: Bool, fromTop: Bool) async -> Bool? {
+        guard let connection, let session = inputSession,
+            let literal = try? String(data: JSONEncoder().encode(text), encoding: .utf8)
+        else { return nil }
+        let expression =
+            "(() => { if (\(fromTop)) getSelection().removeAllRanges();"
+            + " return window.find(\(literal), false, \(backwards), true); })()"
+        let result = try? await connection.call(
+            "Runtime.evaluate", Evaluate(expression: expression, returnByValue: true),
+            session: session, returning: Evaluated<Bool>.self)
+        return result?.result.value
+    }
+
+}
+
 // MARK: - Input from the surface
 
 extension BrowserPaneModel: BrowserInputSink {
@@ -465,11 +535,13 @@ extension BrowserPaneModel: BrowserInputSink {
 
     func mouse(_ params: MouseEvent) {
         guard let inputSession else { return }
+        if params.type == "mousePressed" { uploads.operatorActed() }
         connection?.send("Input.dispatchMouseEvent", params, session: inputSession)
     }
 
     func key(_ params: KeyEvent) {
         guard let inputSession else { return }
+        uploads.operatorActed()
         connection?.send("Input.dispatchKeyEvent", params, session: inputSession)
     }
 
@@ -508,6 +580,15 @@ private struct CreateTarget: Encodable { let url: String }
 private struct Created: Decodable { let targetId: String }
 private struct CloseTarget: Encodable { let targetId: String }
 private struct FrameEvent: Decodable { let frameId: String }
+private struct DownloadBehavior: Encodable {
+    let behavior: String
+    let eventsEnabled: Bool
+}
+private struct Intercept: Encodable { let enabled: Bool }
+private struct SetFiles: Encodable {
+    let files: [String]
+    let backendNodeId: Int
+}
 private struct HandleDialog: Encodable {
     let accept: Bool
     let promptText: String?

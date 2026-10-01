@@ -43,7 +43,7 @@ knows nor needs the Rust toolchain, in either direction.
   or one whose hook claimed a mailbox through `bench hook` (#358) (handle, `wakeable`,
   `unread`), `null` for everyone else — the list is the mail directory
   too (#396); benchd counts the inboxes and passes them in. `fixtures/session-rows.json`
-  pins the reply helm's drawer will decode. `transcript` reads one Claude or pi transcript as
+  pins the reply helm's drawer will decode. `transcript` reads one Claude, pi or codex transcript as
   a log for `bench log` (#421), under the same rule: an unknown record is a named, skipped
   line. Tests
   build fixture trees under a temp HOME; none reads the operator's `~/.claude`, `~/.pi` or
@@ -56,7 +56,8 @@ knows nor needs the Rust toolchain, in either direction.
 - `crates/bench` — the CLI, the one agent-facing surface, and the attach client. `src/verbs.rs`
   is the pane verbs and spawn (M3); `src/attach.rs` is the relay a helm pane runs. Two verbs
   never open the socket: `bench log` reads a transcript file directly, and `bench wiring` prints
-  (or `--check`s) the one-time hook wiring for the operator's own agents.
+  (or `--check`s) the one-time hook wiring for the operator's own agents (the check also asks
+  codex itself whether it trusts those hooks).
 - **benchd runs as a login agent** (`com.wirasm.benchd`, `scripts/benchd-agent.sh`, #407). To
   restart the live one, `launchctl kickstart -k gui/$(id -u)/com.wirasm.benchd`; starting a
   second benchd by hand beside it is refused at the socket and leaves launchd retrying. Tests and

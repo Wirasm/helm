@@ -66,6 +66,28 @@
     }
   },
   {
+    "id": "v-09a",
+    "verb": "pane/open",
+    "args": {
+      "at": {
+        "beside": {
+          "side": "down",
+          "slot": "00000002-0000-4000-8000-000000000002"
+        }
+      },
+      "surface": {
+        "kind": "canvas",
+        "source": {
+          "kind": "file",
+          "path": "/Users/operator/Desktop/notes.md"
+        }
+      }
+    },
+    "by": {
+      "kind": "operator"
+    }
+  },
+  {
     "id": "v-10",
     "verb": "pane/split",
     "args": {

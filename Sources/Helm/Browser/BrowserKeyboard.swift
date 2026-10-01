@@ -8,21 +8,22 @@ import AppKit
 /// keyboard, and the responder is where the operator is actually typing. It answers the same
 /// way for a pane on the bench and one in the browser drawer.
 ///
-/// Two responders count: the page (`BrowserSurfaceView`), and the address field while it is
-/// being edited — ⌘W or ⌘T typed there is still a browser key. A SwiftUI text field's responder
-/// is AppKit's shared field editor, which names no pane, so the pane that is editing says so
-/// itself (`editingAddress`); there is one field editor per window, so one such pane at a time.
+/// Two responders count: the page (`BrowserSurfaceView`), and the pane's address or find field
+/// while it is being edited — ⌘W or ⌘T typed there is still a browser key. A SwiftUI text
+/// field's responder is AppKit's shared field editor, which names no pane, so the pane that is
+/// editing says so itself (`editingField`); there is one field editor per window, so one such
+/// pane at a time.
 @MainActor
 enum BrowserKeyboard {
-    /// The pane whose address field is being edited, set and cleared by its view.
-    static weak var editingAddress: BrowserPaneModel?
+    /// The pane whose address or find field is being edited, set and cleared by its view.
+    static weak var editingField: BrowserPaneModel?
 
     static func holder() -> BrowserPaneModel? {
         guard let responder = NSApp?.keyWindow?.firstResponder else { return nil }
         if let surface = responder as? BrowserSurfaceView {
             return surface.model as? BrowserPaneModel
         }
-        if let field = responder as? NSTextView, field.isFieldEditor { return editingAddress }
+        if let field = responder as? NSTextView, field.isFieldEditor { return editingField }
         return nil
     }
 }
