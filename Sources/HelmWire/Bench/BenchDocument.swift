@@ -182,6 +182,29 @@ package struct BenchDocument: Codable, Equatable, Sendable {
 
 // MARK: - Surface
 
+extension BenchDocument.Bench {
+    /// Every pane, in column → slot → tab order.
+    package var panes: [BenchDocument.Pane] { columns.flatMap { $0.slots.flatMap(\.panes) } }
+}
+
+extension Surface {
+    /// Whether a pane showing `self` is already a view of `wanted`: benchd's
+    /// `Surface::already_shows` (`bench-doc/src/surface.rs`), which keeps a bench to one pane per
+    /// canvas file, one browser, one view of a session. helm asks it only to decide whether a
+    /// drop zone is drawn; benchd decides again, and refuses, so a drift here can mis-draw a zone
+    /// but never put a second pane on a bench.
+    package func alreadyShows(_ wanted: Surface) -> Bool {
+        switch (wanted, self) {
+        case let (.canvas(a), .canvas(b)): a == b
+        case (.browser, .browser), (.sessions, .sessions), (.archon, .archon),
+            (.worktrees, .worktrees):
+            true
+        case let (.terminal(_, a?, _), .terminal(_, b?, _)): a == b
+        default: false
+        }
+    }
+}
+
 /// What a pane shows, named by a typed source (`bench-architecture.md`, primitive 2).
 ///
 /// **`unsupported` is a kind this build does not know**, and it decodes rather than throws: the

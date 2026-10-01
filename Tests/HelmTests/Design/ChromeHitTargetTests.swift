@@ -104,8 +104,10 @@ final class ChromeHitTargetTests: XCTestCase {
                 ],
                 active: "/tmp/alpha"))
         let hit = Hit()
+        let rig = try toyRig("/tmp/alpha")
         let bar = WorkspaceBar(
-            model: model, select: { hit.value = $0.name.first }, close: { _ in })
+            model: model, workbench: rig.model, select: { hit.value = $0.name.first },
+            close: { _ in })
         return try HitMap(over: bar, width: 220, hit: hit)
     }
 

@@ -79,9 +79,9 @@ struct SlotTabStrip: View {
         .onTapGesture { model.send(.focusSlot(slot.id), by: .operatorGesture) }
         // Where the strip is, for a tab dropped into one of its gaps (`PaneDrop`).
         .onGeometryChange(for: CGRect.self) {
-            $0.frame(in: .named(PaneDrop.space))
+            $0.frame(in: .named(BenchDrag.space))
         } action: {
-            model.paneDrag.frames[slot.id, default: SlotFrames()].strip = $0
+            model.drag.slots[slot.id, default: SlotFrames()].strip = $0
         }
         .enableInjection()
     }
@@ -90,8 +90,9 @@ struct SlotTabStrip: View {
     /// whether it can close — the bench's rule, not the slot's: a pane can close unless it is
     /// the bench's last.
     ///
-    /// Every tab can be dragged to another place on the bench (#178, `PaneDrop`): the gesture
-    /// reports the pointer in `PaneDrop.space` and the release becomes one `pane/move`. Four
+    /// Every tab can be dragged to another place on the bench (#178, `PaneDrop`), or onto another
+    /// workspace's tab in the bar (`WorkspaceDrop`): the gesture reports the pointer in
+    /// `BenchDrag.space` and the release becomes one `pane/move`. Escape cancels it. Four
     /// points of travel before it starts, so a click on a tab stays a click. Simultaneous, so
     /// the tab's own tap does not hold it back.
     @ViewBuilder
@@ -104,17 +105,17 @@ struct SlotTabStrip: View {
     private func draggable(_ tab: AnyView, pane: Pane.ID) -> some View {
         tab
             .simultaneousGesture(
-                DragGesture(minimumDistance: 4, coordinateSpace: .named(PaneDrop.space))
-                    .onChanged { model.dragPane(pane, to: $0.location) }
-                    .onEnded { model.dropPane(pane, at: $0.location) }
+                DragGesture(minimumDistance: 4, coordinateSpace: .named(BenchDrag.space))
+                    .onChanged { model.dragTab(.pane(pane), to: $0.location) }
+                    .onEnded { model.dropTab(.pane(pane), at: $0.location) }
             )
             .onGeometryChange(for: CGRect.self) {
-                $0.frame(in: .named(PaneDrop.space))
+                $0.frame(in: .named(BenchDrag.space))
             } action: {
-                model.paneDrag.frames[slot.id, default: SlotFrames()].tabs[pane] = $0
+                model.drag.slots[slot.id, default: SlotFrames()].tabs[pane] = $0
             }
             // A document that arrives mid-drag can take this tab off the screen, and then no
             // end comes for its gesture: without this the drop zone would stay drawn.
-            .onDisappear { model.paneDrag.cancel(pane) }
+            .onDisappear { model.drag.abandon(.pane(pane)) }
     }
 }
