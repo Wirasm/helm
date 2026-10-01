@@ -440,12 +440,11 @@ pub fn apply(
             doc.close_pane(*pane, focus).map(|()| Outcome::default())
         }
         LayoutVerb::PaneShow { pane } => doc.show_pane(*pane, focus).map(|()| Outcome::default()),
-        LayoutVerb::PaneMove {
-            pane,
-            to: MoveTo::Step(direction),
-        } => doc
-            .edit(Target::Pane(*pane), focus, |b| {
-                b.move_pane(*pane, *direction, focus)
+        LayoutVerb::PaneMove { pane, to } => doc
+            .edit(Target::Pane(*pane), focus, |b| match *to {
+                MoveTo::Step(direction) => b.move_pane(*pane, direction, focus),
+                MoveTo::Tab { slot, before } => b.move_pane_to_tab(*pane, slot, before, focus),
+                MoveTo::Beside { slot, side } => b.move_pane_beside(*pane, slot, side, focus),
             })
             .map(|_| Outcome::default()),
         LayoutVerb::PaneName { pane, name, .. } => doc

@@ -9,7 +9,8 @@ import SwiftUI
 /// to be the whole hint row, which spent most of the bar on a dozen chords the operator
 /// already knows; the pop-up shows the same hints from the same table, when he asks. On the
 /// right, the three facts helm already knows: which workspace, which branch, and whether an
-/// agent in it has stopped and wants them.
+/// agent in it has stopped and wants them, beside benchd's capsules (how close each plan is to
+/// its limits among them, #143).
 ///
 /// **No decisions.** What the facts are is `StatusSummary`, which is pure and tested; which
 /// keys exist is the pop-up's (`KeyPopupContent`). This file arranges them and picks type
@@ -84,6 +85,7 @@ struct StatusBarView: View {
             }
             DrawerCapsules(model: workbench)
             WaitingCapsule(foregrounds: TerminalManager.shared.foregrounds, workbench: workbench)
+            UsageCapsule(foregrounds: TerminalManager.shared.foregrounds)
             BenchStatusBadge(client: workbench.client, workbench: workbench)
             isolationBadge
             keepAwakeCapsule

@@ -1,0 +1,48 @@
+{
+  "now_ms": 1790540800000,
+  "claude_statusline": {
+    "hook_event_name": "Status",
+    "session_id": "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2",
+    "transcript_path": "/Users/op/.claude/projects/helm/0b9e3f2a.jsonl",
+    "cwd": "/Users/op/Projects/helm",
+    "model": { "id": "claude-opus-5-5", "display_name": "Opus" },
+    "workspace": { "current_dir": "/Users/op/Projects/helm", "project_dir": "/Users/op/Projects/helm" },
+    "version": "2.1.286",
+    "cost": { "total_cost_usd": 0.4, "total_duration_ms": 55000 },
+    "rate_limits": {
+      "five_hour": { "used_percentage": 62, "resets_at": 1790553600 },
+      "seven_day": { "used_percentage": 30.5, "resets_at": 1791043200 }
+    }
+  },
+  "claude_usage": {
+    "harness": "claude",
+    "windows": [
+      { "minutes": 300, "used_percent": 62.0, "resets_at_ms": 1790553600000, "at_ms": 1790540800000 },
+      { "minutes": 10080, "used_percent": 30.5, "resets_at_ms": 1791043200000, "at_ms": 1790540800000 }
+    ]
+  },
+  "report": {
+    "id": "bench-1",
+    "verb": "usage/report",
+    "args": {
+      "harness": "claude",
+      "windows": [
+        { "minutes": 300, "used_percent": 62.0, "resets_at_ms": 1790553600000, "at_ms": 1790540800000 },
+        { "minutes": 10080, "used_percent": 30.5, "resets_at_ms": 1791043200000, "at_ms": 1790540800000 }
+      ]
+    }
+  },
+  "codex_rollout": [
+    { "timestamp": "2026-09-27T18:40:01.000Z", "type": "session_meta", "payload": { "id": "01a0f3a1-cf4c-7900-aaba-cc99c6049a3d", "cwd": "/Users/op/Projects/helm" } },
+    { "timestamp": "2026-09-27T18:44:20.000Z", "type": "event_msg", "payload": { "type": "token_count", "info": null, "rate_limits": null } },
+    { "timestamp": "2026-09-27T18:44:29.555Z", "type": "event_msg", "payload": { "type": "token_count", "info": { "model_context_window": 258400 }, "rate_limits": { "limit_id": "codex", "limit_name": null, "primary": { "used_percent": 30.0, "window_minutes": 10080, "resets_at": 1791143381 }, "secondary": null, "credits": { "has_credits": true, "unlimited": false, "balance": "62500" }, "individual_limit": null, "spend_control_reached": null, "plan_type": "pro", "rate_limit_reached_type": null } } },
+    { "timestamp": "2026-09-27T18:44:30.000Z", "type": "event_msg", "payload": { "type": "token_count", "info": null, "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 0.0, "window_minutes": 300, "resets_at": 1789670821 }, "secondary": { "used_percent": 0.0, "window_minutes": 10080, "resets_at": 1790257621 }, "credits": null, "individual_limit": null, "spend_control_reached": null, "plan_type": "pro", "rate_limit_reached_type": null } } },
+    { "timestamp": "2026-09-27T18:44:31.000Z", "type": "event_msg", "payload": { "type": "token_count", "info": null, "rate_limits": { "limit_id": "premium", "limit_name": null, "primary": null, "secondary": null, "credits": { "has_credits": false, "unlimited": false, "balance": "0" }, "individual_limit": null, "spend_control_reached": null, "plan_type": null, "rate_limit_reached_type": null } } }
+  ],
+  "codex_usage": {
+    "harness": "codex",
+    "windows": [
+      { "minutes": 10080, "used_percent": 30.0, "resets_at_ms": 1791143381000, "at_ms": 1790534669555 }
+    ]
+  }
+}
