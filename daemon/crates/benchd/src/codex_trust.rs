@@ -91,22 +91,18 @@ fn git_main_root(dir: &Path) -> Option<PathBuf> {
     (main_git_dir.canonicalize().ok()? == common).then(|| main_root.to_path_buf())
 }
 
-/// Where a `.git` file points (`gitdir: <path>`, relative to its folder). `None` for a symlink, a
-/// file over [`MAX_GIT_METADATA_BYTES`], or anything else.
+/// Where a `.git` file points (`gitdir: <path>`, relative to its folder), read by [`read_small`].
 fn gitdir_of(dot_git: &Path) -> Option<PathBuf> {
-    let meta = std::fs::symlink_metadata(dot_git).ok()?;
-    if !meta.is_file() {
-        return None;
-    }
     let text = read_small(dot_git)?;
     let target = text.trim().strip_prefix("gitdir:")?.trim();
     (!target.is_empty()).then(|| dot_git.parent().unwrap_or(dot_git).join(target))
 }
 
-/// A git metadata file's text, unless it is over [`MAX_GIT_METADATA_BYTES`].
+/// A git metadata file's text: a regular file, never a symlink, at most
+/// [`MAX_GIT_METADATA_BYTES`].
 fn read_small(path: &Path) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    (meta.len() <= MAX_GIT_METADATA_BYTES)
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    (meta.is_file() && meta.len() <= MAX_GIT_METADATA_BYTES)
         .then(|| std::fs::read_to_string(path).ok())
         .flatten()
 }
@@ -215,6 +211,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(git_main_root(&forged), None);
+        // A metadata file that is a symlink is not read, whatever it says: here the real
+        // worktree's own backlink, moved aside and linked back.
+        let (wt, backlink) = (repo.join(".worktrees/wt"), entry.join("gitdir"));
+        assert!(operator_trusts(&wt, &home));
+        std::fs::rename(&backlink, dir.join("moved")).unwrap();
+        std::os::unix::fs::symlink(dir.join("moved"), &backlink).unwrap();
+        assert_eq!(git_main_root(&wt), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
