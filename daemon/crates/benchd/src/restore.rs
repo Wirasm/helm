@@ -144,11 +144,17 @@ fn has_transcript(id: &str) -> bool {
         .any(|project| project.path().join(&file).is_file())
 }
 
-/// Whether a live session already holds conversation `runtime`.
+/// Whether a live session already holds conversation `runtime`: by the id it was started with,
+/// or, for a codex that names its thread after the fact, by the id its hook recorded.
 pub fn held(core: &Core, runtime: &str) -> bool {
+    let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
     core.sessions
         .values()
         .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
+        || core.session_records.hosted.iter().any(|h| {
+            h.id == runtime
+                && matches!(&h.via, bench_wire::HostedVia::Bench { session, .. } if live(session))
+        })
 }
 
 /// Where the pane's shell was last working, if that directory is still there.

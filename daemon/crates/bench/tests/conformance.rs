@@ -7493,6 +7493,35 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
 }
 
 #[test]
+fn a_codex_thread_a_live_session_holds_is_not_resumed_a_second_time() {
+    // A new codex names its thread after the fact, so only its hook says a live session holds it.
+    let home = TestHome::claim("cxheld");
+    let ws = workspace(&home.dir).display().to_string();
+    let (bin, _) = write_fake_codex(&home.dir);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let run = bench(&home.dir, &["spawn", "--agent", "codex", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let spawned = json_of(&run);
+    let thread = "019a0dde-1128-7572-8528-e0979f7e7070";
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
+            "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"]}),
+    );
+    let again = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+        ],
+    );
+    assert_eq!(again.code, 3, "{}", again.stderr);
+    assert!(again.stderr.contains("already live"), "{}", again.stderr);
+}
+
+#[test]
 fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_resume() {
     // codex takes `resume <id>` as claude and pi take theirs, so `--resume` is refused only for
     // what argv refuses (harness parity G10). Each session runs its own app-server, so `bench
