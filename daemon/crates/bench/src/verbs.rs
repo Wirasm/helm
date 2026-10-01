@@ -1,6 +1,6 @@
 //! The verbs an agent drives the bench with (M3): open, split, show, focus, move, name and
-//! close a pane, spawn an agent into one, read a pane or helm's window, and read, follow and
-//! type into any terminal (M5b).
+//! close a pane, close a workspace, spawn an agent into a pane, read a pane or helm's window, and
+//! read, follow and type into any terminal (M5b).
 //!
 //! Every one of them is the socket's own verb with its arguments built from the wire's types
 //! (`LayoutVerb`, `SpawnArgs`, `HelmAsk`), so the CLI cannot spell what benchd does not read.
@@ -21,7 +21,16 @@ use std::path::PathBuf;
 /// The verbs this module answers, by their first word. `close` and `get` are shared with the
 /// session and document verbs; [`owns`] decides by the word after them.
 const VERBS: &[&str] = &[
-    "open", "split", "show", "focus", "move", "name", "spawn", "send", "watch",
+    "open",
+    "split",
+    "show",
+    "focus",
+    "move",
+    "name",
+    "spawn",
+    "send",
+    "watch",
+    "workspace",
 ];
 
 /// Flags that take a value. The rest (`--asked`, `--force`, `--rename`) are switches.
@@ -222,6 +231,18 @@ fn layout(verb: &str, p: &Parsed) -> Result<(String, Value), String> {
         "close" => LayoutVerb::PaneClose {
             pane: pane()?,
             force: p.force,
+        },
+        "workspace" => match (p.words.get(1).map(String::as_str), p.words.get(2)) {
+            (Some("close"), Some(path)) => LayoutVerb::WorkspaceClose {
+                path: absolute(path)?,
+                force: p.force,
+            },
+            _ => {
+                return Err(
+                    "workspace takes close <path> [--force] [--asked] — `bench get` lists the workspaces"
+                        .into(),
+                );
+            }
         },
         other => return Err(format!("{other} is not a pane verb")),
     };

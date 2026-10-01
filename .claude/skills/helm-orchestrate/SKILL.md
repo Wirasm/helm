@@ -152,11 +152,15 @@ the operator has said the run may.
 
 ## 8. Close
 
-After a workstream's PR merges, or a spike's verdict is read: `bench close <pane> --force` (it
-ends the agent's session), then remove its worktree, and add a terminal line to the run file. The
-merge queue removed the worktrees of the PRs it merged that nobody was still working in (its
-report's `pruned` says which it kept and why; an agent still in its pane keeps its worktree); run `just prune-worktrees` after every batch for the rest, and
-`git worktree remove --force .worktrees/<name>` for a spike's throwaway code. Fill the run file's
+After a workstream's PR merges, or a spike's verdict is read, end its agent. An agent spawned
+into a worktree has a workspace tab of its own, and `bench close` never closes a workspace's last
+pane, so close the tab: `bench workspace close <worktree path> --force` (it ends the agent's
+session; the folder and branch stay). An agent in a pane of a shared workspace: `bench close
+<pane> --force`. Then remove its worktree and add a terminal line to the run file. The merge queue
+removed the worktrees of the PRs it merged that nobody was still working in (its report's `pruned`
+says which it kept and why; an agent still in its pane keeps its worktree); run `just
+prune-worktrees` after every batch for the rest, and `git worktree remove --force
+.worktrees/<name>` for a spike's throwaway code. Fill the run file's
 outcome section, and send the operator one message with what shipped and what needs him.
 
 ## Recover after a restart
