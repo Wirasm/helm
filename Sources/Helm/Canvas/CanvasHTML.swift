@@ -39,7 +39,7 @@ enum CanvasHTML {
     /// start), so this page carries only the markdown source (as a JS string)
     /// and the convert + render script:
     ///
-    /// 1. `marked.parse` converts the markdown to HTML.
+    /// 1. Marked converts the markdown and preserves literal block source on the DOM.
     /// 2. ```mermaid fences arrive as `<pre><code class="language-mermaid">`
     ///    blocks; they're rewritten to `<pre class="mermaid">` containers.
     /// 3. `mermaid.run()` renders them in the matching theme, at natural size
@@ -81,7 +81,7 @@ enum CanvasHTML {
           var source = \(jsString(markdown));
           var content = document.getElementById("content");
           if (!window.marked) { content.textContent = source; return; }
-          content.innerHTML = marked.parse(source);
+          \(CanvasMarkdown.renderScript)
           document.querySelectorAll("pre > code.language-mermaid").forEach(function (code) {
             var pre = document.createElement("pre");
             pre.className = "mermaid";

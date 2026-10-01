@@ -333,13 +333,24 @@ Four things follow, and they are the whole of what you need to know:
 - **He hands you the path; you read the file.** That is the interface, for his notes and for an
   artifact of yours he has changed.
 
-**A mermaid node is addressable in four families only.** helm hands back the identifier from your
-```mermaid fence — name a node `phase2` and a mark comes back as `phase2`, which you can grep for
-and edit (helm #113). That holds for **flowchart, class, state and er**. `mindmap` and
-`sequenceDiagram` put no author-written identifier in the rendered output, so a mark degrades to
-quoted text with nothing to anchor to; `gitGraph` and `pie` produce no addressable nodes at all.
-For a diagram the operator must be able to point at, those four families or your own HTML ids are
-the options that work.
+**Mermaid nodes are addressable in flowchart, class, state and er diagrams.** helm hands
+back the identifier from your fence: a node named `phase2` comes back as `phase2`. Flowchart
+subgraphs, state composites and class namespaces also preserve their authored identifier:
+`subgraph zone[The Zone]` anchors to `zone`, even with a CSS class named `node`.
+Selections in mindmap, sequenceDiagram, gitGraph, pie and other unsupported diagram elements
+say they are not anchorable. They do not become notes with renderer ids or guessed quotes.
+
+**Markdown marks carry literal source excerpts.** A selection over rendered bold text names
+the enclosing source block, including `**` markers. Nested lists and blockquotes name their
+whole top-level block. The note heading is `source "..." text "..."`; both values are JSON
+strings with escapes for newlines, quotes and backslashes. The second value retains the
+selected words. Decode the source string before matching it against the source file.
+Blocks over 2,000 characters and selections across separate blocks cannot be anchored.
+An authored `<div id="phase">` remains an identifier anchor; id-less raw HTML needs an id.
+
+**HTML marks use your authored ids.** Give a block an `id` when the operator needs to comment
+on it. An id-less selection with no named ancestor says it is not anchorable. See
+[canvas anchor rules](../../../docs/canvas-anchors.md) for the complete per-kind contract.
 
 **Check a mark's label against the node its identifier names now.** A mark carries both, in the
 mail and in the sidecar: `` `#phase2` — "Phase 2: migrate" ``. An identifier you reused for a

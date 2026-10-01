@@ -15,7 +15,9 @@ final class CanvasMarkTests: XCTestCase {
 
     func testAMermaidNodeReducesToTheIdentifierInTheSource() {
         let annotation = decode([
-            "kind": "selection", "id": "mermaid-0-flowchart-phase2-1", "text": "Phase 2: Ship",
+            "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node",
+            "id": "mermaid-0-flowchart-phase2-1",
+            "text": "Phase 2: Ship",
         ])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase2", text: "Phase 2: Ship")))
@@ -23,7 +25,9 @@ final class CanvasMarkTests: XCTestCase {
 
     func testAMarkWithNoCommentIsRefused() {
         XCTAssertNil(
-            decode(["kind": "selection", "id": "phase-2", "text": "Phase 2"], comment: "   "))
+            decode(
+                ["kind": "selection", "anchorKind": "element", "id": "phase-2", "text": "Phase 2"],
+                comment: "   "))
     }
 
     /// The geometry kinds left with their tools (#385). A page still posting one is drift between
@@ -39,7 +43,9 @@ final class CanvasMarkTests: XCTestCase {
         // Was `testNoMarkIsStillASelection`, and the rename is the change: a selection used to
         // be the payload with NO discriminator on it at all, which is what made "which shape is
         // this?" an inference and #216 the bill for getting it wrong. It declares itself (#109).
-        let annotation = decode(["kind": "selection", "id": "phase-2", "text": "Phase 2"])
+        let annotation = decode([
+            "kind": "selection", "anchorKind": "element", "id": "phase-2", "text": "Phase 2",
+        ])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
     }
@@ -67,39 +73,43 @@ final class CanvasMarkTests: XCTestCase {
 
     // MARK: - The families where there is nothing to anchor to
 
-    func testAMindmapNodeDegradesToAQuoteRatherThanKeepingRendererBookkeeping() {
+    func testAMindmapNodeIsRefusedRatherThanKeepingRendererBookkeeping() {
         // `mermaid-0-node_1` carries no author identifier. Keeping it hands the agent an
         // anchor that survives a re-render and matches nothing in the source — the exact
         // anchor #113 abolished. This is the behaviour that used to fall through.
         let annotation = decode([
-            "kind": "selection", "id": "mermaid-0-node_1", "text": "branchA",
+            "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node",
+            "id": "mermaid-0-node_1",
+            "text": "branchA",
         ])
 
-        XCTAssertEqual(annotation?.mark, .selection(.quote("branchA")))
+        XCTAssertNil(annotation)
     }
 
-    func testAnEdgeAndAMarkerDefDegradeToo() {
+    func testAnEdgeAndAMarkerDefAreRefusedToo() {
         for id in ["mermaid-0-L_phase1_phase2_0", "mermaid-0_flowchart-v2-pointEnd"] {
-            let annotation = decode(["kind": "selection", "id": id, "text": "x"])
-            XCTAssertEqual(
-                annotation?.mark, .selection(.quote("x")),
-                "\(id) is renderer bookkeeping, not an anchor")
+            let annotation = decode([
+                "kind": "selection", "anchorKind": "mermaid", "rendererRole": "node", "id": id,
+                "text": "x",
+            ])
+            XCTAssertNil(annotation, "\(id) is renderer bookkeeping, not an anchor")
         }
     }
 
     func testAnAgentAuthoredIDIsStillKept() {
-        // The whole reason `isRenderGenerated` exists: "cannot reduce" has two causes and
-        // only one of them means "throw it away".
-        let annotation = decode(["kind": "selection", "id": "phase-2", "text": "Phase 2"])
+        // The page carries authored-id provenance; string shape is not the policy.
+        let annotation = decode([
+            "kind": "selection", "anchorKind": "element", "id": "phase-2", "text": "Phase 2",
+        ])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "phase-2", text: "Phase 2")))
     }
 
-    func testASequenceActorIsIndistinguishableFromAnAuthoredID() {
-        // A stated ceiling rather than a hidden one: sequenceDiagram emits `actor0` with no
-        // `mermaid-` prefix, so helm cannot tell it from an id an agent wrote. It does not
-        // guess — it keeps it, and #112's spec says so.
-        let annotation = decode(["kind": "selection", "id": "actor0", "text": "alice"])
+    func testAnAuthoredHTMLIDSpelledLikeASequenceActorIsKept() {
+        // The page explicitly identifies this as authored HTML, outside Mermaid.
+        let annotation = decode([
+            "kind": "selection", "anchorKind": "element", "id": "actor0", "text": "alice",
+        ])
 
         XCTAssertEqual(annotation?.mark, .selection(.element(id: "actor0", text: "alice")))
     }

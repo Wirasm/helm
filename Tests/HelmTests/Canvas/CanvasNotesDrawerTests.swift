@@ -40,6 +40,9 @@ final class CanvasNotesDrawerTests: XCTestCase {
     ) throws -> CanvasPageSelection {
         var payload = payload
         payload["kind"] = payload["kind"] ?? CanvasPageSelection.Kind.selection.rawValue
+        payload["anchorKind"] =
+            payload["anchorKind"] ?? (payload["id"] is String ? "element" : "excerpt")
+        if payload["anchorKind"] as? String == "excerpt" { payload["source"] = payload["text"] }
         switch CanvasPageSelection.decode(payload) {
         case let .success(.selected(selection)):
             return .selected(selection)

@@ -72,6 +72,8 @@ struct CanvasCommentField: View {
     /// an agent; this is plain text because `Text` draws it verbatim.
     static func quote(for selection: CanvasSelection) -> String {
         switch selection.mark {
+        case let .selection(.unanchored(reason, _)):
+            return "This selection is not anchorable: \(reason)."
         case let .selection(anchor):
             return anchor.text
         case .none:
