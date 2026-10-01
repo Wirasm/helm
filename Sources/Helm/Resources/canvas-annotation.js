@@ -124,6 +124,119 @@
     return node && node.nodeType === 3 ? node.parentNode : node;
   }
 
+  // Capture and later lookup use the same DOM naming walk and surface exclusion.
+  function anchorFor(node, text) {
+    node = elementFor(node);
+    return { id: node && !inPageSurface(node) ? nameFor(node) : null, text: text };
+  }
+
+  function sourceID(id) {
+    var match = /^mermaid-\d+-(?:flowchart|classId|state|entity)-(.+)-\d+$/.exec(id || "");
+    return match ? match[1] : id;
+  }
+
+  function words(text) { return String(text || "").replace(/\s+/g, " ").trim(); }
+
+  function addressable(node) {
+    if (inPageSurface(node) || helmFrame(node)) { return false; }
+    var diagram = node.closest && node.closest(".mermaid, svg[aria-roledescription]");
+    if (!diagram) { return true; }
+    // Unsupported diagrams carry no author identifier. Never recover them by label alone.
+    return /^mermaid-\d+-(flowchart|classId|state|entity)-.+-\d+$/.test(nameFor(node) || "");
+  }
+
+  function verified(node, text) {
+    return node && addressable(node) && node.getClientRects().length
+      && getComputedStyle(node).visibility !== "hidden"
+      && words(node.innerText === undefined ? node.textContent : node.innerText).includes(words(text));
+  }
+
+  // Map normalized rendered text back to DOM offsets, across inline markup.
+  function quoteRange(node, quote) {
+    var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    var positions = [], normalized = "", leaf;
+    while ((leaf = walker.nextNode())) {
+      var parent = leaf.parentElement;
+      if (!parent || !addressable(parent) || parent.closest("script, style, [hidden]")) { continue; }
+      if (!parent.getClientRects().length || getComputedStyle(parent).visibility === "hidden") { continue; }
+      for (var i = 0; i < leaf.textContent.length; i++) {
+        var char = leaf.textContent[i];
+        if (/\s/.test(char)) {
+          if (!normalized || normalized.endsWith(" ")) { continue; }
+          char = " ";
+        }
+        normalized += char;
+        positions.push({ node: leaf, offset: i });
+      }
+    }
+    var needle = words(quote), start = normalized.indexOf(needle);
+    if (!needle || start < 0) { return null; }
+    if (normalized.indexOf(needle, start + 1) >= 0) { return { ambiguous: true }; }
+    var first = positions[start], last = positions[start + needle.length - 1];
+    var range = document.createRange();
+    range.setStart(first.node, first.offset);
+    range.setEnd(last.node, last.offset + 1);
+    return range;
+  }
+
+  function resolveAnchor(anchor) {
+    if (!anchor || !words(anchor.text)) { return null; }
+    if (anchor.id) {
+      var direct = document.getElementById(anchor.id);
+      if (verified(direct, anchor.text)) { return { node: direct }; }
+      var matches = Array.from(document.querySelectorAll("[id]")).filter(function (node) {
+        return sourceID(anchorFor(node, anchor.text).id) === anchor.id && verified(node, anchor.text);
+      });
+      if (matches.length === 1) { return { node: matches[0] }; }
+      if (matches.length > 1) { return null; }
+    }
+    // Smallest prose blocks avoid a match manufactured across unrelated paragraphs.
+    var ranges = [], ambiguous = false;
+    Array.from(document.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, td, th, pre, blockquote, div, section, article, [id]"))
+      .filter(function (node) { return verified(node, anchor.text); })
+      .forEach(function (node) {
+        var range = quoteRange(node, anchor.text);
+        if (range && range.ambiguous) { ambiguous = true; return; }
+        if (range && !ranges.some(function (other) {
+          return other.range.startContainer === range.startContainer && other.range.startOffset === range.startOffset
+            && other.range.endContainer === range.endContainer && other.range.endOffset === range.endOffset;
+        })) { ranges.push({ node: elementFor(range.commonAncestorContainer), range: range }); }
+      });
+    return !ambiguous && ranges.length === 1 ? ranges[0] : null;
+  }
+
+  var hoverSheet = null;
+  window.__helmClearNote = function () {
+    if (hoverSheet) { hoverSheet.replaceSync(""); }
+    if (window.CSS && window.CSS.highlights) { window.CSS.highlights.delete("helm-note"); }
+  };
+  window.__helmHoverNote = function (anchor) {
+    window.__helmClearNote();
+    var found = resolveAnchor(anchor), colour = tint();
+    if (!found) { return "not-found"; }
+    if (!colour || !window.CSS || !window.CSS.highlights || !window.Highlight) { return "unavailable"; }
+    if (!hoverSheet) { hoverSheet = new window.CSSStyleSheet(); }
+    var rule = "::highlight(helm-note){background-color:" + colour + "}";
+    var range = found.range;
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(found.node);
+      var selector = "#" + window.CSS.escape(found.node.id);
+      rule += selector + "{outline:2px solid " + colour + ";outline-offset:2px}"
+        + selector + " :is(rect,path,polygon,circle,ellipse){stroke:" + colour + ";stroke-width:3px}";
+    }
+    hoverSheet.replaceSync(rule);
+    if (document.adoptedStyleSheets.indexOf(hoverSheet) < 0) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.concat([hoverSheet]);
+    }
+    window.CSS.highlights.set("helm-note", new window.Highlight(range));
+    var rect = found.node.getBoundingClientRect();
+    if (rect.top < 0 || rect.bottom > window.innerHeight) {
+      found.node.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+    return "found";
+  };
+
   // The text mark, painted (#308).
   //
   // A text mark was once the browser's own selection, which greys the instant the comment
@@ -244,7 +357,7 @@
     if (!text) { unpaintTextMark(); bridge.postMessage({ kind: "cleared" }); return; }
     var range = selection.getRangeAt(0);
     var node = elementFor(range.commonAncestorContainer);
-    var id = node ? nameFor(node) : null;
+    var id = anchorFor(node, text).id;
     var r = range.getBoundingClientRect();
     // One mark on screen: whatever was up before comes down first, even when this one cannot
     // be painted. The new mark then STAYS — from here it is the comment field's subject, and

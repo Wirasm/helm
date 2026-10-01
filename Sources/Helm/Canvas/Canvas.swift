@@ -131,6 +131,7 @@ final class CanvasModel: ObservableObject {
     /// persisted — the drawer is temporary, and a pane that restored with half the artifact
     /// covered would be answering a question nobody asked.
     @Published private(set) var showsNotes = false
+    let noteHover = CanvasNoteHover()
 
     /// A transient "that worked" line. Separate from `notesFailure` because a silent copy is
     /// indistinguishable from a dead click, and because the operator has to know their

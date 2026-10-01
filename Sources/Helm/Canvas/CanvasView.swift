@@ -235,7 +235,7 @@ struct CanvasView: View {
                 url: document.url, files: model.files, markdown: markdown,
                 generation: document.generation,
                 markTool: model.markTool, showsMark: model.showsMark,
-                onSelection: model.pageDidReport)
+                onSelection: model.pageDidReport, noteHover: model.noteHover)
         case .web:
             // The only canvas that can take an update as data: an `.html` artifact is read
             // straight from disk, so its own scripts run and one of them may be
@@ -249,7 +249,7 @@ struct CanvasView: View {
                 onSelection: model.pageDidReport,
                 changes: document.changes,
                 reloadDemand: model.reloadDemand, onUpdate: model.pageAnsweredUpdate,
-                onDataWrite: model.pageWroteData)
+                onDataWrite: model.pageWroteData, noteHover: model.noteHover)
         case let .plainText(text):
             ScrollView {
                 Text(text)

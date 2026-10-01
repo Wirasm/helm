@@ -92,6 +92,7 @@ struct MarkdownCanvasView: View {
     /// What the operator selected on the page, for the comment field to anchor to — and
     /// when they clicked away and selected nothing, which is what takes the field down.
     let onSelection: (CanvasPageSelection) -> Void
+    var noteHover: CanvasNoteHover? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -104,7 +105,8 @@ struct MarkdownCanvasView: View {
             markTool: markTool,
             showsMark: showsMark,
             theme: colorScheme == .dark ? .dark : .light,
-            onSelection: onSelection
+            onSelection: onSelection,
+            noteHover: noteHover
         )
     }
 }
@@ -186,6 +188,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
     let showsMark: Bool
     let theme: CanvasTheme
     let onSelection: (CanvasPageSelection) -> Void
+    var noteHover: CanvasNoteHover? = nil
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
@@ -208,6 +211,7 @@ private struct MarkdownCanvasWebView: NSViewRepresentable {
         load(webView, coordinator: context.coordinator)
         context.coordinator.pushTool(markTool, theme: theme, to: webView)
         context.coordinator.showMark(showsMark, in: webView)
+        noteHover?.webView = webView
     }
 
     private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {
@@ -245,6 +249,7 @@ struct HTMLCanvasView: View {
     /// a different type, because they are different claims: one about the operator's mark, one
     /// the page's own data.
     let onDataWrite: CanvasDataChannel.Write
+    var noteHover: CanvasNoteHover? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -260,7 +265,8 @@ struct HTMLCanvasView: View {
             changes: changes,
             reloadDemand: reloadDemand,
             onUpdate: onUpdate,
-            onDataWrite: onDataWrite
+            onDataWrite: onDataWrite,
+            noteHover: noteHover
         )
     }
 }
@@ -443,6 +449,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
     let reloadDemand: Int
     let onUpdate: (CanvasUpdateAnswer) -> Void
     let onDataWrite: CanvasDataChannel.Write
+    var noteHover: CanvasNoteHover? = nil
 
     private var path: StandardizedPath { StandardizedPath(url) }
 
@@ -479,6 +486,7 @@ private struct HTMLCanvasWebView: NSViewRepresentable {
             reloadDemand, webView, path: path, theme: theme, coordinator: context.coordinator)
         context.coordinator.pushTool(markTool, theme: theme, to: webView)
         context.coordinator.showMark(showsMark, in: webView)
+        noteHover?.webView = webView
     }
 
     private func load(_ webView: WKWebView, coordinator: CanvasFileCoordinator) {

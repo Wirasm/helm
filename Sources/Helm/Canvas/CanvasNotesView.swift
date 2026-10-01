@@ -169,18 +169,8 @@ enum CanvasNotesDrawerMetrics {
     }
 }
 
-/// The sidecar, over the trailing half of the canvas — **shown in full**, not listed (#198).
-///
-/// **This replaces the popover, and that is the whole feature.** What was here listed
-/// headings at `lineLimit(2)` and never showed a single word of what the operator had
-/// written; the only way to read a note was Reveal in Finder, which leaves helm. So the
-/// drawer shows the file, as the plain text it is.
-///
-/// **It shows a file; it never interprets one.** `CanvasNotes.readable` takes the `<sub>`
-/// wrapper off the timestamp and nothing else touches the text. Turning a heading back into
-/// a `Mark` — which is what hover-highlighting needs — is #199's, and it has to stay #199's:
-/// the moment this file parses a heading, the sidecar's headings stop being text on screen and
-/// become a format with a round trip to keep honest.
+/// The complete sidecar over the trailing half of the canvas (#198).
+/// Each entry is a hover target; CanvasNotes owns the heading format and its parser.
 struct CanvasNotesDrawer: View {
     @ObservedObject var model: CanvasModel
 
@@ -200,6 +190,7 @@ struct CanvasNotesDrawer: View {
         }
         .shadow(radius: 10, x: -2)
         .background { escapeCatcher }
+        .onDisappear { model.noteHover.clear() }
     }
 
     private var header: some View {
@@ -242,20 +233,23 @@ struct CanvasNotesDrawer: View {
         if let text = model.notesText {
             GeometryReader { proxy in
                 ScrollView {
-                    Text(CanvasNotes.readable(text))
-                        .font(.system(size: 13))
-                        .lineSpacing(3)
-                        .foregroundStyle(Color.textPrimary)
-                        .textSelection(.enabled)
-                        .frame(
-                            width: CanvasNotesDrawerMetrics.textWidth(inDrawerOf: proxy.size.width),
-                            alignment: .leading
-                        )
-                        .padding(CanvasNotesDrawerMetrics.inset)
-                        // The column is pinned to the drawer's leading edge. A `ScrollView`
-                        // centres content narrower than itself, and a measure floating in
-                        // the middle of a wide panel reads as a mistake.
-                        .frame(width: proxy.size.width, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(CanvasNotes.entries(in: text)) { note in
+                            CanvasHoverNote(note: note, hover: model.noteHover)
+                        }
+                    }
+                    .font(.system(size: 13))
+                    .lineSpacing(3)
+                    .foregroundStyle(Color.textPrimary)
+                    .frame(
+                        width: CanvasNotesDrawerMetrics.textWidth(inDrawerOf: proxy.size.width),
+                        alignment: .leading
+                    )
+                    .padding(CanvasNotesDrawerMetrics.inset)
+                    // The column is pinned to the drawer's leading edge. A `ScrollView`
+                    // centres content narrower than itself, and a measure floating in
+                    // the middle of a wide panel reads as a mistake.
+                    .frame(width: proxy.size.width, alignment: .leading)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
