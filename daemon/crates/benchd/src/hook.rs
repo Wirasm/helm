@@ -128,6 +128,25 @@ impl Agent {
     }
 }
 
+/// A codex benchd resumed on its own app-server (`spawn::wire`) can be woken before its hooks
+/// report: codex fires `SessionStart` with a session's first turn (measured on 0.157.0), and a
+/// resumed session takes no turn until somebody starts one, so without this its mail could only
+/// wait. Its activity is unknown until a hook reports or its app-server says the thread is idle
+/// ([`reconcile`]), so no turn is started on a thread its TUI has not loaded yet.
+pub fn serve_resumed(c: &mut Core, session: &bench_session::Session) {
+    let (Some(thread), Some(socket)) = (session.spec.served_resume(), &session.spec.codex_server)
+    else {
+        return;
+    };
+    let channel = Channel::CodexServer(PathBuf::from(socket));
+    let key = SessionKey {
+        harness: Harness::Codex,
+        id: thread.to_string(),
+    };
+    let agent = Agent::new(session.handle.clone(), Some(channel), session.pid, None);
+    c.agents.insert(key, Some(agent));
+}
+
 pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let mut args: HookArgs = serde_json::from_value(args.clone())
         .map_err(|e| Refusal::Refused(format!("hook args: {e}")))?;
@@ -692,7 +711,8 @@ fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
     }
 }
 
-/// Agents the hooks last saw busy or waiting, quiet for [`RECONCILE_AFTER`], with mail
+/// Agents the hooks last saw busy or waiting (or a served codex resume no hook has reported
+/// yet), quiet for [`RECONCILE_AFTER`], with mail
 /// waiting or waiting on the operator (a wait nobody ends would send him to a pane that is not
 /// waiting, M1): the harness's own record says whether they went idle without a hook saying so.
 /// Claude's registry row, for Esc on a prompt (sensor research, run B). A served codex's thread
@@ -710,7 +730,11 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
                     Some(Channel::ClaudeSocket(_) | Channel::CodexServer(_))
                 ) && a.can_push()
                     && matches!(a.push, Push::Ready)
-                    && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
+                    && match &a.activity {
+                        Some(x) => *x != Activity::Idle,
+                        // A served codex resume, before any hook (`serve_resumed`).
+                        None => matches!(a.channel, Some(Channel::CodexServer(_))),
+                    }
                     && a.seen.elapsed() > RECONCILE_AFTER
             })
             .map(|(key, a)| {

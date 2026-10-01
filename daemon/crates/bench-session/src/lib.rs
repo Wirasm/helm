@@ -83,9 +83,9 @@ impl AgentKind {
         }
     }
 
-    /// Whether this runtime can mint its session identity at spawn — the property that
-    /// makes `resume` a lookup. codex names its own sessions after the fact, so resume
-    /// for it is refused with the reason rather than guessed at (session-state spike).
+    /// Whether this runtime can mint its session identity at spawn, so a new session's id is
+    /// known before it runs. codex names its own sessions after the fact: its id comes from its
+    /// hook, and only then can it be resumed (session-state spike).
     pub fn mints_session_id(&self) -> bool {
         matches!(self, AgentKind::Claude | AgentKind::Pi)
     }
@@ -177,6 +177,19 @@ pub struct SpawnSpec {
     pub codex_server: Option<String>,
 }
 
+impl SpawnSpec {
+    /// The thread a served codex re-enters: a resume against its own app-server, which takes
+    /// its permissions from that server ([`CODEX_SERVED`]) and fires no hook until a turn runs.
+    pub fn served_resume(&self) -> Option<&str> {
+        match (&self.codex_server, &self.conversation) {
+            (Some(_), Conversation::Resume(thread)) if self.agent == AgentKind::Codex => {
+                Some(thread)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// How a served codex session starts, as a script: `$0` is the socket, `"$@"` the TUI's
 /// flags. Measured on codex 0.157.0:
 /// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
@@ -184,11 +197,15 @@ pub struct SpawnSpec {
 ///   benchd knows which session a hook is from without matching threads.
 /// - The TUI renders and takes keys against it with `--remote`, and a second client's
 ///   `turn/start` on its idle thread runs a turn the TUI shows.
+/// - The server holds the unattended posture, the only one codex runs in on the bench. A resumed
+///   thread takes the server's permissions, because the TUI refuses permission flags when it
+///   resumes against a remote server ([`argv`]); without these it ran `workspace-write`, where
+///   `bench` cannot reach benchd's socket (measured on 0.159.3). A new thread's flags agree.
 /// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
 ///   watcher is its leash: it outlives a hangup and stops the server within a second of the
 ///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
 pub const CODEX_SERVED: &str = r#"s="$0"
-codex app-server --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
+codex app-server -c 'sandbox_mode="danger-full-access"' -c 'approval_policy="never"' --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
 p=$!
 ( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 i=0
@@ -247,10 +264,17 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
                         .into(),
                 ),
             }
+            // A codex read-only posture would also have to reach the app-server, which holds the
+            // unattended one for every served session ([`CODEX_SERVED`]).
             if spec.posture == Posture::ReadOnly {
                 return Err("codex has no read-only posture on the bench".into());
             }
-            args.push("--dangerously-bypass-approvals-and-sandbox".into());
+            // A served resume takes its permissions from the app-server ([`CODEX_SERVED`]): the
+            // TUI exits on a permission flag there ("Permission overrides are not supported when
+            // resuming a remote task", measured on 0.157.0).
+            if spec.served_resume().is_none() {
+                args.push("--dangerously-bypass-approvals-and-sandbox".into());
+            }
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
             // made in a dialog nobody is at an unattended pane to answer. An agent that already
             // runs every command unsandboxed gains nothing a hook could add.
@@ -801,6 +825,25 @@ mod tests {
             a[3..],
             embedded[..],
             "the TUI keeps every flag and the prompt"
+        );
+    }
+
+    #[test]
+    fn a_served_codex_resume_leaves_its_posture_to_the_server() {
+        let mut s = spec(AgentKind::Codex);
+        s.conversation = Conversation::Resume("019a-thread".into());
+        let (_, embedded) = argv(&s).unwrap();
+        assert!(embedded.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+        s.codex_server = Some("/r/codex/s1.sock".into());
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(a[3..5], ["resume", "019a-thread"]);
+        assert!(
+            !a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+            "codex exits on a permission flag in a remote resume: {a:?}"
+        );
+        assert!(
+            CODEX_SERVED
+                .contains(r#"-c 'sandbox_mode="danger-full-access"' -c 'approval_policy="never"'"#)
         );
     }
 

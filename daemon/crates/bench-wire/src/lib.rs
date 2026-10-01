@@ -506,8 +506,8 @@ pub struct SpawnArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
     /// A runtime session id to re-enter rather than start fresh: claude's `--resume`, pi's
-    /// `--session-id`. Any conversation, not only one this bench started — how `just
-    /// release-resume` brings the operator's own session back. codex is refused.
+    /// `--session-id`, codex's `resume <id>`. Any conversation, not only one this bench
+    /// started — how `just release-resume` brings the operator's own session back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
     /// A conversation to fork rather than re-enter (#531): a new conversation, under an id the
