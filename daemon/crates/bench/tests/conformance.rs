@@ -3690,26 +3690,7 @@ fn hook_verb(socket: &Path, args: serde_json::Value) -> serde_json::Value {
 
 /// `bench hook <harness>` exactly as a harness runs it: the payload on stdin.
 fn bench_hook(home: &Path, harness: &str, payload: serde_json::Value) -> CliRun {
-    let mut child = isolated(bench_bin())
-        .env("HOME", home)
-        .args(["hook", harness])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("run bench hook");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    CliRun {
-        code: out.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+    bench_stdin(home, &["hook", harness], &payload.to_string())
 }
 
 fn hosted_record(root: &Path) -> serde_json::Value {
@@ -8723,6 +8704,11 @@ fn file_changed_names_the_canvas_and_its_sidecar_once_per_settled_save() {
 // ---------------------------------------------------------------------------
 
 /// `bench` with `input` on its stdin.
+///
+/// A run that refuses before reading stdin (`file write` without `--expect`, `hook` for a
+/// harness it does not know) may exit before the write lands, and the write then fails with
+/// a broken pipe. That is the refusal itself, not a fault, so it is let through: the caller
+/// still asserts the exit code and what the run left behind.
 fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
     let mut child = isolated(bench_bin())
         .env("HOME", home)
@@ -8732,12 +8718,10 @@ fn bench_stdin(home: &Path, args: &[&str], input: &str) -> CliRun {
         .stderr(Stdio::piped())
         .spawn()
         .expect("run bench");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    match child.stdin.take().unwrap().write_all(input.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("bench's stdin: {e}"),
+        _ => {}
+    }
     let out = child.wait_with_output().unwrap();
     CliRun {
         code: out.status.code().unwrap_or(-1),
