@@ -819,7 +819,7 @@ without *asked* is refused. The keymap's `drawer` action and the capsule are the
 `action = "just"`, `recipe = "<name>"` in the keymap file sends `just/run` to benchd as the
 operator. benchd runs it (see `daemon/direction.md`); helm only hears `just/finished` on the
 follower and shows a run of his that failed as a status-bar capsule that opens its log. The
-command palette (⌘K, `Sources/Helm/Commands/`) offers every recipe benchd's `just/list` names,
+command palette (⌘K, or ⌘⇧P, which also works in a browser pane, where ⌘K is the page's; `Sources/Helm/Commands/`) offers every recipe benchd's `just/list` names,
 beside every key-table action, workspace and pane (#500).
 
 **Put a command handler where its lifetime is right, not where it looks tidy.** A subscription
