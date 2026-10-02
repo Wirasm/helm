@@ -187,6 +187,7 @@ final class BrowserPaneModel: ObservableObject {
     // MARK: - Events
 
     private func handle(_ event: CDPConnection.Event) {
+        pageInput.handle(event)
         switch event.method {
         case "Page.screencastFrame":
             guard event.sessionId == session, let frame = event.params(ScreencastFrame.self) else {

@@ -49,6 +49,10 @@ final class BrowserPageInput {
         forms.dismiss()
     }
 
+    func handle(_ event: CDPConnection.Event) {
+        if forms.invalidated(by: event) { reset() }
+    }
+
     private func current(_ dest: Destination, revision: Int) -> Bool {
         self.revision == revision && isCurrent(dest)
     }

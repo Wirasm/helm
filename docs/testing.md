@@ -118,3 +118,21 @@ starts every child through `isolated()`, which removes them. A Swift test draws 
 or names its daemon explicitly: a temp `BENCH_DIR`, or an endpoint its own script started. #493: a test that built `RootView` with
 `BenchClient.live()` drew the operator's bench and took his terminal sessions, which is why
 `RootView` has no default client.
+
+## Testing cross-origin browser pickers
+
+With `timeout`, Node, `bench`, `benchd`, and Chrome installed, run:
+
+```sh
+scripts/test-browser-oopif.sh
+```
+
+The runner starts a private benchd, headless Chrome profile with mock keychain, and the HTTP
+fixture in `Tests/BrowserFixtures/oopif.mjs`. It sets `HELM_BROWSER_LIVE_BENCH_DIR` and
+`HELM_BROWSER_OOPIF_URL` for `BrowserOOPIFLiveTests`, which otherwise skip in the normal Swift
+gate. The tests require two actual iframe targets: `localhost` → `127.0.0.1` → `localhost`.
+
+The runner bounds every long-lived process, checks its recorded pids after cleanup, and removes
+its temporary root and private defaults suite. It never opens a native browser window. Pass a
+test filter as the first argument and further Swift test flags after it. Set `OOPIF_TEST_WT` to
+run against another checkout; the runner uses that checkout's fixture and Swift tests.
