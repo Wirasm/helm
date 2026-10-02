@@ -24,7 +24,7 @@ final class TerminalPaneKind: SurfaceKind {
     }
 
     func tab(of session: TerminalSession, in slot: SurfaceSlot) -> AnyView {
-        AnyView(TerminalTab(session: session, slot: slot))
+        AnyView(TerminalTab(session: session, foregrounds: manager.foregrounds, slot: slot))
     }
 
     /// Dropping the registry's reference is what closes it: the view, its coordinator, the

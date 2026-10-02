@@ -9871,10 +9871,7 @@ fn focus_waiting_walks_the_waiting_panes_longest_first() {
     );
     assert_eq!(nothing["status"], "refused", "{nothing}");
     assert!(
-        nothing["reason"]
-            .as_str()
-            .unwrap()
-            .contains("waiting on you"),
+        nothing["reason"].as_str().unwrap().contains("needs you"),
         "{nothing}"
     );
 
@@ -12561,4 +12558,95 @@ fn watch_reads_claude_s_registry_row_for_a_turn_no_hook_ends() {
     row("idle", started + 30);
     let (code, out) = watched(esc);
     assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
+}
+
+/// ⌘⇧J walks everything that needs the operator, in his list's order: asking, then a finished
+/// turn he has not seen, then mail to him. Arriving at the finished one sees it, and the walk
+/// goes on from its place.
+#[test]
+fn focus_waiting_walks_asking_then_finished_then_mail() {
+    let home = TestHome::claim("m1-walk");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let ws = workspace(h).display().to_string();
+    let pane_of = |name: &str| {
+        let run = bench(
+            h,
+            &[
+                "spawn",
+                "--agent",
+                "test-echo",
+                "--cwd",
+                &ws,
+                "--name",
+                name,
+            ],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let v = json_of(&run);
+        let ids = |k: &str| v[k].as_str().unwrap().to_string();
+        (
+            ids("session"),
+            v["pid"].as_u64().unwrap() as u32,
+            ids("pane"),
+        )
+    };
+    let (asking, asking_pid, asking_pane) = pane_of("asking");
+    let (finished, finished_pid, finished_pane) = pane_of("finished");
+    let (_, _, mail_pane) = pane_of("mailer");
+    let hook = |sid: &str, pid: u32, conv: &str, event: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({ "harness": "claude", "event": event, "session": conv,
+                "cwd": ws, "pid": pid, "bench_session": sid, "tool": "Bash" }),
+        );
+    };
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        hook(
+            &finished,
+            finished_pid,
+            "8d6e9f0a-1b2c-4d3e-4f5a-7b8c9d0e1f2a",
+            event,
+        );
+    }
+    for event in ["SessionStart", "PermissionRequest"] {
+        hook(
+            &asking,
+            asking_pid,
+            "9e7f0a1b-2c3d-4e4f-5a6b-8c9d0e1f2a3b",
+            event,
+        );
+    }
+    let sent = bench(
+        h,
+        &[
+            "mail", "send", "--from", "mailer", "--to", "operator", "--body", "x",
+        ],
+    );
+    assert_eq!(sent.code, 0, "{}", sent.stderr);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/activate",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    // From the asking pane: the finished one, the mail, round to the asking one, then the mail,
+    // since arriving at the finished one saw it.
+    operator_shows(&daemon.socket, &asking_pane);
+    let mut visited = Vec::new();
+    for _ in 0..4 {
+        let data = ok_data(layout(
+            &daemon.socket,
+            "focus/waiting",
+            serde_json::json!({}),
+            operator(),
+            false,
+        ));
+        visited.push(data["pane"].as_str().unwrap().to_string());
+    }
+    assert_eq!(
+        visited,
+        [finished_pane, mail_pane.clone(), asking_pane, mail_pane]
+    );
 }

@@ -220,11 +220,12 @@ enum KeyBindings {
         KeyBinding(
             .character("a"), [.command, .shift], .local(.toggleKeepAwake), hint: "awake",
             menu: "Keep Awake"),
-        // ⌘⇧J — jump to the agent waiting on you longest; again for the next (M1, #357).
-        // benchd decides who waits, from each agent's own report and what its screen shows.
+        // ⌘⇧J — go to the next agent that needs you (M1, #357): asking, then finished and not
+        // seen, then mail to you, the oldest first; again for the next. benchd decides who and
+        // in what order (`focus/waiting`), the order the Sessions drawer's list shows.
         KeyBinding(
-            .character("j"), [.command, .shift], .verb(.focusWaiting), hint: "waiting",
-            menu: "Go to Waiting Agent"),
+            .character("j"), [.command, .shift], .verb(.focusWaiting), hint: "next",
+            menu: "Go to Next Agent That Needs You"),
     ]
 
     /// No hint (`KeyHint`'s header says why), but every one keeps a menu item or a key.

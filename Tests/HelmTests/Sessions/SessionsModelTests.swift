@@ -71,6 +71,23 @@ final class SessionsModelTests: XCTestCase {
         XCTAssertNotNil(model.problem, "the fixture's unreadable files are said, not hidden")
     }
 
+    /// A "needs you" row goes to its pane as his own gesture (which is what marks a finished turn
+    /// seen in benchd) and gets the drawer out of the way; one with no pane goes nowhere.
+    func testANeedsYouRowGoesToItsPane() {
+        let bench = Bench()
+        let model = model(bench)
+        let pane = UUID()
+        let item = { (pane: UUID?) in
+            AttentionItem(
+                kind: .finished, pane: pane, session: "s2", who: "mine", words: nil,
+                since: Date(), mine: true)
+        }
+        model.goTo(item(pane))
+        model.goTo(item(nil))
+        XCTAssertEqual(bench.verbs, [.paneShow(pane)])
+        XCTAssertEqual(bench.hidden, 1)
+    }
+
     func testEachOpenActionIsCarriedOutAsBenchdDecided() async {
         let bench = Bench()
         let resumed = Recorder()

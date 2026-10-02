@@ -126,8 +126,8 @@ enum VerbTemplate: Equatable {
     /// Show a drawer over the bench, or hide it (#356). `surface` is what an empty drawer
     /// starts with; benchd refuses to open an empty drawer without one.
     case toggleDrawer(name: String, surface: Surface?)
-    /// The agent waiting on the operator longest, then the next (M1, #357). benchd knows who
-    /// waits, so this resolves to the same verb every time.
+    /// The next agent that needs the operator: asking, finished unseen, mail (M1, #357). benchd
+    /// knows who and in what order, so this resolves to the same verb every time.
     case focusWaiting
 
     /// The verb this gesture means on `bench`, with `workspaces` open and `active` on screen.

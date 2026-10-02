@@ -49,7 +49,8 @@ pub enum Refusal {
     /// The focus rule (bench-architecture.md): a change that would move the operator's
     /// focus, asked for by someone who did not say the operator asked.
     WouldMoveFocus,
-    /// `focus/waiting` with no agent waiting on the operator.
+    /// `focus/waiting` with no agent needing the operator: none asking, none finished unseen,
+    /// no mail to him.
     NothingWaiting,
 }
 
@@ -103,7 +104,10 @@ impl fmt::Display for Refusal {
                 f,
                 "this would move the operator's focus, and the operator did not ask — pass --asked when they did"
             ),
-            Refusal::NothingWaiting => write!(f, "no agent is waiting on you"),
+            Refusal::NothingWaiting => write!(
+                f,
+                "no agent needs you: none asking, none finished unseen, no mail"
+            ),
         }
     }
 }

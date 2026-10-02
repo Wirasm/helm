@@ -7,14 +7,18 @@ import SwiftUI
 /// one's git branch when there is one — nothing that needs watching. Anything that wants
 /// attention belongs somewhere it can be acted on, not in a strip above everything else.
 ///
-/// The board's dot is the one exception, and it earns it by being the only thing here you
-/// cannot learn without leaving: whether a workspace you are *not* looking at has an agent
-/// waiting on you. It is still state on an existing element, never anything that pops.
+/// The workspace mark is the one exception, and it earns it by being the only thing here you
+/// cannot learn without leaving: whether a workspace you are *not* looking at has an agent that
+/// needs you (`WorkspaceMark`). It is still state on an existing element, never anything that
+/// pops.
 struct WorkspaceBar: View {
     @ObservedObject var model: WorkspaceModel
-    /// The board's marks, owned by the Board slice and observed the way `RootView` observes
-    /// `TerminalManager`. The bar renders a dot; it does not learn what a registry is.
-    @ObservedObject private var board = BoardModel.shared
+    /// What benchd last said about every pane's agent: the marks are read off it, so the bar
+    /// redraws when it changes and keeps nothing of its own.
+    @ObservedObject private var foregrounds = TerminalManager.shared.foregrounds
+    /// Which workspace each terminal is in: a pane moved to another workspace takes its mark
+    /// along.
+    @ObservedObject private var terminals = TerminalManager.shared
     @ObservedObject private var keymap = Keymap.shared
     /// Where a dragged tab goes (#178): a workspace tab reorders the bar, and a pane's tab dropped
     /// here moves to that workspace. The bar reports its frames and its own tabs' drags; the
@@ -27,9 +31,10 @@ struct WorkspaceBar: View {
         HStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
+                    let marks = WorkspaceMark.of(TerminalManager.shared)
                     ForEach(Array(model.workspaces.enumerated()), id: \.element.id) {
                         index, workspace in
-                        tab(index: index, workspace: workspace)
+                        tab(index: index, workspace: workspace, mark: marks[workspace.path.value])
                     }
                 }
             }
@@ -56,20 +61,19 @@ struct WorkspaceBar: View {
         } action: {
             workbench.drag.bar.strip = $0
         }
-        .task { await board.poll() }
     }
 
     /// Hoisted out of `body` because the type-checker gave up on the nested conditionals
     /// when this was inline — a real constraint, not a style preference.
     @ViewBuilder
-    private func tab(index: Int, workspace: Workspace) -> some View {
+    private func tab(index: Int, workspace: Workspace, mark: WorkspaceMark?) -> some View {
         let isSelected = model.selectedWorkspace == workspace
         Button {
             select(workspace)
         } label: {
             HStack(spacing: 5) {
                 Text("⌃\(index + 1)").foregroundStyle(Color.textMuted)
-                AgentDot(presence: board.presence[workspace.path.value])
+                AgentDot(mark: mark)
                 Text(workspace.name).fontWeight(isSelected ? .semibold : .regular)
                 if let branch = model.branches[workspace.path] {
                     Text(branch).foregroundStyle(Color.textMuted).lineLimit(1)

@@ -555,8 +555,8 @@ menu = "Keep Awake"
 [[bind]]
 key = "cmd+shift+j"
 action = "focus-waiting"
-hint = "waiting"
-menu = "Go to Waiting Agent"
+hint = "next"
+menu = "Go to Next Agent That Needs You"
 
 [[bind]]
 key = "cmd+="

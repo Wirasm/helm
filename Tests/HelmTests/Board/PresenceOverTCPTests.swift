@@ -5,8 +5,8 @@ import XCTest
 
 @testable import Helm
 
-/// Presence against a real benchd reached only over TCP, on a machine whose files this process
-/// cannot read (M5c, #459): the agent in a pane lights its workspace from benchd's report alone.
+/// The report of the agent in a pane, from a real benchd reached only over TCP, on a machine
+/// whose files this process cannot read (M5c, #459): what a workspace's ○ is read from.
 ///
 /// **Skipped unless a harness sets it up**, because the Swift gate needs no benchd: a benchd with
 /// `BENCH_LISTEN` and a HOME of its own, a terminal pane on its bench whose session's foreground
@@ -15,7 +15,7 @@ import XCTest
 /// `HELM_REMOTE_BENCH_URL` names benchd and `HELM_REMOTE_PANE` the pane.
 @MainActor
 final class PresenceOverTCPTests: XCTestCase {
-    func testTheAgentInAPaneOnARemoteBenchMarksItsWorkspace() async throws {
+    func testTheAgentInAPaneOnARemoteBenchReportsThroughBenchd() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let url = env["HELM_REMOTE_BENCH_URL"], let raw = env["HELM_REMOTE_PANE"],
             let pane = UUID(uuidString: raw)
@@ -27,9 +27,7 @@ final class PresenceOverTCPTests: XCTestCase {
         manager.adopt(terminals: [pane], in: workspace, attaching: [:])
 
         await manager.foregrounds.refresh(using: client)
-        let board = BoardModel(manager: manager)
-        board.refresh()
 
-        XCTAssertEqual(board.presence[workspace.value], .notWorking)
+        XCTAssertEqual(manager.foregrounds.reports[pane]?.activity, "idle")
     }
 }

@@ -179,7 +179,7 @@ final class KeyHintTests: XCTestCase {
                 "new", "note", "split", "split down", "close", "pane", "focus", "move",
                 "artifact", "turn", "workspace", "commands", "folder", "archon", "worktrees",
                 "zoom", "browser",
-                "sessions", "awake", "waiting",
+                "sessions", "awake", "next",
             ])
     }
 
