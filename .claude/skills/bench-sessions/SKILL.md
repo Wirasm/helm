@@ -64,7 +64,8 @@ $BENCH watch "$HANDLE" --timeout 1800
 It blocks, spending no model turn, until the agent in the bench session with that handle waits
 on the operator, ends a turn, or its session ends, and prints one line: `{"handle", "outcome":
 "waiting"|"done"|"idle"|"ended"|"timeout", "session": <its bench sessions entry>}`. `idle` is an
-agent that went quiet without finishing a turn (a failed turn, an interrupt): read its log. Exit
+agent the watch saw working that went quiet without finishing a turn (a failed turn, an
+interrupt): read its log. An agent that has only started its session is not idle yet. Exit
 0, or 3 at the timeout and for a handle no bench session has. A turn that already ended answers at once: after
 you mail it new work, pass the `since_ms` of the `done` you last saw as `--after <ms>` so the
 previous turn does not answer for the next one.

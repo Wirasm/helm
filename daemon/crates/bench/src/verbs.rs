@@ -484,11 +484,9 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
         asked: false,
     };
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    // An agent that goes quiet after this without finishing a turn answers `idle`.
-    let started_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
-    let quiet_after = after.unwrap_or(0).max(started_ms);
+    // Whether this watch has seen the agent at work: only then is idle without a done a turn that
+    // ended without finishing, rather than a session that has not started one.
+    let mut worked = false;
     // A closed session leaves the list: one this watch saw and cannot find again has ended.
     let mut last: Option<SessionEntry> = None;
     loop {
@@ -508,7 +506,13 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
             }
         };
         let (entry, outcome) = match (session_of(&live.sessions, handle), last.take()) {
-            (Some(entry), _) => (entry.clone(), watched(entry, after, quiet_after)),
+            (Some(entry), _) => {
+                worked |= entry
+                    .report
+                    .as_ref()
+                    .is_some_and(|r| !matches!(r.activity, Activity::Idle | Activity::Unknown));
+                (entry.clone(), watched(entry, after, worked))
+            }
             (None, Some(gone)) => (gone, Some(Watched::Ended)),
             (None, None) => {
                 return refuse(&format!(
@@ -569,9 +573,11 @@ impl Watched {
     }
 }
 
-/// What `watch <handle>` stops for, when anything: a done after `after`, else an agent that went
-/// idle after `quiet_after` (the watch's start, or `after`) without one.
-fn watched(s: &SessionEntry, after: Option<u64>, quiet_after: u64) -> Option<Watched> {
+/// What `watch <handle>` stops for, when anything: a done after `after`, else an agent idle
+/// without one after the watch saw it `worked`. A session that has only started (`SessionStart`)
+/// is idle with no turn, and is not an answer; a turn that starts and fails between two asks is
+/// missed, and the timeout answers for it.
+fn watched(s: &SessionEntry, after: Option<u64>, worked: bool) -> Option<Watched> {
     if !s.live {
         return Some(Watched::Ended);
     }
@@ -584,10 +590,11 @@ fn watched(s: &SessionEntry, after: Option<u64>, quiet_after: u64) -> Option<Wat
     {
         return Some(Watched::Done);
     }
-    s.report
+    let idle = s
+        .report
         .as_ref()
-        .filter(|r| r.activity == Activity::Idle && r.since_ms.is_some_and(|t| t > quiet_after))
-        .map(|_| Watched::Idle)
+        .is_some_and(|r| r.activity == Activity::Idle);
+    (worked && idle).then_some(Watched::Idle)
 }
 
 /// `get screenshot`: helm draws its window and sends the PNG back; benchd writes it at `--out`

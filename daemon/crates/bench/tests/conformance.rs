@@ -11712,9 +11712,17 @@ fn watch_wakes_on_a_turn_end_and_a_wait_and_gives_up_at_its_timeout() {
     let daemon = DaemonGuard::start(h, None);
     let (sid, pid) = terminal_process(h, "watched");
     let conv = "5a3b6c7d-8e9f-4a0b-1c2d-4e5f6a7b8c9d";
-    for event in ["SessionStart", "UserPromptSubmit"] {
-        claude_turn(&daemon.socket, &sid, pid, conv, event);
-    }
+    // A session that has only started is idle with no turn: not an answer.
+    let fresh = watch(h, &["watched", "--timeout", "2"]);
+    std::thread::sleep(Duration::from_millis(300));
+    claude_turn(&daemon.socket, &sid, pid, conv, "SessionStart");
+    let (code, out) = watched(fresh);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
     let (code, out) = watched(watch(h, &["watched", "--timeout", "1"]));
     assert_eq!(
         (code, out["outcome"].clone()),
@@ -11752,7 +11760,8 @@ fn watch_wakes_on_a_turn_end_and_a_wait_and_gives_up_at_its_timeout() {
     // A turn that fails ends with no `Stop`, and no done: the watch still wakes, as idle.
     claude_turn(&daemon.socket, &sid, pid, conv, "PostToolUse");
     let waiter = watch(h, &["watched", "--timeout", "20"]);
-    std::thread::sleep(Duration::from_millis(300));
+    // Long enough for the watch to see it at work first.
+    std::thread::sleep(Duration::from_millis(1200));
     claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
     let (code, out) = watched(waiter);
     assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");

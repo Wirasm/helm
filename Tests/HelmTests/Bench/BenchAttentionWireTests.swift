@@ -45,6 +45,8 @@ final class BenchAttentionWireTests: XCTestCase {
         XCTAssertEqual(
             Set(list.rows.compactMap(\.spawner)), [.operator, .agent(handle: "orchestrator")])
         XCTAssertTrue(list.rows.contains { $0.spawner == nil }, "unknown is nil")
+        XCTAssertThrowsError(
+            try decode(BenchSpawner.self, ["kind": "robot"]), "a kind this build does not know")
         let subjects = list.rows.compactMap(\.operatorMail).map { $0.subject ?? "" }
         XCTAssertEqual(subjects.sorted(), ["", "reviewer: blocked"])
         XCTAssertTrue(
