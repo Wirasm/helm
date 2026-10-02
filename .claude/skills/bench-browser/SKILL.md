@@ -81,3 +81,13 @@ there; never try to open the drawer for him.
 - For a file input, use Playwright's `setInputFiles` (or its `filechooser` event) with a path on
   benchd's machine. A file input you click never asks the operator: the pane answers a file
   chooser only after his own click.
+- The pane shows its own select and date pickers for the main page and same-origin frames.
+  Controls inside cross-origin frames (OOPIFs) still need Playwright: the pane does not attach
+  child input sessions, and Chrome's native popups do not appear in the page stream.
+- Operator paste carries text, HTML and PNG into Chrome's in-memory headless clipboard and
+  produces a trusted page `paste` event on secure pages. When the Clipboard API is unavailable
+  or refuses the write, the page gets a cancellable synthetic event instead; that fallback's
+  event is untrusted. Typing and composition commits continue to use text insertion.
+- Fallback paste resolves focus inside same-origin frames and open/closed shadow roots before
+  checking cancellation. An unreachable cross-origin editor fails visibly instead of inserting
+  text without asking its paste handler.

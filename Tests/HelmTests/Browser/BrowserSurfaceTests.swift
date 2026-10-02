@@ -11,11 +11,32 @@ final class BrowserSurfaceTests: XCTestCase {
         var keys: [BrowserPaneModel.KeyEvent] = []
         var mice: [BrowserPaneModel.MouseEvent] = []
         var inserted: [String] = []
+        var pasted: [BrowserPaste] = []
         func mouse(_ params: BrowserPaneModel.MouseEvent) { mice.append(params) }
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
+        func paste(_ payload: BrowserPaste) { pasted.append(payload) }
+        func setComposition(_: String, selection _: NSRange) {}
+        func textCaretRect() async -> CGRect? { nil }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
+
+        var gestures: [BrowserGesture] = []
+        /// What the page answers a gesture with, as `BrowserPaneModel.gesture` would.
+        var report: BrowserPointerReport?
+        var cursorAnswer: String?
+        var opened: [URL] = []
+        var commands: [BrowserCommand] = []
+        func gesture(
+            _ gesture: BrowserGesture, dispatch: () -> Void
+        ) async -> BrowserPointerReport? {
+            gestures.append(gesture)
+            dispatch()
+            return report
+        }
+        func cursor(at _: CGPoint) async -> String? { cursorAnswer }
+        func open(_ url: URL) { opened.append(url) }
+        func perform(_ command: BrowserCommand) { commands.append(command) }
     }
 
     private var window: NSWindow!
@@ -141,14 +162,19 @@ final class BrowserSurfaceTests: XCTestCase {
         XCTAssertTrue(recorder.keys.isEmpty)
     }
 
-    func testPasteInsertsTheClipboardAsText() {
+    func testPasteCarriesClipboardFormatsInsteadOfTypingThem() {
         let board = NSPasteboard(name: .init("helm-browser-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
         surface.pasteboard = board
         board.clearContents()
         board.setString("päste ✓", forType: .string)
+        board.setString("<b>päste ✓</b>", forType: .html)
+        board.setData(Data([1, 2, 3]), forType: .png)
         surface.paste(nil)
-        XCTAssertEqual(recorder.inserted, ["päste ✓"])
+        XCTAssertEqual(
+            recorder.pasted,
+            [BrowserPaste(text: "päste ✓", html: "<b>päste ✓</b>", png: Data([1, 2, 3]))])
+        XCTAssertTrue(recorder.inserted.isEmpty)
     }
 
     func testAClickLandsOnThePagePointUnderIt() throws {
@@ -212,5 +238,169 @@ final class BrowserSurfaceTests: XCTestCase {
         try scroll(-10, precise: true)
         let wheel = try XCTUnwrap(recorder.mice.last)
         XCTAssertEqual(wheel.deltaY, 10, "a precise delta passes through unscaled")
+    }
+
+    // MARK: - Links, the menu and the cursor (#610)
+
+    /// A frame filling the 400×300 pane, so a pane point is the same page point.
+    private func showPage() throws {
+        let image = try XCTUnwrap(
+            CGContext(
+                data: nil, width: 800, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage())
+        surface.show(BrowserFrame(image: image, pageSize: CGSize(width: 400, height: 300)))
+    }
+
+    private func mouse(
+        _ type: NSEvent.EventType, _ flags: NSEvent.ModifierFlags = []
+    ) throws -> NSEvent {
+        try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: 100, y: 200), modifierFlags: flags,
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1))
+    }
+
+    /// A middle-button event: `NSEvent.mouseEvent` cannot carry a button number, a `CGEvent`
+    /// can. Placed as the scroll test places its own (global, top-left origin).
+    private func middle(_ type: CGEventType) throws -> NSEvent {
+        let point = window.convertPoint(toScreen: NSPoint(x: 100, y: 200))
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        let cg = try XCTUnwrap(
+            CGEvent(
+                mouseEventSource: nil, mouseType: type,
+                mouseCursorPosition: CGPoint(x: point.x, y: top - point.y), mouseButton: .center))
+        return try XCTUnwrap(NSEvent(cgEvent: cg))
+    }
+
+    /// Lets the surface's gesture task run to its end.
+    private func settle() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    private static let link = BrowserPointerReport(
+        prevented: false, link: "https://example.com/x", claimed: true, selection: "",
+        editable: false)
+
+    /// AC1: ⌘-click on a link the listener claimed opens it as the operator's tab, and the page
+    /// still gets the press and the release, in that order, though the release arrived while
+    /// the press waited for the listener.
+    func testACommandClickOnALinkOpensItAndStillReachesThePage() async throws {
+        try showPage()
+        recorder.report = Self.link
+        surface.mouseDown(with: try mouse(.leftMouseDown, .command))
+        surface.mouseUp(with: try mouse(.leftMouseUp, .command))
+        XCTAssertTrue(recorder.mice.isEmpty, "the press waits for the listener")
+        await settle()
+        XCTAssertEqual(recorder.gestures, [.commandClick])
+        XCTAssertEqual(recorder.opened, [URL(string: "https://example.com/x")!])
+        XCTAssertEqual(recorder.mice.map(\.type), ["mousePressed", "mouseReleased"])
+        XCTAssertEqual(recorder.mice.first?.modifiers, BrowserModifiers.meta.rawValue)
+    }
+
+    func testAMiddleClickIsSentAsTheMiddleButtonAndOpensTheLink() async throws {
+        try showPage()
+        recorder.report = Self.link
+        let press = try middle(.otherMouseDown)
+        XCTAssertEqual(press.buttonNumber, 2, "the event is a middle press")
+        surface.otherMouseDown(with: press)
+        surface.otherMouseUp(with: try middle(.otherMouseUp))
+        await settle()
+        XCTAssertEqual(recorder.gestures, [.middleClick])
+        XCTAssertEqual(recorder.mice.map(\.button), ["middle", "middle"])
+        XCTAssertEqual(recorder.mice.first?.buttons, 4)
+        XCTAssertEqual(recorder.opened.count, 1)
+    }
+
+    /// AC2: a page that handled the click itself keeps it; nothing opens.
+    func testALinkThePageClaimedIsNotOpened() async throws {
+        try showPage()
+        recorder.report = BrowserPointerReport(
+            prevented: true, link: "https://example.com/x", claimed: false, selection: "",
+            editable: false)
+        surface.mouseDown(with: try mouse(.leftMouseDown, .command))
+        await settle()
+        XCTAssertTrue(recorder.opened.isEmpty)
+    }
+
+    /// AC5, the control: a plain click is not a gesture and goes out at once.
+    func testAPlainClickGoesOutAtOnceAndAsksNothing() throws {
+        try showPage()
+        surface.mouseDown(with: try mouse(.leftMouseDown))
+        XCTAssertEqual(recorder.mice.map(\.type), ["mousePressed"])
+        XCTAssertTrue(recorder.gestures.isEmpty)
+    }
+
+    /// AC3: right-click on a link shows the native menu with the link's items; on a page that
+    /// drew its own menu, none.
+    func testARightClickShowsTheMenuUnlessThePageDrewItsOwn() async throws {
+        try showPage()
+        var shown: [[String]] = []
+        surface.presentMenu = { menu, _, _ in shown.append(menu.items.map(\.title)) }
+        recorder.report = Self.link
+        surface.rightMouseDown(with: try mouse(.rightMouseDown))
+        await settle()
+        XCTAssertEqual(recorder.gestures, [.contextMenu])
+        XCTAssertEqual(shown, [["Open Link in New Tab", "Copy Link"]])
+        XCTAssertTrue(recorder.opened.isEmpty, "the menu opens nothing by itself")
+
+        recorder.report = BrowserPointerReport(
+            prevented: true, link: nil, claimed: false, selection: "", editable: false)
+        surface.rightMouseDown(with: try mouse(.rightMouseDown))
+        await settle()
+        XCTAssertEqual(shown.count, 1, "the page's own menu, not ours")
+    }
+
+    func testTheMenuOffersWhatFitsUnderThePointer() {
+        func items(
+            _ link: String?, _ selection: String, _ editable: Bool, paste: Bool = true
+        ) -> [String] {
+            BrowserContextMenu.items(
+                for: .init(
+                    prevented: false, link: link, claimed: false, selection: selection,
+                    editable: editable),
+                canPaste: paste
+            ).map(\.title)
+        }
+        XCTAssertEqual(items(nil, "", false), ["Back", "Forward", "Reload"])
+        XCTAssertEqual(items(nil, "fox", false), ["Copy"])
+        XCTAssertEqual(items(nil, "", true), ["Paste"])
+        XCTAssertEqual(items(nil, "", true, paste: false), ["Back", "Forward", "Reload"])
+        XCTAssertEqual(items("mailto:a@b.c", "", false), ["Copy Link"], "only web links open")
+    }
+
+    func testTheMenusCopyItemsWriteTheClipboard() {
+        let board = NSPasteboard(name: .init("helm-browser-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        surface.pasteboard = board
+        surface.perform(.copyLink("https://example.com/x"))
+        XCTAssertEqual(board.string(forType: .string), "https://example.com/x")
+        surface.perform(.copy("the quick fox"))
+        XCTAssertEqual(board.string(forType: .string), "the quick fox")
+        surface.perform(.reload)
+        XCTAssertEqual(recorder.commands, [.reload])
+    }
+
+    /// AC4: the pane takes the page's cursor.
+    func testTheCursorFollowsThePage() async throws {
+        try showPage()
+        recorder.cursorAnswer = "pointer"
+        surface.mouseMoved(with: try mouse(.mouseMoved))
+        await settle()
+        XCTAssertTrue(surface.pageCursor === NSCursor.pointingHand)
+        recorder.cursorAnswer = "text"
+        surface.mouseMoved(with: try mouse(.mouseMoved))
+        await settle()
+        XCTAssertTrue(surface.pageCursor === NSCursor.iBeam)
+    }
+
+    func testCSSCursorsMapToTheirMacCursors() {
+        XCTAssertTrue(BrowserCursor.cursor(css: "pointer") === NSCursor.pointingHand)
+        XCTAssertTrue(BrowserCursor.cursor(css: "col-resize") === NSCursor.resizeLeftRight)
+        XCTAssertTrue(BrowserCursor.cursor(css: "grab") === NSCursor.openHand)
+        XCTAssertTrue(BrowserCursor.cursor(css: "not-allowed") === NSCursor.operationNotAllowed)
+        XCTAssertTrue(BrowserCursor.cursor(css: "default") === NSCursor.arrow)
+        XCTAssertTrue(BrowserCursor.cursor(css: nil) === NSCursor.arrow, "no answer, no guess")
     }
 }
