@@ -40,6 +40,7 @@ mod live;
 mod prompts;
 mod prp;
 mod restore;
+mod resume_dir;
 mod rules;
 mod screen;
 mod sessions;
@@ -1048,6 +1049,9 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
         return Err(refused(unresumable(old.spec.agent, sid)));
     };
     let mut spec = old.spec.resuming(runtime.to_string());
+    // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
+    let start = resume_dir::start(spec.agent, runtime, &spec.cwd).map_err(refused)?;
+    spec.cwd = start.cwd;
     let (id, root, notices) = {
         let mut c = core.lock().unwrap();
         let id = format!("s{}", c.next_session);
@@ -1056,7 +1060,7 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
     };
     // A new session id, so codex gets an app-server of its own rather than the exited
     // session's socket.
-    spawn::wire(&mut spec, &root, &id).map_err(errored)?;
+    spawn::wire(&mut spec, &root, &id, start.note.as_deref()).map_err(errored)?;
     spec.codex_hook_trust = spawn::hook_trust(&spec);
     let session = Session::spawn(
         id.clone(),

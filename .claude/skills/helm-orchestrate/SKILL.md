@@ -139,7 +139,9 @@ for r in json.load(sys.stdin)["rows"]:
 - An agent whose session ended while its pane stayed is brought back with `bench restore <pane>`:
   a recorded claude, codex or pi conversation is resumed there. `bench sessions --all` shows
   the handle to mail. When the pane is gone too, spawn again with `--resume <runtime>` (codex: its thread id), or
-  a fresh agent whose brief points at the branch and the PR.
+  a fresh agent whose brief points at the branch and the PR. A worktree the merge queue pruned is
+  no obstacle: benchd recreates it on the agent's branch, or starts a claude or codex in the repo
+  root, and its resume notice says which (a pi is refused with the command that brings it back).
 
 ## 7. Verify, merge, release
 

@@ -1310,3 +1310,51 @@ fn every_row_says_the_model_its_harness_last_recorded_and_follows_a_switch() {
     assert_eq!(row(&built, "pi-1").unwrap().model, some("claude-opus-5-5"));
     assert_eq!(row(&built, thread).unwrap().model, some("gpt-6.1-mini"));
 }
+
+#[test]
+fn a_conversations_last_branch_is_read_from_its_own_transcript() {
+    // What a resume recreates a removed worktree on (#621).
+    let f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let home = f.home();
+    let branch = |harness, id: &str| bench_sessions::last_branch(&home, harness, id, &ws);
+    let transcript = home
+        .join(".claude/projects")
+        .join(bench_sessions::claude::mangle(&ws))
+        .join("c1.jsonl");
+    write(
+        &transcript,
+        &jsonl(&[
+            json!({"type": "user", "gitBranch": "feat/old"}),
+            json!({"type": "assistant", "gitBranch": "feat/x"}),
+        ]),
+    );
+    assert_eq!(
+        branch(Harness::Claude, "c1").as_deref(),
+        Some("feat/x"),
+        "the latest wins"
+    );
+    write(
+        &transcript,
+        &jsonl(&[json!({"type": "user", "gitBranch": "HEAD"})]),
+    );
+    assert_eq!(
+        branch(Harness::Claude, "c1"),
+        None,
+        "a detached checkout is no branch"
+    );
+    assert_eq!(branch(Harness::Claude, "c-none"), None);
+
+    let thread = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    write(
+        &home.join(format!(
+            ".codex/sessions/2026/10/01/rollout-2026-10-01T10-34-56-{thread}.jsonl"
+        )),
+        &jsonl(&[
+            json!({"type": "session_meta", "payload": {"id": thread, "git": {"branch": "feat/y"}}}),
+            json!({"type": "turn_context", "payload": {"model": "m"}}),
+        ]),
+    );
+    assert_eq!(branch(Harness::Codex, thread).as_deref(), Some("feat/y"));
+    assert_eq!(branch(Harness::Pi, "pi-1"), None, "pi writes none");
+}

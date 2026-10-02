@@ -16,6 +16,7 @@
 //! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
 //! second, forking resume.
 
+use crate::resume_dir::{self, Start};
 use crate::{Core, hook, sessions, shells, spawn};
 use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
@@ -41,23 +42,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         Some(p) => Some(PaneId::parse(p.trim()).map_err(|why| format!("restore: {why}"))?),
         None => None,
     };
-    // Asking codex for its hook trust starts a process, so it is asked before the lock is
-    // taken for the restore, once per directory a codex is recorded in.
-    let codex_dirs: HashSet<String> = {
-        let c = core.lock().unwrap();
-        let doc = &c.bench.document;
-        waiting(&c, doc, only)
-            .iter()
-            .filter_map(|(pane, _, _)| doc.pane(*pane).and_then(recorded_agent))
-            .filter(|a| a.command == AgentKind::Codex.name())
-            .map(|a| a.cwd)
-            .collect()
-    };
-    let trusts: HashMap<String, Option<String>> = codex_dirs
-        .into_iter()
-        .map(|cwd| (spawn::codex_hook_trust(&cwd), cwd))
-        .map(|(trust, cwd)| (cwd, trust))
-        .collect();
+    let Prepared { starts, trusts } = prepare(core, only);
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
     let waiting = waiting(&c, &next, only);
@@ -94,10 +79,15 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "claude conversation {} was never written in: nothing to resume",
                 a.session
             ))),
-            Some(a) => {
-                let trust = trusts.get(&a.cwd).cloned().flatten();
-                resume(&mut c, pane, &a, trust).map_err(Some)
-            }
+            Some(a) => match starts.get(&pane) {
+                Some(Ok(start)) => {
+                    let trust = trusts.get(&start.cwd).cloned().flatten();
+                    resume(&mut c, pane, &a, start, trust).map_err(Some)
+                }
+                Some(Err(why)) => Err(Some(why.clone())),
+                // A pane that ended while the lock was let go: the next restore takes it.
+                None => Err(Some("its session ended during this restore".to_string())),
+            },
             None => Err(None),
         };
         let one = match resumed {
@@ -131,6 +121,45 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }
+}
+
+/// Where each recorded agent of the panes a restore takes resumes (its worktree may be gone,
+/// #621), and a codex's hook trust there, once per directory. Both start processes, git and
+/// codex, so they are worked out before the lock is taken for the restore.
+fn prepare(core: &Arc<Mutex<Core>>, only: Option<PaneId>) -> Prepared {
+    let agents: Vec<(PaneId, ResumableAgent)> = {
+        let c = core.lock().unwrap();
+        let doc = &c.bench.document;
+        waiting(&c, doc, only)
+            .iter()
+            .filter_map(|(pane, _, _)| Some((*pane, doc.pane(*pane).and_then(recorded_agent)?)))
+            .collect()
+    };
+    let starts: HashMap<PaneId, Result<Start, String>> = agents
+        .iter()
+        .map(|(pane, a)| {
+            let start = AgentKind::parse(&a.command, false)
+                .and_then(|kind| resume_dir::start(kind, &a.session, &a.cwd));
+            (*pane, start)
+        })
+        .collect();
+    let codex_dirs: HashSet<&str> = agents
+        .iter()
+        .filter(|(_, a)| a.command == AgentKind::Codex.name())
+        .filter_map(|(pane, _)| Some(starts.get(pane)?.as_ref().ok()?.cwd.as_str()))
+        .collect();
+    let trusts: HashMap<String, Option<String>> = codex_dirs
+        .into_iter()
+        .map(|cwd| (cwd.to_string(), spawn::codex_hook_trust(cwd)))
+        .collect();
+    Prepared { starts, trusts }
+}
+
+/// What [`prepare`] worked out: where each pane's agent resumes, or why it cannot, and the hook
+/// trust for each directory a codex resumes in.
+struct Prepared {
+    starts: HashMap<PaneId, Result<Start, String>>,
+    trusts: HashMap<String, Option<String>>,
 }
 
 /// The terminal panes of `doc` (or only `only`) that show no live session: the ones a restore
@@ -218,12 +247,14 @@ fn recorded_agent(pane: &bench_doc::Pane) -> Option<ResumableAgent> {
     }
 }
 
-/// Resume `agent`'s conversation as a benchd session for `pane`, under the mailbox the record
-/// gave it when it has one; a codex with `hook_trust` ([`spawn::hook_trust`]).
+/// Resume `agent`'s conversation as a benchd session for `pane`, in the folder `start` names,
+/// under the mailbox the record gave it when it has one; a codex with `hook_trust`
+/// ([`spawn::hook_trust`]).
 fn resume(
     core: &mut Core,
     pane: PaneId,
     agent: &ResumableAgent,
+    start: &Start,
     hook_trust: Option<String>,
 ) -> Result<Arc<Session>, String> {
     let kind = AgentKind::parse(&agent.command, false)?;
@@ -238,7 +269,7 @@ fn resume(
         .unwrap_or_else(|| id.clone());
     let mut spec = SpawnSpec {
         agent: kind,
-        cwd: agent.cwd.clone(),
+        cwd: start.cwd.clone(),
         model: None,
         effort: None,
         conversation: Conversation::Resume(agent.session.clone()),
@@ -250,7 +281,7 @@ fn resume(
         codex_hook_trust: hook_trust,
         codex_trust_folder: false,
     };
-    spawn::wire(&mut spec, &core.root, &id)?;
+    spawn::wire(&mut spec, &core.root, &id, start.note.as_deref())?;
     let session = Session::spawn(
         id.clone(),
         handle.clone(),
@@ -268,7 +299,7 @@ fn resume(
             "session": id,
             "handle": handle,
             "agent": kind.name(),
-            "cwd": agent.cwd,
+            "cwd": start.cwd,
             "pid": session.pid,
             "runtime_session": agent.session,
             "resumed": true,

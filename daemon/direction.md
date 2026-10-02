@@ -197,7 +197,12 @@ the panes keep their records, and `restore` (`bench restore --all`, `just resume
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
 pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `spawn --resume` with
 no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
-interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt. benchd writes both: which agent is in a pane from that agent's own hook
+interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt.
+Each of them asks `resume_dir::start` where the conversation runs first (#621): a folder that is
+gone (the merge queue prunes a worktree after its merge) comes back as a worktree on the branch
+the harness last recorded, else a claude or codex starts in the repository root, and the notice
+says which; pi re-enters a conversation only where it ran, so its resume is refused instead. The
+sessions drawer resumes a finished row through `spawn --resume` for the same reason. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 

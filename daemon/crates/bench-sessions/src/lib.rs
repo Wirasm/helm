@@ -220,6 +220,17 @@ pub fn open_action(
     }
 }
 
+/// The branch conversation `id` last worked on, from its harness's own transcript: what a resume
+/// recreates a removed worktree on (#621). pi writes no branch.
+pub fn last_branch(home: &Path, harness: Harness, id: &str, cwd: &str) -> Option<String> {
+    let (path, field) = match harness {
+        Harness::Claude => (claude::transcript(home, cwd, id), &claude::BRANCH),
+        Harness::Codex => (codex::rollout(home, id)?, &codex::BRANCH),
+        Harness::Pi => return None,
+    };
+    latest::read(&path, field, &mut latest::Scan::default()).0
+}
+
 /// Assembles rows; every row goes through [`open_action`].
 struct Rows<'a> {
     ws: &'a Workspace,

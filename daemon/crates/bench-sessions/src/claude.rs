@@ -74,6 +74,18 @@ pub const MODEL: Field = Field {
     },
 };
 
+/// The branch a session last worked on: the latest `gitBranch`, which Claude writes on every
+/// message line (2.1.287). `HEAD` is Claude's word for a detached checkout: no branch.
+pub const BRANCH: Field = Field {
+    needle: b"\"gitBranch\"",
+    pick: |record| {
+        record["gitBranch"]
+            .as_str()
+            .filter(|b| !b.is_empty() && *b != "HEAD")
+            .map(str::to_string)
+    },
+};
+
 pub fn subagents_dir(home: &Path, cwd: &str, session: &str) -> PathBuf {
     home.join(".claude/projects")
         .join(mangle(cwd))

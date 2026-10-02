@@ -176,19 +176,28 @@ final class BenchWireConformanceTests: XCTestCase {
                 session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", pid: 4242))
     }
 
-    /// "Ask a fork" (#535): the spawn helm sends is the one benchd reads, and helm reads what
-    /// benchd answers. The daemon gate decodes the same request into `SpawnArgs` and checks a live
-    /// fork's answer carries every key of `fork_reply`.
-    func testTheForkRequestAndAnswerMatchTheDaemonsFixture() throws {
+    /// "Ask a fork" (#535) and the drawer's resume (#621): the spawns helm sends are the ones
+    /// benchd reads, and helm reads what benchd answers. The daemon gate decodes the same requests
+    /// into `SpawnArgs` and checks a live fork's answer carries every key of `fork_reply`.
+    func testTheSpawnRequestsAndAnswerMatchTheDaemonsFixture() throws {
         let samples =
             try JSONSerialization.jsonObject(with: fixture("spawn-verbs.json")) as! [String: Any]
-        let request = BenchForkRequest(
-            id: "helm-3", agent: "claude", fork: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
-            cwd: "/Users/operator/Projects/helm",
-            prompt: "You are a fork.\n\n```text\nthe marked passage\n```\n\nWhy four retries?")
+        let request = BenchSpawnRequest(
+            id: "helm-3", agent: "claude", cwd: "/Users/operator/Projects/helm",
+            conversation: .fork(
+                from: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
+                prompt: "You are a fork.\n\n```text\nthe marked passage\n```\n\nWhy four retries?"
+            ))
         XCTAssertEqual(
             try normalized(JSONEncoder().encode(request)),
             try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["fork"]))))
+        // The sessions drawer's resume of a finished row (#621).
+        let resume = BenchSpawnRequest(
+            id: "helm-4", agent: "codex", cwd: "/Users/operator/Projects/helm/.worktrees/oopif",
+            conversation: .resume("01a0faf8-b4ca-7122-9900-1340d800117a"))
+        XCTAssertEqual(
+            try normalized(JSONEncoder().encode(resume)),
+            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["resume"]))))
 
         let reply = try JSONDecoder().decode(
             BenchSpawned.self,

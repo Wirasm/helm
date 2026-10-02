@@ -68,6 +68,15 @@ extension SessionsActions {
                     throw Refused(answer.reason ?? "benchd \(answer.status.rawValue)")
                 }
             },
+            resume: { harness, id, cwd in
+                let answer = try BenchClient.request(
+                    BenchSpawnRequest(
+                        id: requestID(), agent: harness, cwd: cwd, conversation: .resume(id)),
+                    at: socket.get(), answering: BenchSpawned.self)
+                guard answer.status == .ok else {
+                    throw Refused(answer.reason ?? "benchd \(answer.status.rawValue)")
+                }
+            },
             workspace: { [weak workbench] in workbench?.workspacePath },
             send: { [weak workbench] verb in workbench?.send(verb, by: .operatorGesture) },
             hideDrawer: { [weak workbench] in
