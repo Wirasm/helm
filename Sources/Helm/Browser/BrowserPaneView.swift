@@ -373,6 +373,7 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// A press that is a gesture (`BrowserGesture`) waits for its listener on the page before
     /// it is sent; every other press goes at once.
     private func press(_ event: NSEvent, button: String) {
+        finishComposition()
         guard held == nil, let model,
             let gesture = BrowserGesture(button: button, modifiers: event.modifierFlags),
             let pressed = mouseEvent(event, type: "mousePressed", button: button)
@@ -541,45 +542,25 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
         return m
     }
 
-    // MARK: Edit menu
-
-    @objc func copy(_: Any?) {
-        Task { @MainActor [weak self] in
-            guard let self, let text = await model?.selectedText(), !text.isEmpty else { return }
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-        }
-    }
-
-    @objc func cut(_ sender: Any?) {
-        copy(sender)
-        model?.key(Self.command("deleteBackward", key: "Backspace", code: "Backspace", vk: 8))
-    }
-
-    @objc func paste(_: Any?) {
-        guard let payload = BrowserPaste(pasteboard: pasteboard) else { return }
-        model?.paste(payload)
-    }
-
-    @objc override func selectAll(_: Any?) {
-        model?.key(Self.command("selectAll", key: "a", code: "KeyA", vk: 65, meta: true))
-    }
-
-    private static func command(
-        _ name: String, key: String, code: String, vk: Int, meta: Bool = false
-    ) -> BrowserPaneModel.KeyEvent {
-        .init(
-            type: "rawKeyDown", modifiers: meta ? BrowserModifiers.meta.rawValue : 0, key: key,
-            code: code, windowsVirtualKeyCode: vk, commands: [name])
-    }
-
     // MARK: NSTextInputClient
+
+    override func resignFirstResponder() -> Bool {
+        finishComposition()
+        return super.resignFirstResponder()
+    }
+
+    /// Chrome finalizes on a click independently of AppKit. Commit before focus moves,
+    /// then discard AppKit's composition so the next key cannot unmark the same text again.
+    private func finishComposition() {
+        guard hasMarkedText() else { return }
+        unmarkText()
+        inputContext?.discardMarkedText()
+    }
 
     func insertText(_ string: Any, replacementRange _: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
         let wasComposing = hasMarkedText()
-        markedText = ""
-        markedSelection = NSRange(location: NSNotFound, length: 0)
+        clearMarkedText()
         guard !text.isEmpty else { return }
         if let event = pendingKey, !pendingHandled, !wasComposing, text.count == 1 {
             pendingHandled = true
@@ -609,19 +590,28 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
             ? NSRange(location: NSNotFound, length: 0) : selectedRange
         pendingHandled = true
         model?.setComposition(markedText, selection: selectedRange)
-        refreshCaret()
+        if markedText.isEmpty {
+            clearMarkedText()
+        } else {
+            refreshCaret()
+        }
     }
 
     func unmarkText() {
         guard hasMarkedText() else { return }
         model?.insertText(markedText)
+        clearMarkedText()
+    }
+
+    private func clearMarkedText() {
         markedText = ""
         markedSelection = NSRange(location: NSNotFound, length: 0)
+        caretRequest?.cancel()
+        caretRect = nil
     }
 
     private func refreshCaret() {
         caretRequest?.cancel()
-        caretRect = nil
         caretRequest = Task { @MainActor [weak self] in
             guard let self else { return }
             let rect = await model?.textCaretRect()
@@ -647,12 +637,12 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
     func firstRect(forCharacterRange _: NSRange, actualRange _: NSRangePointer?) -> NSRect {
         let rect: CGRect
         if let caretRect, let frame = currentFrame {
-            rect = BrowserTextInput.viewRect(
+            rect = BrowserGeometry.viewRect(
                 caretRect, in: bounds.size,
                 image: CGSize(width: frame.image.width, height: frame.image.height),
                 page: frame.pageSize)
         } else {
-            rect = .zero
+            rect = bounds
         }
         return window?.convertToScreen(convert(rect, to: nil)) ?? .zero
     }
@@ -675,24 +665,6 @@ protocol BrowserInputSink: AnyObject {
     func cursor(at point: CGPoint) async -> String?
     func open(_ url: URL)
     func perform(_ command: BrowserCommand)
-}
-
-/// Where a point in the pane lands on the page.
-enum BrowserGeometry {
-    /// The frame is drawn aspect-fit and centred (`contentsGravity = .resizeAspect`); a point
-    /// outside the drawn image is outside the page. `view` is in flipped (top-left) points.
-    static func pagePoint(
-        _ point: CGPoint, in view: CGSize, image: CGSize, page: CGSize
-    ) -> CGPoint? {
-        guard view.width > 0, view.height > 0, image.width > 0, image.height > 0 else { return nil }
-        let scale = min(view.width / image.width, view.height / image.height)
-        let drawn = CGSize(width: image.width * scale, height: image.height * scale)
-        let origin = CGPoint(x: (view.width - drawn.width) / 2, y: (view.height - drawn.height) / 2)
-        let u = (point.x - origin.x) / drawn.width
-        let v = (point.y - origin.y) / drawn.height
-        guard (0...1).contains(u), (0...1).contains(v) else { return nil }
-        return CGPoint(x: u * page.width, y: v * page.height)
-    }
 }
 
 // MARK: - The tab
