@@ -151,7 +151,7 @@ pub fn serve_codex(c: &mut Core, session: &bench_session::Session) {
     // that failed at once (a usage limit) fires no `Stop`, only a status.
     let earlier = crate::codex::running(&c.codex).and_then(|server| server.claim(thread));
     agent.set_activity(match earlier.as_deref() {
-        Some("idle" | "systemError") => Activity::Idle,
+        Some(status) if crate::codex::stopped(status) => Activity::Idle,
         _ => Activity::Busy,
     });
     c.agents.insert(key, Some(agent));
@@ -172,7 +172,7 @@ pub fn codex_notification(core: &Arc<Mutex<Core>>, method: &str, params: &Value)
     ) else {
         return;
     };
-    if !matches!(status, "idle" | "systemError") {
+    if !crate::codex::stopped(status) {
         return;
     }
     let key = SessionKey {
@@ -877,7 +877,13 @@ fn release_codex_threads(core: &Arc<Mutex<Core>>) {
         (Arc::clone(&c.codex), owned)
     };
     if let Some(server) = crate::codex::running(&host) {
-        server.release(&owned);
+        server.release(&owned, |thread| {
+            core.lock()
+                .unwrap()
+                .sessions
+                .values()
+                .any(|s| s.runtime_session.as_deref() == Some(thread))
+        });
     }
 }
 

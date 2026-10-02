@@ -49,7 +49,13 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     if let Some(pane) = only
         && waiting.is_empty()
     {
-        return Err(match next.pane(pane) {
+        drop(c);
+        // The pane changed while its thread was being re-entered: that thread goes too.
+        for spec in codex.into_values().filter_map(Result::ok).map(|r| r.spec) {
+            crate::codex::abandon(core, &spec);
+        }
+        let c = core.lock().unwrap();
+        return Err(match c.bench.document.pane(pane) {
             None => format!("no pane {pane} — `bench get` lists them"),
             Some(_) => format!("pane {pane} is not a terminal whose session has ended"),
         });

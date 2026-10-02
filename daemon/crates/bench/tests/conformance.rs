@@ -5141,6 +5141,56 @@ fn a_codex_spawn_whose_first_turn_is_refused_fails_and_lets_its_thread_go() {
 }
 
 #[test]
+fn a_codex_whose_session_fails_after_its_first_turn_has_that_turn_stopped() {
+    // The thread step succeeds and its first turn runs; then the session cannot start (its
+    // folder went). The turn is interrupted by its id and the thread let go, so no agent runs
+    // that no pane shows.
+    let home = TestHome::claim("cxstop");
+    let h = &home.dir;
+    let gone = h.join("gone");
+    fs::create_dir_all(&gone).unwrap();
+    let gone = gone.canonicalize().unwrap();
+    trust_codex(h, &[&gone]);
+    let fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &gone, &[]);
+    let (first, thread) = (
+        spawned["session"].as_str().unwrap().to_string(),
+        spawned["runtime_session"].as_str().unwrap().to_string(),
+    );
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+    fs::remove_dir_all(&gone).unwrap();
+    let mut resumed = bench(h, &["resume", &first]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resumed.stderr.contains("still live") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        resumed = bench(h, &["resume", &first]);
+    }
+    assert_ne!(resumed.code, 0, "{}", resumed.stdout);
+    assert_eq!(
+        fake.asked("turn/start", 2)[1]["threadId"],
+        thread,
+        "its turn ran"
+    );
+    let interrupt = &fake.asked("turn/interrupt", 1)[0];
+    assert_eq!(interrupt["threadId"], thread);
+    assert_eq!(interrupt["turnId"], "t1");
+    assert!(
+        fake.asked("thread/unsubscribe", 2)
+            .iter()
+            .filter(|u| u["threadId"] == thread)
+            .count()
+            >= 2,
+        "let go before the resume and again once abandoned"
+    );
+}
+
+#[test]
 fn a_codex_status_sent_before_its_session_is_registered_is_not_lost() {
     // A first turn that fails at once fires no Stop; codex says so in a status that can arrive
     // before benchd has registered the session. The agent starts idle, and its mail goes out.

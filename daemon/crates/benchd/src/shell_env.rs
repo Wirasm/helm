@@ -122,8 +122,9 @@ pub fn for_pane(root: &Path, pane: &str, shell: &str) -> Env {
 /// benchd starts for someone else inherits them: a shell, or the codex app-server whose
 /// environment reaches every agent's hooks (#466).
 pub fn agent_variables() -> Vec<String> {
-    std::env::vars()
-        .map(|(k, _)| k)
+    // `vars_os`: `vars` panics on a variable that is not UTF-8, and one is enough.
+    std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
         .filter(|k| k.starts_with("CLAUDE") || k.starts_with("PI_") || k.starts_with("BENCH_"))
         .filter(|k| k != "BENCH_DIR")
         .collect()

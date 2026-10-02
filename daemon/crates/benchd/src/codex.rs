@@ -202,7 +202,9 @@ impl Server {
         for name in crate::shell_env::agent_variables() {
             command.env_remove(name);
         }
-        for (name, _) in std::env::vars().filter(|(k, _)| k.starts_with("HELM_")) {
+        for (name, _) in
+            std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("HELM_"))
+        {
             command.env_remove(name);
         }
         command.env_remove("CODEX_HOME");
@@ -309,11 +311,17 @@ impl Server {
 
     /// The first turn on a thread benchd made or re-entered for a session not registered yet.
     pub fn first_turn(&self, id: &str, text: &str) -> Result<(), String> {
-        let turn = self.turn(id, text)?;
+        let answer = self.turn(id, text);
         if let Some(first) = self.pending.lock().unwrap().get_mut(id) {
-            *first = Some(turn);
+            *first = match &answer {
+                Ok(turn) => Some(turn.clone()),
+                // No answer in time: a turn may be running whose id benchd never got.
+                Err(why) if why.contains("no answer") => Some(String::new()),
+                // Refused: no turn started.
+                Err(_) => None,
+            };
         }
-        Ok(())
+        answer.map(|_| ())
     }
 
     fn turn(&self, id: &str, text: &str) -> Result<String, String> {
@@ -331,19 +339,31 @@ impl Server {
     /// codex last said its status was, if anything.
     pub fn claim(&self, id: &str) -> Option<String> {
         self.pending.lock().unwrap().remove(id);
-        self.statuses.lock().unwrap().get(id).cloned()
+        self.statuses.lock().unwrap().remove(id)
     }
 
     /// The spawn of thread `id` failed after the thread was made: stop the turn benchd started
     /// on it and let it go, so nothing runs that no pane shows.
     pub fn abandon(&self, id: &str) {
-        if let Some(Some(turn)) = self.pending.lock().unwrap().remove(id) {
-            let _ = self.call("turn/interrupt", json!({ "threadId": id, "turnId": turn }));
+        let first = self.pending.lock().unwrap().remove(id);
+        let stopped = match first {
+            Some(Some(turn)) if !turn.is_empty() => self
+                .call("turn/interrupt", json!({ "threadId": id, "turnId": turn }))
+                .map(|_| ()),
+            // `turn/start` got no answer: codex may run a turn benchd has no id for.
+            Some(Some(_)) => Err("its first turn got no answer, so benchd has no id for it".into()),
+            Some(None) | None => Ok(()),
+        };
+        if let Err(why) = stopped {
+            eprintln!(
+                "benchd: codex thread {id} was abandoned, but its first turn was not stopped: {why}"
+            );
         }
         self.unsubscribe(id);
     }
 
     fn unsubscribe(&self, id: &str) {
+        self.statuses.lock().unwrap().remove(id);
         if self.subscribed.lock().unwrap().remove(id) {
             let _ = self.call("thread/unsubscribe", json!({ "threadId": id }));
         }
@@ -351,8 +371,10 @@ impl Server {
 
     /// Let go of every thread no session in `owned` holds any more, so codex unloads it once it
     /// is idle (`thread_unload_delay_secs`, 60 s by default) rather than keeping its MCP servers
-    /// for the life of the server. A pending thread is kept: its session is on its way.
-    pub fn release(&self, owned: &HashSet<String>) {
+    /// for the life of the server. A pending thread is kept: its session is on its way. Each
+    /// candidate is asked about again (`owned_now`) just before it goes, since its session may
+    /// have been registered, and its thread no longer pending, after `owned` was read.
+    pub fn release(&self, owned: &HashSet<String>, owned_now: impl Fn(&str) -> bool) {
         let loose: Vec<String> = {
             let pending = self.pending.lock().unwrap();
             self.subscribed
@@ -363,7 +385,7 @@ impl Server {
                 .cloned()
                 .collect()
         };
-        for id in loose {
+        for id in loose.into_iter().filter(|id| !owned_now(id)) {
             self.unsubscribe(&id);
         }
     }
@@ -382,6 +404,12 @@ impl Server {
         let _ = wrapper.kill();
         let _ = wrapper.wait();
     }
+}
+
+/// Whether a thread status says no turn is running: `idle`, or `systemError` after a turn that
+/// failed (a usage limit fires no `Stop`, measured on codex 0.157.0).
+pub fn stopped(status: &str) -> bool {
+    matches!(status, "idle" | "systemError")
 }
 
 fn thread_id(answer: Value) -> Result<String, String> {
