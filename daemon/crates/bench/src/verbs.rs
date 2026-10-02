@@ -561,12 +561,18 @@ fn working(activity: &Activity) -> bool {
 /// can lag one (a turn the hook already announced). An event only says when to look again.
 #[derive(Default)]
 struct Turn {
-    /// Work began by then: the time of a report that showed the agent at work, or of the report
-    /// seen before an event announced work. Only an idle report newer than it ends that work, so
-    /// a turn that started and failed between two looks counts, and a row older than the work it
-    /// follows (one that lags, or first appears after the hooks) does not. A report with no time
-    /// cannot be ordered and ends nothing: the timeout answers for it.
-    work_from: Option<u64>,
+    /// The time of the latest report that showed the agent at work. An idle report at that time
+    /// or later ends the work: a report is stamped when the agent's state changes, in order and
+    /// to the millisecond, on benchd's machine (by benchd for a hook, by Claude Code for its
+    /// registry row), so a turn that fails in the millisecond it started has the same time, and
+    /// is still after it.
+    worked_at: Option<u64>,
+    /// An event announced work after the report of this time. Only an idle report newer than
+    /// that one has caught up with it, so a turn that started and failed between two looks
+    /// counts, and a row that lags (keeping its old time) does not. A row older than the work it
+    /// follows (one that first appears after the hooks) ends nothing either. A report with no
+    /// time cannot be ordered and ends nothing: the timeout answers for it.
+    announced_after: Option<u64>,
     /// The time of the last report seen.
     last_since: u64,
 }
@@ -581,15 +587,17 @@ impl Turn {
         let since = r.since_ms.unwrap_or(0);
         self.last_since = since;
         if working(&r.activity) {
-            self.work_from = Some(self.work_from.map_or(since, |from| from.max(since)));
+            self.worked_at = Some(self.worked_at.map_or(since, |at| at.max(since)));
             return false;
         }
-        r.activity == Activity::Idle && self.work_from.is_some_and(|from| since > from)
+        let after_work = self.worked_at.is_some_and(|at| since >= at && since > 0);
+        let caught_up = self.announced_after.is_some_and(|at| since > at);
+        r.activity == Activity::Idle && (after_work || caught_up)
     }
 
     fn announced(&mut self) {
         let before = self.last_since;
-        self.work_from = Some(self.work_from.map_or(before, |from| from.max(before)));
+        self.announced_after = Some(self.announced_after.map_or(before, |at| at.max(before)));
     }
 }
 
@@ -813,6 +821,45 @@ mod tests {
 
     fn raw(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
+    }
+
+    fn report(activity: Activity, since_ms: u64) -> AgentReport {
+        AgentReport {
+            activity,
+            since_ms: Some(since_ms),
+        }
+    }
+
+    /// The flake on #628: the watch read the agent busy between two back-to-back hooks, and the
+    /// turn failed in the same millisecond it started, so the idle report carried the busy one's
+    /// time and was never "newer". A report is stamped when the state changes, in order, so an
+    /// idle report at a time it was seen working is the end of that work.
+    #[test]
+    fn a_turn_that_fails_in_the_millisecond_it_started_still_ends() {
+        let mut turn = Turn::default();
+        assert!(
+            !turn.saw(Some(&report(Activity::Idle, 90))),
+            "a session before a turn"
+        );
+        turn.announced();
+        assert!(!turn.saw(Some(&report(Activity::Busy, 100))));
+        assert!(turn.saw(Some(&report(Activity::Idle, 100))));
+    }
+
+    /// What equal times must not loosen: an announced turn is caught up with only by a report
+    /// newer than the one before it (a registry row that lags keeps its old time), and a row
+    /// older than the work it follows ends nothing.
+    #[test]
+    fn a_report_that_has_not_caught_up_ends_nothing() {
+        let mut lagging = Turn::default();
+        assert!(!lagging.saw(Some(&report(Activity::Idle, 10))));
+        lagging.announced();
+        assert!(!lagging.saw(Some(&report(Activity::Idle, 10))));
+        assert!(lagging.saw(Some(&report(Activity::Idle, 11))));
+
+        let mut late_row = Turn::default();
+        assert!(!late_row.saw(Some(&report(Activity::Busy, 100))));
+        assert!(!late_row.saw(Some(&report(Activity::Idle, 99))));
     }
 
     #[test]
