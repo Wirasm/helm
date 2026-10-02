@@ -50,7 +50,7 @@ targets:
         # package name — SPM sets this from `Package.swift`'s `name: "helm"` automatically,
         # but xcodegen's project has no such wiring, so `HelmWire`'s `package` types were
         # invisible to `Helm` here even though `swift build` saw them fine. Must match `Helm`'s
-        # own `SWIFT_PACKAGE_NAME` below exactly, or the two targets are two packages again.
+        # own and `BenchKit`'s `SWIFT_PACKAGE_NAME` below exactly, or they are separate packages again.
         SWIFT_PACKAGE_NAME: helm
   # benchd's client, shared with Pocket (Pocket/project.yml): Package.swift's `BenchKit` target, in
   # lockstep with it as HelmWire is.

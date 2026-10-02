@@ -83,7 +83,7 @@ struct SessionRowView: View {
     }
 }
 
-/// The last verb's failure, when there is one, in benchd's words.
+/// Why the last sessions poll failed for a workspace, when it did, in benchd's words.
 struct Failure: View {
     @EnvironmentObject private var model: PocketModel
 

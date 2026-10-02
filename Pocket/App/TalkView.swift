@@ -12,6 +12,8 @@ struct TalkView: View {
     @State private var unreachable: String?
     /// Why the last key or message was not taken, until one is.
     @State private var refused: String?
+    /// A message is on its way to benchd.
+    @State private var sending = false
     @State private var message = ""
 
     var body: some View {
@@ -82,7 +84,9 @@ struct TalkView: View {
                 .autocorrectionDisabled()
                 .submitLabel(.send)
                 .onSubmit(sendMessage)
-            Button("↑", action: sendMessage).foregroundStyle(Palette.finished)
+            Button("↑", action: sendMessage)
+                .foregroundStyle(sending ? Palette.faint : Palette.finished)
+                .disabled(sending)
         }
         .font(Mono.body)
         .foregroundStyle(Palette.text)
@@ -92,17 +96,27 @@ struct TalkView: View {
     }
 
     /// The message stays in the box until benchd has taken it, so a refused one can be sent again.
+    /// One at a time: a second tap while the first is on its way would type it into the agent twice.
     private func sendMessage() {
         let sent = message
-        guard !sent.isEmpty else { return }
-        send(.message(sent)) { if message == sent { message = "" } }
+        guard !sent.isEmpty, !sending else { return }
+        sending = true
+        send(.message(sent)) {
+            if message == sent { message = "" }
+        } after: {
+            sending = false
+        }
     }
 
-    private func send(_ input: BenchScreenInput, then delivered: @escaping () -> Void = {}) {
+    private func send(
+        _ input: BenchScreenInput, then delivered: @escaping () -> Void = {},
+        after answered: @escaping () -> Void = {}
+    ) {
         let target = target
         Task {
             refused = await model.send(input, to: target)?.description
             if refused == nil { delivered() }
+            answered()
         }
     }
 

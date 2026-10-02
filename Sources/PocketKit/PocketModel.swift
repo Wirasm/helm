@@ -59,7 +59,7 @@ package final class PocketModel: ObservableObject {
     /// Every workspace's sessions, asked one by one. A workspace benchd does not answer for keeps
     /// the rows it had, and `failure` says why; the others still update.
     package func refreshSessions() async {
-        guard let endpoint else { return }
+        guard let endpoint, let asked = client else { return }
         var answered: [String: [BenchSessionRow]] = [:]
         var refused: String?
         for workspace in workspaces {
@@ -71,6 +71,8 @@ package final class PocketModel: ObservableObject {
                 refused = refused ?? why.description
             }
         }
+        // A poll that began before `connect` moved to another benchd answers for the old one.
+        guard client === asked else { return }
         sessions = answered
         failure = refused
     }

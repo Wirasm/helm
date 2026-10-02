@@ -79,6 +79,31 @@ final class PocketModelTests: XCTestCase {
         }
     }
 
+    /// A sessions poll that began before Pocket moved to another benchd answers for the old one,
+    /// and is not drawn over the new connection.
+    func testAPollFromTheBenchdLeftBehindIsDropped() async throws {
+        let old = try FakeBenchd(
+            document: BenchFixture.document(
+                "/w/helm", BenchFixture.bench([BenchFixture.terminal()]), seq: 1),
+            tcp: true)
+        defer { old.stop() }
+        old.answer = { request in
+            // Long enough for the test to move to the other benchd while this is unanswered.
+            Thread.sleep(forTimeInterval: 0.5)
+            return ["id": request["id"] ?? "", "status": "ok", "data": ["rows": [Self.row()]]]
+        }
+        let model = PocketModel()
+        model.connect(old.endpoint.description)
+        for _ in 0..<150 where model.workspaces.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let poll = Task { await model.refreshSessions() }
+        try await Task.sleep(for: .milliseconds(100))
+        model.connect("tcp://127.0.0.1:9")
+        await poll.value
+        XCTAssertEqual(model.sessions, [:], "the old benchd's rows were drawn after moving")
+    }
+
     /// Pocket reaches benchd over TCP only: anything else is refused by name, and nothing is
     /// followed.
     func testAnythingButTCPIsRefusedByName() {
