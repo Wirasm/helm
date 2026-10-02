@@ -178,6 +178,38 @@ class BrowserOOPIFLiveCase: BrowserControlLiveCase {
 
     func ownCurrentTab() throws { ownedTabs.append(try XCTUnwrap(pane.tabs.showing)) }
 
+    /// Observe the affected frame independently, then drain its event on the pane's connection.
+    func mutateFrame(
+        _ owner: String, at level: Level, method: String, mutation: String
+    ) async throws {
+        let frame = try XCTUnwrap(frames[level])
+        try await frame.connection.call("Page.enable", session: frame.session)
+        let remote = try await frame.connection.call(
+            "Runtime.evaluate", Evaluate(expression: owner, returnByValue: false),
+            session: frame.session, returning: ObjectReply.self)
+        let object = ObjectID(objectId: remote.result.objectId)
+        defer { frame.connection.send("Runtime.releaseObject", object, session: frame.session) }
+        let description = try await frame.connection.call(
+            "DOM.describeNode", object, session: frame.session, returning: DescribedFrame.self)
+        let affected = description.node.frameId
+        var observed = false
+        frame.connection.onEvent = { event in
+            guard event.sessionId == frame.session, event.method == method else { return }
+            let id =
+                method == "Page.frameNavigated"
+                ? event.params(NavigatedFrame.self)?.frame.id
+                : event.params(DetachedFrame.self)?.frameId
+            if id == affected { observed = true }
+        }
+        defer { frame.connection.onEvent = nil }
+        let changed: Bool = try await readFrame(mutation, at: level)
+        XCTAssertTrue(changed)
+        try await eventually("observed \(method) for the affected frame") { observed }
+        let drained = await pane.inputCall(
+            "Runtime.evaluate", Evaluate(expression: "true"), returning: Evaluated<Bool>.self)
+        XCTAssertEqual(drained?.result.value, true)
+    }
+
     func closeChildObserversAndAssertNoAttachments() async throws {
         let children = [Level.middle, .leaf].compactMap { frames[$0] }
         let ids = Set(children.map(\.target))
@@ -199,6 +231,20 @@ class BrowserOOPIFLiveCase: BrowserControlLiveCase {
     }
 
     private struct TargetID: Encodable { let targetId: String }
+    private struct ObjectID: Encodable { let objectId: String }
+    private struct ObjectReply: Decodable {
+        struct Remote: Decodable { let objectId: String }
+        let result: Remote
+    }
+    private struct DescribedFrame: Decodable {
+        struct Node: Decodable { let frameId: String }
+        let node: Node
+    }
+    private struct NavigatedFrame: Decodable {
+        struct Frame: Decodable { let id: String }
+        let frame: Frame
+    }
+    private struct DetachedFrame: Decodable { let frameId: String }
     private struct Attach: Encodable { let targetId: String; var flatten = true }
     private struct Attached: Decodable { let sessionId: String }
     private struct Target: Decodable {
