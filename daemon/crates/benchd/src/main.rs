@@ -40,6 +40,7 @@ mod live;
 mod prompts;
 mod prp;
 mod restore;
+mod resume_dir;
 mod rules;
 mod screen;
 mod sessions;
@@ -1045,17 +1046,20 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
             old.spec.agent.name()
         )));
     };
-    if old.spec.agent == bench_session::AgentKind::Codex {
-        codex_trust::may_run(&old.spec.cwd).map_err(refused)?;
-    }
     let mut spec = old.spec.resuming(runtime.to_string());
+    // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
+    let start = resume_dir::start(spec.agent, runtime, &spec.cwd).map_err(refused)?;
+    spec.cwd = start.cwd;
+    if spec.agent == bench_session::AgentKind::Codex {
+        codex_trust::may_run(&spec.cwd).map_err(refused)?;
+    }
     let (id, root, notices) = {
         let mut c = core.lock().unwrap();
         let id = format!("s{}", c.next_session);
         c.next_session += 1;
         (id, c.root.clone(), c.notices.clone())
     };
-    spawn::wire(&mut spec, &root).map_err(errored)?;
+    spawn::wire(&mut spec, &root, start.note.as_deref()).map_err(errored)?;
     spawn::codex_thread(core, &mut spec, &id, &old.handle).map_err(errored)?;
     let session = Session::spawn(
         id.clone(),

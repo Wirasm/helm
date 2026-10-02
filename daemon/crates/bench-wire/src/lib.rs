@@ -1234,9 +1234,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
     }
 
-    /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535):
-    /// `SpawnArgs` reads it whole, and helm's `BenchWireConformanceTests` encodes the same request
-    /// and decodes the reply.
+    /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535) and the
+    /// resume the sessions drawer asks for (#621): `SpawnArgs` reads each whole, and helm's
+    /// `BenchWireConformanceTests` encodes the same requests and decodes the reply.
     #[test]
     fn the_spawn_fixture_is_what_the_daemon_reads() {
         let path =
@@ -1249,6 +1249,12 @@ mod tests {
         let args: SpawnArgs = serde_json::from_value(fork.args.clone()).unwrap();
         assert_eq!(serde_json::to_value(&args).unwrap(), fork.args);
         assert!(args.fork.is_some() && args.prompt.is_some());
+        // The sessions drawer's resume of a finished row (#621), as the operator.
+        let resume: Request = serde_json::from_value(value["resume"].clone()).unwrap();
+        assert_eq!(resume.by, Some(Actor::Operator));
+        let args: SpawnArgs = serde_json::from_value(resume.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), resume.args);
+        assert!(args.resume.is_some() && args.prompt.is_none());
     }
 
     /// `fixtures/session-list.json` holds a `sessions` answer as helm reads it (M5b).

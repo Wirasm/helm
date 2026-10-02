@@ -56,6 +56,11 @@ pub struct SessionRow {
     pub root: String,
     /// The short branch checked out in `root`, or none when it has no readable branch.
     pub branch: Option<String>,
+    /// The model the agent runs, as its harness last recorded it: Claude's `model` attachment
+    /// (written at start and on every `/model`), pi's `model_change`, the model of codex's latest
+    /// `turn_context`. `null` while the harness has recorded none (a codex before its first
+    /// turn), and always sent.
+    pub model: Option<String>,
     pub state: SessionState,
     pub host: Host,
     pub open: OpenAction,
@@ -152,7 +157,8 @@ pub enum OpenAction {
     ClaudeAttach {
         job: String,
     },
-    /// Start `argv` in a new pane at `cwd`.
+    /// A finished conversation, resumed at `cwd`: helm sends `spawn --resume` (#621); `argv` is
+    /// the harness's own command, for a reader of `bench sessions --all`.
     Resume {
         argv: Vec<String>,
         cwd: String,
@@ -395,25 +401,18 @@ mod tests {
             m
         };
         assert_eq!(mail, [None, Some(false), Some(true)]);
-        assert!(
-            value["list"]["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|r| r.as_object().unwrap().contains_key("mail")),
-            "every row says whether it has a mailbox"
-        );
         let branches: Vec<Option<&str>> = list.rows.iter().map(|r| r.branch.as_deref()).collect();
         assert!(branches.contains(&Some("feat/sessions")));
         assert!(branches.contains(&None));
-        assert!(
-            value["list"]["rows"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|r| r.as_object().unwrap().contains_key("branch")),
-            "every row says whether its worktree has a branch"
-        );
+        let models: Vec<Option<&str>> = list.rows.iter().map(|r| r.model.as_deref()).collect();
+        assert!(models.contains(&Some("claude-opus-5-5[1m]")));
+        assert!(models.contains(&None));
+        // Each is sent as `null` rather than left out: every row says whether it has a mailbox,
+        // whether its worktree has a branch, and whether its model is known.
+        for key in ["mail", "branch", "model"] {
+            let rows = value["list"]["rows"].as_array().unwrap();
+            assert!(rows.iter().all(|r| r.get(key).is_some()), "{key}");
+        }
         assert_eq!(list.operator.handle, crate::OPERATOR_HANDLE);
 
         let written = serde_json::to_string_pretty(&json!({

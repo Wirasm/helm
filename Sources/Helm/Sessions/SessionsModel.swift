@@ -77,9 +77,18 @@ final class SessionsModel: ObservableObject {
             actions.hideDrawer()
             actions.send(.paneOpen(surface: .terminal(agent: nil, session: session)))
         case let .claudeAttach(job):
-            await run(["claude", "attach", job], in: nil)
-        case let .resume(argv, cwd):
-            await run(argv, in: cwd)
+            await run(["claude", "attach", job])
+        case let .resume(_, cwd):
+            // Through benchd rather than the row's argv typed into a shell: benchd tells the
+            // agent it was resumed, and brings back the worktree it ran in when that is gone
+            // (#621).
+            actions.hideDrawer()
+            let resume = actions.resume
+            let (harness, id) = (row.harness, row.id)
+            let answer = await Task.detached { Result { try resume(harness, id, cwd) } }.value
+            if case let .failure(error) = answer {
+                problem = "Could not resume \(id): \(error)"
+            }
         }
     }
 
@@ -97,10 +106,8 @@ final class SessionsModel: ObservableObject {
         await refresh()
     }
 
-    private func run(_ argv: [String], in cwd: String?) async {
-        let line =
-            (cwd.map { "cd \(LaunchLine.quoted($0)) && " } ?? "")
-            + argv.map(LaunchLine.quoted).joined(separator: " ")
+    private func run(_ argv: [String]) async {
+        let line = argv.map(LaunchLine.quoted).joined(separator: " ")
         actions.hideDrawer()
         if let failure = await actions.runInNewTerminal(line) {
             problem = failure
@@ -115,6 +122,9 @@ struct SessionsActions {
     var list: @Sendable (_ workspace: String) throws -> BenchSessionList
     /// `sessions/dismiss`. Blocking; called off the main actor.
     var dismiss: @Sendable (_ harness: String, _ id: String) throws -> Void
+    /// `spawn --resume` of conversation `id` where it ran, as the operator. Blocking; called off
+    /// the main actor.
+    var resume: @Sendable (_ harness: String, _ id: String, _ cwd: String) throws -> Void
     /// The workspace on screen.
     var workspace: @MainActor () -> WorkspacePath?
     /// A bench verb, as the operator: he pressed the row.

@@ -1,12 +1,14 @@
 //! pi's sessions: `~/.pi/agent/sessions/--<cwd with / as ->--/<timestamp>_<id>.jsonl`, whose
 //! first line is `{"type":"session","version":3,"id":…,"cwd":…}` (pi 0.84 to 0.99.2, format
 //! v3). A session's name is its latest `{"type":"session_info","name":…}` entry, and an empty
-//! name clears it (`/name`, `SessionManager.appendSessionInfo` in 0.99.2).
+//! name clears it (`/name`, `SessionManager.appendSessionInfo` in 0.99.2); its model is its
+//! latest `{"type":"model_change","modelId":…}`.
 
+use crate::latest::Field;
 use bench_wire::Unreadable;
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub const SOURCE: &str = "pi-session";
@@ -64,49 +66,30 @@ pub fn header(first_line: &str, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// What the name scan of one session file has read so far. Session files are append-only, so
-/// the scan resumes from `offset`; a file shorter than that was replaced and is read again.
-#[derive(Debug, Default, Clone)]
-pub struct NameScan {
-    offset: u64,
-    name: Option<String>,
-}
+/// The session's name as pi shows it: the latest `session_info`, an empty one clearing it.
+pub const NAME: Field = Field {
+    needle: b"\"session_info\"",
+    pick: |entry| {
+        (entry["type"] == "session_info").then(|| {
+            entry["name"]
+                .as_str()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        })
+    },
+};
 
-const SESSION_INFO: &[u8] = b"\"session_info\"";
-
-/// The session's name as pi shows it, reading only what was appended since the last call. A
-/// name is a label on a row, so a file that cannot be read has none.
-pub fn name(path: &Path, scan: &mut NameScan) -> Option<String> {
-    let len = fs::metadata(path).ok()?.len();
-    if len < scan.offset {
-        *scan = NameScan::default();
-    }
-    if len > scan.offset {
-        let mut buf = Vec::new();
-        let mut file = fs::File::open(path).ok()?;
-        file.seek(SeekFrom::Start(scan.offset)).ok()?;
-        file.take(len - scan.offset).read_to_end(&mut buf).ok()?;
-        // Only whole lines: pi may be halfway through writing the last one.
-        let end = memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1);
-        for line in buf[..end].split(|b| *b == b'\n') {
-            if memchr::memmem::find(line, SESSION_INFO).is_none() {
-                continue;
-            }
-            let Ok(entry) = serde_json::from_slice::<Value>(line) else {
-                continue;
-            };
-            if entry["type"] == "session_info" {
-                scan.name = entry["name"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|n| !n.is_empty())
-                    .map(str::to_string);
-            }
-        }
-        scan.offset += end as u64;
-    }
-    scan.name.clone()
-}
+/// The model the session runs: the latest `model_change`, which pi writes when a session starts
+/// and on every switch (`SessionManager.appendModelChange`).
+pub const MODEL: Field = Field {
+    needle: b"\"model_change\"",
+    pick: |entry| {
+        (entry["type"] == "model_change")
+            .then(|| entry["modelId"].as_str().map(str::to_string))
+            .flatten()
+    },
+};
 
 #[cfg(test)]
 mod tests {
@@ -119,55 +102,27 @@ mod tests {
     }
 
     #[test]
-    fn the_latest_name_wins_an_empty_one_clears_it_and_a_half_written_line_waits() {
-        let dir = std::env::temp_dir().join(format!("pi-name-{}", std::process::id()));
+    fn the_name_is_the_latest_session_info_and_the_model_the_latest_model_change() {
+        let dir = std::env::temp_dir().join(format!("pi-fields-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("s.jsonl");
-        let info = |name: &str| {
-            format!(
-                "{{\"type\":\"session_info\",\"id\":\"a\",\"parentId\":null,\"timestamp\":\"t\",\"name\":{name:?}}}\n"
-            )
-        };
-        let message = "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"call it session_info\"}}\n";
+        let lines = [
+            r#"{"type":"session","version":3}"#,
+            r#"{"type":"model_change","provider":"anthropic","modelId":"claude-opus-5-5"}"#,
+            r#"{"type":"message","message":{"role":"user","content":"call it session_info, model_change"}}"#,
+            r#"{"type":"session_info","name":"  Fix the build "}"#,
+            r#"{"type":"model_change","provider":"openrouter","modelId":"google/gemini-2.5-flash"}"#,
+        ];
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let read = |field: &Field| crate::latest::read(&path, field, &mut Default::default()).0;
+        assert_eq!(read(&NAME).as_deref(), Some("Fix the build"));
+        assert_eq!(read(&MODEL).as_deref(), Some("google/gemini-2.5-flash"));
         fs::write(
             &path,
-            format!("{{\"type\":\"session\",\"version\":3}}\n{message}"),
+            r#"{"type":"session_info","name":""}"#.to_string() + "\n",
         )
         .unwrap();
-        let mut scan = NameScan::default();
-        assert_eq!(
-            name(&path, &mut scan),
-            None,
-            "a message that mentions it is not one"
-        );
-        let append = |text: &str| {
-            use std::io::Write;
-            fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .unwrap()
-                .write_all(text.as_bytes())
-                .unwrap();
-        };
-        append(&info("  Fix the build "));
-        assert_eq!(name(&path, &mut scan).as_deref(), Some("Fix the build"));
-        let renamed = info("Ship it");
-        append(&renamed[..renamed.len() - 5]);
-        assert_eq!(
-            name(&path, &mut scan).as_deref(),
-            Some("Fix the build"),
-            "not yet whole"
-        );
-        append(&renamed[renamed.len() - 5..]);
-        assert_eq!(name(&path, &mut scan).as_deref(), Some("Ship it"));
-        append(&info(""));
-        assert_eq!(name(&path, &mut scan), None, "cleared");
-        fs::write(&path, info("Replaced")).unwrap();
-        assert_eq!(
-            name(&path, &mut scan).as_deref(),
-            Some("Replaced"),
-            "a shorter file is read again"
-        );
+        assert_eq!(read(&NAME), None, "an empty name clears it");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
