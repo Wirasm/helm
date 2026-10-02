@@ -2,7 +2,8 @@ import HelmWire
 import PocketKit
 import SwiftUI
 
-/// home: each workspace and the sessions on its bench Pocket can talk to.
+/// home: each workspace and the sessions on its bench Pocket can talk to, its orchestrators
+/// (the sessions the operator started) first and the rest dimmed under them.
 struct HomeView: View {
     @EnvironmentObject private var model: PocketModel
     let talk: (String) -> Void
@@ -20,6 +21,7 @@ struct HomeView: View {
                     }
                     ForEach(group.rows) { row in
                         SessionRowView(row: row, detail: "\(row.harness) · \(row.model ?? "?")")
+                            .opacity(row.isOrchestrator ? 1 : 0.6)
                             .onTapGesture { row.screen.map(talk) }
                     }
                 }
@@ -30,7 +32,8 @@ struct HomeView: View {
     }
 }
 
-/// agents: every session on the bench once, running first, with its age and what it waits for.
+/// agents: every session on the bench once, by what it wants from the operator, with its age and
+/// what it waits for.
 struct AgentsView: View {
     @EnvironmentObject private var model: PocketModel
     let talk: (String) -> Void
@@ -53,6 +56,9 @@ struct AgentsView: View {
     }
 
     private func detail(_ row: BenchSessionRow) -> String {
+        if let mail = row.operatorMail, mail.unread > 0 {
+            return "mailed you: \(mail.subject ?? "\(mail.unread) unread")"
+        }
         if case let .running(_, detail?) = row.state { return detail }
         return "\(row.harness) · \(row.model ?? "?")"
     }

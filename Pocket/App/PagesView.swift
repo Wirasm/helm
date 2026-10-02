@@ -1,0 +1,158 @@
+import CanvasKit
+import HelmWire
+import PocketKit
+import SwiftUI
+import WebKit
+
+/// pages: the plan and review pages in the workspaces' prp stores, newest first.
+struct PagesView: View {
+    @EnvironmentObject private var model: PocketModel
+    @State private var refused: String?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 6) {
+                ForEach(model.pages) { page in
+                    NavigationLink {
+                        PageView(page: page)
+                    } label: {
+                        PageRow(page: page, opened: model.opened.contains(page.path))
+                    }
+                }
+                if let refused {
+                    Text(refused).font(Mono.small).foregroundStyle(Palette.asking)
+                } else if model.pages.isEmpty {
+                    Text("no pages").font(Mono.small).foregroundStyle(Palette.faint)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .refreshable { refused = await model.loadPages()?.description }
+        .task(id: model.workspaces) { refused = await model.loadPages()?.description }
+    }
+}
+
+/// One page: ● when an agent opened it on the bench and a reply reaches it, its age.
+struct PageRow: View {
+    let page: PocketPage
+    let opened: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(opened ? "●" : "○").foregroundStyle(opened ? Palette.finished : Palette.faint)
+            Text(page.title).foregroundStyle(Palette.text).lineLimit(1).truncationMode(.head)
+            Spacer()
+            Text(BenchSessionRow.age(sinceMs: page.modifiedMs, now: Date()))
+                .foregroundStyle(Palette.dim)
+        }
+        .font(Mono.body)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+}
+
+/// One page, rendered from its bytes as helm renders a canvas, and the operator's reply under it.
+/// A reply goes into the page's live file, and benchd mails it to the agent that opened the page;
+/// a page no agent opened has nobody to mail, so it says so instead of offering to.
+struct PageView: View {
+    @EnvironmentObject private var model: PocketModel
+    @Environment(\.dismiss) private var dismiss
+    let page: PocketPage
+    @State private var reply = ""
+    @State private var sending = false
+    @State private var said: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button("‹") { dismiss() }.foregroundStyle(Palette.dim)
+                Text(page.title).foregroundStyle(Palette.text).lineLimit(1).truncationMode(.head)
+            }
+            .font(Mono.body)
+            if let files = model.files {
+                CanvasWebView(path: page.path, files: files)
+            }
+            if let said { Text(said).font(Mono.small).foregroundStyle(Palette.dim) }
+            if model.opened.contains(page.path) {
+                replyBox
+            } else {
+                Text("no agent opened this page on the bench: a reply would reach nobody")
+                    .font(Mono.small).foregroundStyle(Palette.faint)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .background(Palette.background)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var replyBox: some View {
+        HStack {
+            TextField("", text: $reply, prompt: Text("reply…").foregroundStyle(Palette.faint))
+                .textInputAutocapitalization(.never)
+                .onSubmit(send)
+            Button("↑", action: send)
+                .foregroundStyle(sending ? Palette.faint : Palette.finished)
+                .disabled(sending)
+        }
+        .font(Mono.body)
+        .foregroundStyle(Palette.text)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .overlay(alignment: .top) { Palette.line.frame(height: 1) }
+    }
+
+    /// One reply at a time; the text stays until benchd took it.
+    private func send() {
+        let text = reply
+        guard !text.isEmpty, !sending else { return }
+        sending = true
+        Task {
+            if let refused = await model.reply(text, to: page) {
+                said = refused.description
+            } else {
+                said = "replied"
+                if reply == text { reply = "" }
+            }
+            sending = false
+        }
+    }
+}
+
+/// helm's canvas page in a web view: `CanvasSchemeHandler` serves the page and its siblings from
+/// benchd's file verbs on the page's own `helm-canvas://` origin, and `CanvasDataChannel` lets the
+/// page's script write its live file, as helm's HTML canvas does.
+struct CanvasWebView: UIViewRepresentable {
+    let path: String
+    let files: any CanvasFiles
+
+    func makeUIView(context: Context) -> WKWebView {
+        let artifact = URL(fileURLWithPath: path)
+        let standardized = StandardizedPath(path)
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(
+            CanvasSchemeHandler(artifact: artifact, files: files) { files.document(artifact) },
+            forURLScheme: CanvasAddress.scheme)
+        if let live = BenchLiveFile.path(for: path) {
+            let channel = CanvasDataChannel(host: CanvasAddress.host(for: standardized)) {
+                write in
+                switch files.write(
+                    write.text, to: live, expect: .unchanged(write.base ?? ""),
+                    notify: write.notify)
+                {
+                case .written: .success(.written(write.text))
+                case let .changed(data): .success(.changed(String(decoding: data, as: UTF8.self)))
+                case let .failed(why): .failure(CanvasFileFailure(reason: why))
+                }
+            }
+            configuration.userContentController.addScriptMessageHandler(
+                channel, contentWorld: .page, name: CanvasDataWrite.handlerName)
+        }
+        let web = WKWebView(frame: .zero, configuration: configuration)
+        web.isOpaque = false
+        if let url = CanvasAddress.url(for: standardized) { web.load(URLRequest(url: url)) }
+        return web
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {}
+}

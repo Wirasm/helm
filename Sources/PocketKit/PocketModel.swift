@@ -1,4 +1,5 @@
 import BenchKit
+import CanvasKit
 import Combine
 import Foundation
 import HelmWire
@@ -19,6 +20,10 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var state: BenchClient.State = .disconnected("not connected")
     /// Why the last sessions poll failed for a workspace, until one succeeds for all of them.
     @Published package private(set) var failure: String?
+    /// The plan and review pages in the workspaces' stores, newest first (`loadPages`).
+    @Published package private(set) var pages: [PocketPage] = []
+    /// The canvases on the bench an agent opened: a reply to one of these is mailed to it.
+    @Published package private(set) var opened: Set<String> = []
 
     private var client: BenchClient?
     private var following: AnyCancellable?
@@ -33,6 +38,8 @@ package final class PocketModel: ObservableObject {
         following = nil
         workspaces = []
         sessions = [:]
+        pages = []
+        opened = []
         guard let endpoint = BenchEndpoint.tcp(url.trimmingCharacters(in: .whitespaces)) else {
             state = .disconnected("\(url) is not tcp://<host>:<port>")
             return
@@ -41,12 +48,22 @@ package final class PocketModel: ObservableObject {
         following = client.$state.sink { [weak self] in self?.state = $0 }
         client.onDocument = { [weak self] at in
             self?.workspaces = at.document.workspaces.map(\.path)
+            self?.opened = Set(
+                at.document.workspaces.flatMap(\.bench.panes).compactMap { pane in
+                    guard case let .canvas(path) = pane.surface, pane.opener != nil else {
+                        return nil
+                    }
+                    return path
+                })
         }
         client.start()
         self.client = client
     }
 
     package var endpoint: BenchEndpoint? { client?.endpoint }
+
+    /// A page's files through benchd, for `CanvasSchemeHandler` and the page's live file.
+    package var files: (any CanvasFiles)? { client.map(BenchCanvasFiles.init(client:)) }
 
     /// `sessions/all` for every workspace, until the calling task is cancelled.
     package func watchSessions(every interval: Duration = .seconds(2)) async {
@@ -95,18 +112,99 @@ package final class PocketModel: ObservableObject {
         return nil
     }
 
+    /// The `.html` pages of every workspace's prp store (`prp/stores`, then `prp/artifacts`),
+    /// newest first. nil once listed, else why not; the last list stays.
+    package func loadPages() async -> Refusal? {
+        guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
+        var keys: [String] = []
+        for workspace in workspaces {
+            let request = BenchPrpRequest(id: Self.id("stores"), .stores(workspace: workspace))
+            switch await Self.ask(request, at: endpoint, BenchPrpStores.self) {
+            case let .success(stores):
+                if let key = stores.workspace, !keys.contains(key) { keys.append(key) }
+            case let .failure(why): return why
+            }
+        }
+        var listings: [[BenchPrpArtifact]] = []
+        for key in keys {
+            let request = BenchPrpRequest(id: Self.id("artifacts"), .artifacts(store: key))
+            switch await Self.ask(request, at: endpoint, BenchPrpArtifacts.self) {
+            case let .success(artifacts): listings.append(artifacts.files)
+            case let .failure(why): return why
+            }
+        }
+        guard client === asked else { return nil }
+        pages = PocketPages.pages(files: listings)
+        return nil
+    }
+
+    /// Reply to `page`: an entry added to its live file, written over exactly what was read
+    /// (`expect`) with `notify`, so benchd mails the agent that opened the page. A write that
+    /// lost to another writer is replayed on what that writer left, once.
+    package func reply(_ text: String, to page: PocketPage) async -> Refusal? {
+        guard let endpoint else { return Refusal(Self.notConnected) }
+        guard let live = BenchLiveFile.path(for: page.path) else {
+            return Refusal("\(page.title) is not an HTML page")
+        }
+        let read = await Self.ask(
+            BenchFileReadRequest(id: Self.id("read"), path: live), at: endpoint,
+            BenchFileRead.self)
+        var current: Data?
+        switch read {
+        case let .success(.bytes(data)): current = data
+        case .success(.absent): current = nil
+        case .success(.outside): return Refusal("benchd will not read \(live)")
+        case let .failure(why): return why
+        }
+        for _ in 0..<2 {
+            guard let next = PocketReply.adding(text, at: Date(), to: current) else {
+                return Refusal(
+                    "the page's live file is not a JSON object; the reply was not written")
+            }
+            let request = BenchFileWriteRequest(
+                id: Self.id("write"), path: live, text: next,
+                expect: .unchanged(current.map { String(decoding: $0, as: UTF8.self) } ?? ""),
+                notify: true)
+            switch await Self.ask(request, at: endpoint, BenchFileWrite.self) {
+            case .success(.written): return nil
+            case let .success(.changed(now)): current = now
+            case let .failure(why): return why
+            }
+        }
+        return Refusal("the page's live file kept changing; send the reply again")
+    }
+
+    /// Start an orchestrator: `agent` in `workspace`, its first message `prompt`. benchd records
+    /// it as the operator's spawn and moves no focus on the Mac (`BenchSpawnRequest.start`).
+    package func start(
+        _ agent: String, in workspace: String, model: String?, effort: String?, prompt: String
+    ) async -> Refusal? {
+        guard let endpoint else { return Refusal(Self.notConnected) }
+        let request = BenchSpawnRequest(
+            id: Self.id("start"), agent: agent, cwd: workspace,
+            conversation: .start(prompt: prompt, model: model, effort: effort))
+        // An agent's first start can take seconds: benchd answers once its pane is up.
+        if case let .failure(why) = await Self.ask(
+            request, at: endpoint, BenchSpawned.self, timeout: 15)
+        {
+            return why
+        }
+        return nil
+    }
+
     private static let notConnected = "not connected to a benchd"
 
     private static func id(_ verb: String) -> String { "pocket-\(verb)-\(UUID().uuidString)" }
 
     /// One verb, off the main actor: the answer, or benchd's reason for refusing it.
     private nonisolated static func ask<Payload: Decodable & Sendable>(
-        _ request: some Encodable & Sendable, at endpoint: BenchEndpoint, _: Payload.Type
+        _ request: some Encodable & Sendable, at endpoint: BenchEndpoint, _: Payload.Type,
+        timeout: TimeInterval = BenchClient.requestTimeout
     ) async -> Result<Payload, Refusal> {
         await Task.detached {
             do {
                 let answer = try BenchClient.request(
-                    request, at: endpoint, answering: Payload.self)
+                    request, at: endpoint, answering: Payload.self, timeout: timeout)
                 guard answer.status == .ok, let data = answer.data else {
                     return .failure(Refusal(answer.reason ?? "benchd refused without a reason"))
                 }

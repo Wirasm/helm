@@ -9,7 +9,7 @@ import XCTest
 /// `Package.swift`'s own `name: "helm"` automatically, so `swift build` and `swift test` stay
 /// green no matter what `project.yml` says. `xcodegen generate` stays green too — it only
 /// regenerates the Xcode project, it does not build it. A hand-authored xcodegen project has no
-/// such wiring, so `HelmWire`, `BenchKit` and `Helm` each need `SWIFT_PACKAGE_NAME` spelled out by
+/// such wiring, so `HelmWire`, `BenchKit`, `CanvasKit` and `Helm` each need `SWIFT_PACKAGE_NAME` spelled out by
 /// hand in `project.yml`, held together only by comments cross-referencing each other — the same
 /// hand-maintained-set shape #221 exists to remove, one level down in the build config. Nothing
 /// in the whole Swift gate would notice a drift: it only surfaces at `make app`, as "the package
@@ -18,7 +18,7 @@ import XCTest
 /// config that makes `package` access resolve, rather than in the bundle identity it protects.
 final class SwiftPackageNameTests: XCTestCase {
     /// The drift guard. If `Package.swift`'s name and any target's `SWIFT_PACKAGE_NAME`
-    /// disagree, `HelmWire`'s and `BenchKit`'s `package` declarations stop being visible from that target under
+    /// disagree, the shared modules' `package` declarations stop being visible from that target under
     /// `make app` while every other gate stage stays green — the exact silent failure #221's PR
     /// review found by hand.
     func testPackageSwiftAndProjectYmlAgreeOnThePackageName() throws {
@@ -37,7 +37,7 @@ final class SwiftPackageNameTests: XCTestCase {
         // held by the `ios` part, which builds it). A target added to
         // that list without a matching entry here would pass silently — the same asymmetry
         // `DefaultsDomainTests` calls out for the resources build phase, one door over.
-        for target in ["HelmWire", "BenchKit", "Helm"] {
+        for target in ["HelmWire", "BenchKit", "CanvasKit", "Helm"] {
             let block = try XCTUnwrap(
                 targetBlock(named: target, in: spec),
                 "project.yml must declare a `\(target):` target under `targets:`")

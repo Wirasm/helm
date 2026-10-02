@@ -1,3 +1,4 @@
+import CanvasKit
 import WebKit
 import XCTest
 

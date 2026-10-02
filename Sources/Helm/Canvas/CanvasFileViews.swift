@@ -1,3 +1,4 @@
+import CanvasKit
 import SwiftUI
 import WebKit
 

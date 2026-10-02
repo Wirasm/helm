@@ -13,7 +13,7 @@ import HelmWire
 /// On one machine a verb is a unix-socket round trip (0.06 ms p50, spike S1).
 ///
 /// A protocol so a test can hold the files on its own disk (`DiskCanvasFiles`) without a benchd.
-protocol CanvasFiles: Sendable {
+package protocol CanvasFiles: Sendable {
     /// The file's bytes. `within` is the folder a page's sibling must be inside, symlinks
     /// followed on benchd's side.
     func read(_ path: String, within folder: String?) -> CanvasFileRead
@@ -34,7 +34,7 @@ protocol CanvasFiles: Sendable {
 /// answering, or answering that it could not read the file, means helm does not know what is
 /// there; `absent` means there is nothing to protect. An editor that took the first for the second
 /// would seed an empty draft and autosave it over the real file.
-enum CanvasFileRead: Equatable {
+package enum CanvasFileRead: Equatable {
     case bytes(Data)
     case absent
     /// Outside the folder the read was confined to.
@@ -44,7 +44,7 @@ enum CanvasFileRead: Equatable {
 }
 
 /// What a write did.
-enum CanvasFileWrite: Equatable {
+package enum CanvasFileWrite: Equatable {
     case written
     /// The file no longer held what the write expected. Nothing was written; these bytes are there.
     case changed(Data)
@@ -57,33 +57,36 @@ enum CanvasFileWrite: Equatable {
 /// not the bytes on disk, and a save sending it back as `unchanged` would never match what benchd
 /// compares against: every autosave a conflict the operator cannot clear (#529 review). The mark is
 /// kept here, so the editor round-trips the file exactly.
-enum CanvasText {
-    static func decode(_ data: Data) -> String? {
+package enum CanvasText {
+    package static func decode(_ data: Data) -> String? {
         guard String(data: data, encoding: .utf8) != nil else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
 
     /// The text as a renderer should see it: without the byte-order mark the draft keeps, which
     /// `marked` would otherwise read as part of the first line (a heading would not be one).
-    static func rendered(_ text: String) -> String {
+    package static func rendered(_ text: String) -> String {
         text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
     }
 }
 
-struct CanvasFileFailure: Error, LocalizedError, Equatable {
-    let reason: String
-    var errorDescription: String? { reason }
+package struct CanvasFileFailure: Error, LocalizedError, Equatable {
+    package let reason: String
+
+    package init(reason: String) { self.reason = reason }
+    package var errorDescription: String? { reason }
 }
 
 extension CanvasFiles {
     /// A write nobody is told about: the editor's save, the sidecar's refusal tests.
-    func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite {
+    package func write(_ text: String, to path: String, expect: BenchFileExpect) -> CanvasFileWrite
+    {
         write(text, to: path, expect: expect, notify: false)
     }
 
     /// An `.html` artifact's own bytes for the page, or nil — which fails the navigation and
     /// leaves the last render up (`CanvasSchemeHandler`). Why is logged: the page cannot say it.
-    func document(_ artifact: URL) -> Data? {
+    package func document(_ artifact: URL) -> Data? {
         switch read(artifact.path, within: nil) {
         case let .bytes(data): return data
         case .absent, .outside: return nil
@@ -96,10 +99,12 @@ extension CanvasFiles {
 
 /// The canvas's files through benchd: the client's endpoint, one verb per call. Blocking and
 /// bounded like every verb helm sends from the main actor (`BenchClient.requestTimeout`).
-struct BenchCanvasFiles: CanvasFiles {
-    let client: BenchClient
+package struct BenchCanvasFiles: CanvasFiles {
+    package let client: BenchClient
 
-    func read(_ path: String, within folder: String?) -> CanvasFileRead {
+    package init(client: BenchClient) { self.client = client }
+
+    package func read(_ path: String, within folder: String?) -> CanvasFileRead {
         let request = BenchFileReadRequest(id: Self.id(), path: path, within: folder)
         switch ask(request, answering: BenchFileRead.self) {
         case let .success(.bytes(data)): return .bytes(data)
@@ -109,7 +114,7 @@ struct BenchCanvasFiles: CanvasFiles {
         }
     }
 
-    func write(
+    package func write(
         _ text: String, to path: String, expect: BenchFileExpect, notify: Bool
     )
         -> CanvasFileWrite
@@ -123,7 +128,7 @@ struct BenchCanvasFiles: CanvasFiles {
         }
     }
 
-    func append(_ text: String, to path: String) throws {
+    package func append(_ text: String, to path: String) throws {
         let request = BenchFileAppendRequest(id: Self.id(), path: path, text: text)
         if case let .failure(failure) = ask(request, answering: BenchFileAppended.self) {
             throw failure

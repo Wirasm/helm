@@ -1,3 +1,4 @@
+import CanvasKit
 import Foundation
 
 /// The return path: comments accumulate BESIDE the canvas, never inside it — the agent

@@ -1,3 +1,4 @@
+import CanvasKit
 import XCTest
 
 @testable import Helm

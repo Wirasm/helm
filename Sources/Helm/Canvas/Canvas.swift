@@ -1,4 +1,5 @@
 import AppKit
+import CanvasKit
 import HelmWire
 import Inject
 import SwiftUI

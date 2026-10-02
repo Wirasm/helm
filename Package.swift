@@ -47,10 +47,18 @@ let package = Package(
             dependencies: ["HelmWire"],
             path: "Sources/BenchKit"
         ),
+        // A canvas page as helm and Pocket serve it: its `helm-canvas://` address, its bytes and
+        // siblings read through benchd's file verbs, and the channel its script writes its live
+        // file through. Nothing macOS-only, as BenchKit.
+        .target(
+            name: "CanvasKit",
+            dependencies: ["HelmWire", "BenchKit"],
+            path: "Sources/CanvasKit"
+        ),
         // What Pocket shows and sends, without its views, so `swift test` tests it on the Mac.
         .target(
             name: "PocketKit",
-            dependencies: ["HelmWire", "BenchKit"],
+            dependencies: ["HelmWire", "BenchKit", "CanvasKit"],
             path: "Sources/PocketKit"
         ),
         // The spike runs as a plain SPM executable (`swift run helm`) for fast iteration.
@@ -61,6 +69,7 @@ let package = Package(
             dependencies: [
                 "HelmWire",
                 "BenchKit",
+                "CanvasKit",
                 .product(name: "GhosttyTerminal", package: "GhosttyTerminal"),
                 .product(name: "InjectionNext", package: "InjectionNext"),
                 .product(name: "Inject", package: "Inject"),
@@ -119,7 +128,7 @@ let package = Package(
         // Non-GUI smoke: ghostty_init + config load + app create, no window.
         .testTarget(
             name: "HelmTests",
-            dependencies: ["Helm", "HelmWire", "BenchKit", "PocketKit"],
+            dependencies: ["Helm", "HelmWire", "BenchKit", "CanvasKit", "PocketKit"],
             path: "Tests/HelmTests",
             resources: [
                 // Real `archon --json` output, captured rather than typed. This PR shipped a

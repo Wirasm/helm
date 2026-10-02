@@ -1,3 +1,4 @@
+import CanvasKit
 import HelmWire
 import XCTest
 

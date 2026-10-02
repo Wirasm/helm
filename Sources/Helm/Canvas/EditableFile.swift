@@ -1,3 +1,4 @@
+import CanvasKit
 import Foundation
 
 /// A file the canvas will let the operator write into (#289).

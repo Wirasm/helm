@@ -1,3 +1,4 @@
+import CanvasKit
 import Foundation
 
 /// The canvas's theme, keyed off the effective appearance. Raw values

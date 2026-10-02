@@ -24,6 +24,20 @@
       "resume": "01a0faf8-b4ca-7122-9900-1340d800117a"
     }
   },
+  "start": {
+    "id": "pocket-1",
+    "verb": "spawn",
+    "by": {
+      "kind": "helm"
+    },
+    "args": {
+      "agent": "claude",
+      "cwd": "/Users/operator/Projects/prp",
+      "prompt": "Orchestrate #625 slice 3.",
+      "model": "opus",
+      "effort": "high"
+    }
+  },
   "fork_reply": {
     "session": "s7",
     "handle": "s7",

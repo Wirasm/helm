@@ -16,7 +16,7 @@ import WebKit
 /// concurrency story: nobody's write replaces a version its writer has not seen.
 ///
 /// `kind` from the first message, on `AGENTS.md`'s rule, so a second kind is an addition.
-struct CanvasDataWrite: Equatable {
+package struct CanvasDataWrite: Equatable {
     /// The handler an `.html` artifact posts to:
     /// `window.webkit.messageHandlers.helmCanvasData.postMessage(…)`, which answers with a
     /// promise. Page world, and deliberately not the annotation bridge's name or world: a page
@@ -25,19 +25,25 @@ struct CanvasDataWrite: Equatable {
     /// A page may write with nobody clicking, on load or on a timer, and a `notify` write mails
     /// the canvas's opener. That is the agent's own artifact waking the agent, which is why the
     /// mail says the *page* changed the file (`benchd/src/live.rs`) and not that he did.
-    static let handlerName = "helmCanvasData"
-    static let kind = "canvas.data.write"
+    package static let handlerName = "helmCanvasData"
+    package static let kind = "canvas.data.write"
 
     /// The JSON helm writes: keys sorted, pretty, a trailing newline. The same data always
     /// writes the same bytes, so a page that writes what is already there changes nothing.
-    let text: String
+    package let text: String
     /// What the page saw of the file: nil when there was none.
-    let base: String?
+    package let base: String?
     /// Whether the agent that opened the canvas is mailed about it. A page reporting its own
     /// state says `false`, so nobody is woken for it.
-    let notify: Bool
+    package let notify: Bool
 
-    enum Refusal: Error, Equatable {
+    package init(text: String, base: String?, notify: Bool) {
+        self.text = text
+        self.base = base
+        self.notify = notify
+    }
+
+    package enum Refusal: Error, Equatable {
         case notAnObject
         case unknownKind(String?)
         case noBase
@@ -56,7 +62,7 @@ struct CanvasDataWrite: Equatable {
     }
 
     /// From whatever WebKit handed over. Refuses rather than guesses, as every page channel does.
-    static func decode(_ body: Any) -> Result<CanvasDataWrite, Refusal> {
+    package static func decode(_ body: Any) -> Result<CanvasDataWrite, Refusal> {
         guard let payload = body as? [String: Any] else { return .failure(.notAnObject) }
         let kind = payload["kind"] as? String
         guard kind == Self.kind else { return .failure(.unknownKind(kind)) }
@@ -81,14 +87,14 @@ struct CanvasDataWrite: Equatable {
 }
 
 /// What the page is answered: the text now in the file, and whether it is the page's own.
-enum CanvasDataAnswer: Equatable {
+package enum CanvasDataAnswer: Equatable {
     /// Written. `text` is the file now, the page's next `base`.
     case written(String)
     /// Somebody else wrote it since the page read it, and nothing was written. `text` is what is
     /// there: apply your change to it and write again.
     case changed(String)
 
-    var reply: [String: Any] {
+    package var reply: [String: Any] {
         switch self {
         case let .written(text): ["kind": "written", "text": text]
         case let .changed(text): ["kind": "changed", "text": text]
@@ -109,20 +115,20 @@ enum CanvasDataAnswer: Equatable {
 /// handler, so a write is accepted only from this canvas's own main frame; without it one
 /// artifact could write another's data.
 @MainActor
-final class CanvasDataChannel: NSObject, WKScriptMessageHandlerWithReply {
-    typealias Write = (CanvasDataWrite) -> Result<CanvasDataAnswer, CanvasFileFailure>
+package final class CanvasDataChannel: NSObject, WKScriptMessageHandlerWithReply {
+    package typealias Write = (CanvasDataWrite) -> Result<CanvasDataAnswer, CanvasFileFailure>
 
     private let host: String
     private let onWrite: Write
 
-    init(host: String, onWrite: @escaping Write) {
+    package init(host: String, onWrite: @escaping Write) {
         self.host = host
         self.onWrite = onWrite
     }
 
     /// WebKit delivers script messages on the main thread, in order, which is what makes
     /// `assumeIsolated` right here: a page's second write is compared after its first landed.
-    nonisolated func userContentController(
+    package nonisolated func userContentController(
         _ controller: WKUserContentController, didReceive message: WKScriptMessage,
         replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void
     ) {

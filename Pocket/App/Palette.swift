@@ -18,6 +18,7 @@ enum Palette {
         case .asking: asking
         case .finished: finished
         case .working: faint
+        case .seen, .ended: dim
         }
     }
 }

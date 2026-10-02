@@ -33,7 +33,7 @@ on 2026-10-01. `HELM_CHECK_MIN_FREE_GB=<n>` moves the floor and `0` turns it off
 | `skills` | the `helm-board` and `post-canvas` skill gates | node, zsh, python3, git, lsof |
 | `daemon` | `daemon/test.sh`, when `daemon/`, `daemon.yml`, a `bench-*`, the `helm-canvas` or the `helm-orchestrate` skill, `RenderableFile.swift`, the shell integration or GhosttyTerminal's `Package.swift` changed | cargo, lsof |
 | `pi` | the `pi-extensions` gate, when `pi/` changed | node, `npm install` in `pi/`, lsof |
-| `ios` | Pocket built for the iOS simulator, when `Pocket/` or the `Sources/` it compiles (HelmWire, BenchKit, PocketKit) changed | Xcode with its iOS platform installed, xcodegen |
+| `ios` | Pocket built for the iOS simulator, when `Pocket/` or the `Sources/` it compiles (HelmWire, BenchKit, CanvasKit, PocketKit) changed | Xcode with its iOS platform installed, xcodegen |
 
 "Changed" means against `origin/development`, committed or not. The path rules live only in
 `scripts/check.sh` (`--needs <part> [base]` asks one). A missing tool is a `FAIL`, never a skip.
@@ -236,8 +236,8 @@ gets written.
 **Let Swift's access control show the seam.** An extension that has to mutate another file's
 `private(set)` state is the same module in two files; the split was wrong.
 
-**Pocket, the iPhone app, lives in `Pocket/`** (`Pocket/README.md`). It shares HelmWire and
-BenchKit, benchd's client, with helm; neither may hold anything macOS-only, and the `ios` part
+**Pocket, the iPhone app, lives in `Pocket/`** (`Pocket/README.md`). It shares HelmWire,
+BenchKit (benchd's client) and CanvasKit (a canvas page's serving) with helm; none may hold anything macOS-only, and the `ios` part
 proves it. helm-only client code, such as running `bench` as a process, stays in `Sources/Helm`.
 
 **pi extensions are TypeScript in `pi/`**, symlinked into `~/.pi/agent/extensions/`. Read the

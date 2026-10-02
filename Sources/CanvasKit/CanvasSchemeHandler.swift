@@ -38,7 +38,7 @@ import WebKit
 /// a data-race diagnostic rather than a safety win. The task therefore never leaves this
 /// method, and the one genuinely main-actor thing (the staged document) is fetched as
 /// plain `Data` across the boundary.
-final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
+package final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Every artifact this handler serves as *the document* is HTML — either the page helm
     /// generates from markdown, or an `.html` artifact itself. Siblings are typed from
     /// their own extension, so this is not a per-instance value.
@@ -64,16 +64,17 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// would have loaded rather than a stale snapshot.
     private let document: @MainActor () -> Data?
 
-    init(artifact: URL, files: any CanvasFiles, document: @escaping @MainActor () -> Data?) {
+    package init(artifact: URL, files: any CanvasFiles, document: @escaping @MainActor () -> Data?)
+    {
         self.directory = artifact.deletingLastPathComponent()
         self.files = files
         self.documentName = artifact.lastPathComponent
         self.document = document
     }
 
-    func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) { serve(task) }
+    package func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) { serve(task) }
 
-    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
+    package func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 
     /// The whole of `start`, minus the `WKWebView` it never looks at — so a test can hand it
     /// a task double instead of standing up a live WebKit process to ask what status a
@@ -84,7 +85,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     /// stopped between `start` and its completion, and there is no live-task bookkeeping to get
     /// wrong. The cost, on a benchd across a network, is one round trip per sibling on the main
     /// thread.
-    func serve(_ task: any WKURLSchemeTask) {
+    package func serve(_ task: any WKURLSchemeTask) {
         guard let url = task.request.url else { return fail(task, .badURL) }
 
         // The artifact itself.
