@@ -17,7 +17,8 @@ final class BrowserTextInputTests: XCTestCase {
         func key(_ params: BrowserPaneModel.KeyEvent) { keys.append(params) }
         func insertText(_ text: String) { inserted.append(text) }
         func paste(_: BrowserPaste) {}
-        func textCaretRect() async -> CGRect? { CGRect(x: 40, y: 20, width: 1, height: 18) }
+        var caret: () async -> CGRect? = { CGRect(x: 40, y: 20, width: 1, height: 18) }
+        func textCaretRect() async -> CGRect? { await caret() }
         func selectedText() async -> String? { nil }
         func viewportChanged(size _: CGSize, scale _: CGFloat) {}
         func gesture(_: BrowserGesture, dispatch: () -> Void) async -> BrowserPointerReport? {
@@ -104,6 +105,10 @@ final class BrowserTextInputTests: XCTestCase {
     }
 
     func testCandidateRectFollowsTheCaretThroughAspectFit() async throws {
+        try await positionKnownCaret()
+    }
+
+    private func positionKnownCaret() async throws {
         let image = try XCTUnwrap(
             CGContext(
                 data: nil, width: 400, height: 200, bitsPerComponent: 8, bytesPerRow: 0,
@@ -122,6 +127,79 @@ final class BrowserTextInputTests: XCTestCase {
             guard ContinuousClock.now < deadline else { return XCTFail("caret never positioned") }
             await Task.yield()
         }
+    }
+
+    func testLosingFocusCommitsOnceAndClearsMarkedText() {
+        surface.setMarkedText(
+            "あ", selectedRange: .init(location: 1, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        window.makeFirstResponder(nil)
+        XCTAssertFalse(surface.hasMarkedText())
+        surface.unmarkText()
+        XCTAssertEqual(recorder.inserted, ["あ"])
+    }
+
+    func testDiscardingAnExpiredCompositionNeverCommitsItOnFocusLoss() {
+        surface.setMarkedText(
+            "あ", selectedRange: .init(location: 1, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        surface.discardComposition()
+        window.makeFirstResponder(nil)
+        surface.unmarkText()
+        XCTAssertFalse(surface.hasMarkedText())
+        XCTAssertTrue(recorder.inserted.isEmpty)
+    }
+
+    func testUnknownCaretFallsBackToThePaneBounds() async throws {
+        let expected = window.convertToScreen(surface.convert(surface.bounds, to: nil))
+        XCTAssertEqual(candidateRect(), expected, "no caret or frame yet")
+        try await positionKnownCaret()
+        recorder.caret = { nil }
+        surface.setMarkedText(
+            "あい", selectedRange: .init(location: 2, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while candidateRect() != expected {
+            guard ContinuousClock.now < deadline else {
+                return XCTFail("unknown caret never fell back")
+            }
+            await Task.yield()
+        }
+    }
+
+    func testCandidateKeepsItsLastPositionWhileTheNextLookupIsPending() async throws {
+        try await positionKnownCaret()
+        let previous = candidateRect()
+        var reply: CheckedContinuation<CGRect?, Never>?
+        recorder.caret = { await withCheckedContinuation { reply = $0 } }
+        surface.setMarkedText(
+            "あい", selectedRange: .init(location: 2, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        XCTAssertEqual(candidateRect(), previous)
+        let lookupDeadline = ContinuousClock.now + .seconds(2)
+        while reply == nil {
+            guard ContinuousClock.now < lookupDeadline else {
+                return XCTFail("lookup never started")
+            }
+            await Task.yield()
+        }
+        reply?.resume(returning: CGRect(x: 60, y: 20, width: 1, height: 18))
+        let expected = window.convertToScreen(
+            surface.convert(CGRect(x: 120, y: 90, width: 2, height: 36), to: nil))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while candidateRect() != expected {
+            guard ContinuousClock.now < deadline else {
+                return XCTFail("new caret never positioned")
+            }
+            await Task.yield()
+        }
+        surface.unmarkText()
+        XCTAssertEqual(
+            candidateRect(), window.convertToScreen(surface.convert(surface.bounds, to: nil)))
+    }
+
+    private func candidateRect() -> CGRect {
+        surface.firstRect(forCharacterRange: .init(location: 0, length: 1), actualRange: nil)
     }
 
     func testCompositionWireUsesUTF16AndOmitsDocumentReplacementOffsets() throws {
