@@ -529,6 +529,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
     {
         let (session, handle) = (spawned.id.clone(), spawned.handle.clone());
         let forked_from = spawned.spec.conversation.forked_from().map(str::to_string);
+        let spawner = c.spawners.get(&session).cloned();
         // A conversation the spawn did not record: the hook's id is the first the daemon hears of
         // it. A fork's record says so, which is what brings it back read-only (#531).
         sessions::record_claim(
@@ -543,8 +544,10 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
                 },
                 recorded_at: now_rfc3339(),
                 forked_from,
-                // Its spawn recorded who asked under the id it knew; this one it did not know.
-                attention: AttentionRecord::default(),
+                attention: AttentionRecord {
+                    spawner,
+                    ..AttentionRecord::default()
+                },
             },
             args.pid,
         )?;

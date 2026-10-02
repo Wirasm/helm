@@ -330,6 +330,9 @@ fn register(
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
+    let live = &core.sessions;
+    core.spawners.retain(|id, _| live.contains_key(id));
+    core.spawners.insert(session.id.clone(), spawner.clone());
     hook::serve_codex(core, session);
     core.append(
         "session/spawned",
