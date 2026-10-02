@@ -88,6 +88,7 @@ final class BrowserFormPicker: ObservableObject {
                 release(captured)
                 throw error
             }
+            if error is BrowserFrameResolver.Invalidation { throw error }
             return false
         }
     }
@@ -95,8 +96,6 @@ final class BrowserFormPicker: ObservableObject {
     private func read(
         _ held: Element, hit: BrowserFrameResolver.Object, pointer: Bool, isCurrent: () -> Bool
     ) async throws -> Control? {
-        guard isCurrent() else { return nil }
-        try await held.frames.retainDocumentPath(of: held.target)
         guard isCurrent() else { return nil }
         let connection = held.frames.connection
         let object = held.target.id

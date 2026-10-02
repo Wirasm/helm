@@ -3,6 +3,8 @@ import Foundation
 /// Attach only along one picker gesture's OOPIF path. Objects never lose their owning session.
 @MainActor
 final class BrowserFrameResolver {
+    enum Invalidation: Error { case frameChanged }
+
     struct Object {
         let session: String
         let id: String
@@ -12,6 +14,8 @@ final class BrowserFrameResolver {
     private let root: String
     private var children: [String: String] = [:]
     private var framePath: Set<String> = []
+    private enum Capture { case resolving(Set<String>), resolved }
+    private var capture = Capture.resolving([])
     private var closed = false
 
     init(connection: CDPConnection, session: String) {
@@ -26,16 +30,15 @@ final class BrowserFrameResolver {
         }
         children.removeAll()
         framePath.removeAll()
+        capture = .resolved
     }
 
     func invalidated(by event: CDPConnection.Event) -> Bool {
         switch event.method {
         case "Page.frameNavigated":
-            return owns(event.sessionId)
-                && event.params(Navigation.self).map { framePath.contains($0.frame.id) } == true
+            return changed(event.params(Navigation.self)?.frame.id, session: event.sessionId)
         case "Page.frameDetached":
-            return owns(event.sessionId)
-                && event.params(FrameDetached.self).map { framePath.contains($0.frameId) } == true
+            return changed(event.params(FrameDetached.self)?.frameId, session: event.sessionId)
         case "Target.detachedFromTarget":
             guard let detached = event.params(Detach.self) else { return false }
             return children[detached.sessionId] != nil
@@ -50,13 +53,37 @@ final class BrowserFrameResolver {
         session == root || session.map { children[$0] != nil } == true
     }
 
+    private func changed(_ frame: String?, session: String?) -> Bool {
+        guard let frame, owns(session) else { return false }
+        if framePath.contains(frame) { return true }
+        if case .resolving(var changes) = capture {
+            changes.insert(frame)
+            capture = .resolving(changes)
+        }
+        return false
+    }
+
+    private var changedDuringCapture: Bool {
+        if case let .resolving(changes) = capture { return !changes.isEmpty }
+        return false
+    }
+
+    private func retain(_ frame: String) throws -> Bool {
+        if case let .resolving(changes) = capture, changes.contains(frame) {
+            throw Invalidation.frameChanged
+        }
+        return framePath.insert(frame).inserted
+    }
+
     /// Several same-origin documents share a session. Retain only this object's document path.
-    func retainDocumentPath(of object: Object) async throws {
+    private func retainDocumentPath(of object: Object) async throws {
         var held = try await connection.call(
             "Runtime.callFunctionOn",
             DocumentRoot(
                 objectId: object.id,
-                functionDeclaration: "function() { return this.ownerDocument.documentElement; }"),
+                functionDeclaration:
+                    "function() { return (this.nodeType === 9 ? this : this.ownerDocument).documentElement; }"
+            ),
             session: object.session, returning: ObjectReply.self
         ).result.objectId
         guard held != nil else {
@@ -71,7 +98,7 @@ final class BrowserFrameResolver {
             guard let frame = description.node.frameId else {
                 throw CDPConnection.Failure(message: "The picker document no longer has a frame.")
             }
-            guard framePath.insert(frame).inserted else { return }
+            guard try retain(frame) else { return }
             held = try await connection.call(
                 "Runtime.callFunctionOn",
                 DocumentRoot(
@@ -85,6 +112,18 @@ final class BrowserFrameResolver {
     }
 
     func resolve(at point: CGPoint?) async throws -> Object? {
+        do {
+            let object = try await resolvePath(at: point)
+            if object == nil, changedDuringCapture { throw Invalidation.frameChanged }
+            return object
+        } catch {
+            // A lost context cannot complete ownership. Its pending generation must not fall through.
+            if changedDuringCapture { throw Invalidation.frameChanged }
+            throw error
+        }
+    }
+
+    private func resolvePath(at point: CGPoint?) async throws -> Object? {
         var session = root
         var point = point
         while !closed {
@@ -96,9 +135,14 @@ final class BrowserFrameResolver {
                 returning: Description.self)
             guard description.node.nodeName == "IFRAME",
                 description.node.contentDocument == nil, let frame = description.node.frameId
-            else { returned = true; return object }
+            else {
+                try await retainDocumentPath(of: object)
+                capture = .resolved
+                returned = true
+                return object
+            }
+            _ = try retain(frame)
             try await retainDocumentPath(of: object)
-            framePath.insert(frame)
             let child = try await attach(frame)
             guard !closed else { return nil }
             if let parentPoint = point {

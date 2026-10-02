@@ -117,6 +117,9 @@ final class BrowserPageInput {
             return try await forms.open(
                 at: point, connection: dest.connection, session: dest.session,
                 isCurrent: { self.current(dest, revision: revision) })
+        } catch is BrowserFrameResolver.Invalidation {
+            if current(dest, revision: revision) { reset() }
+            return true
         } catch {
             if current(dest, revision: revision) {
                 failed("The page could not open this picker: \(error)")
