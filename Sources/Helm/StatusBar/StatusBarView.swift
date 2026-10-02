@@ -8,9 +8,8 @@ import SwiftUI
 /// the command palette and search everything (#500). It used
 /// to be the whole hint row, which spent most of the bar on a dozen chords the operator
 /// already knows; the pop-up shows the same hints from the same table, when he asks. On the
-/// right, the three facts helm already knows: which workspace, which branch, and whether an
-/// agent in it has stopped and wants them, beside benchd's capsules (how close each plan is to
-/// its limits among them, #143).
+/// right, which workspace and which branch, beside benchd's capsules: how many agents need the
+/// operator (asking, finished, mail; #357) and how close each plan is to its limits (#143).
 ///
 /// **No decisions.** What the facts are is `StatusSummary`, which is pure and tested; which
 /// keys exist is the pop-up's (`KeyPopupContent`). This file arranges them and picks type
@@ -26,8 +25,6 @@ struct StatusBarView: View {
     let workbench: WorkbenchModel
     /// The operator's just runs that failed or did not start.
     let justRuns: JustRuns
-    /// Already polled on the workspace bar's behalf; observing it here costs nothing new.
-    @ObservedObject private var board = BoardModel.shared
     /// A `@StateObject` because the poll's lifetime should be this bar's, not a render's (a
     /// handler lives where its lifetime is right, `AGENTS.md`). A badge nobody can see is a
     /// poll nobody needs.
@@ -78,25 +75,20 @@ struct StatusBarView: View {
     private var stats: some View {
         let summary = StatusSummary.of(
             workspace: model.selectedWorkspace,
-            branches: model.branches,
-            presence: board.presence
+            branches: model.branches
         )
         HStack(spacing: 6) {
             JustCapsules(runs: justRuns) { log in
                 workbench.send(.paneOpen(surface: .canvas(path: log)), by: .operatorGesture)
             }
             DrawerCapsules(model: workbench)
-            WaitingCapsule(foregrounds: TerminalManager.shared.foregrounds, workbench: workbench)
+            AttentionCapsules(foregrounds: TerminalManager.shared.foregrounds, workbench: workbench)
             UsageCapsule(foregrounds: TerminalManager.shared.foregrounds)
             BenchStatusBadge(client: workbench.client, workbench: workbench)
             isolationBadge
             keepAwakeCapsule
             keymapBadge
             buildBadge
-            if let label = summary.agentLabel {
-                AgentDot(presence: summary.agents)
-                Text(label).foregroundStyle(Color.textMuted)
-            }
             if let workspace = summary.workspace {
                 Text(workspace).foregroundStyle(Color.textMuted)
             }

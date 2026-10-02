@@ -263,6 +263,8 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
 
     package struct Entry: Decodable, Equatable, Sendable {
         package var session: String
+        /// Its mailbox handle: who it is, in the operator's list (M1, #357).
+        package var handle: String?
         /// The pane showing it, if one does.
         package var pane: UUID?
         /// What has the terminal: the session's own process, or the job its shell runs. nil once
@@ -278,16 +280,18 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
         package var operatorMail: BenchOperatorMail?
 
         private enum CodingKeys: String, CodingKey {
-            case session, pane, waiting, report, done
+            case session, handle, pane, waiting, report, done
             case foregroundPid = "foreground_pid"
             case operatorMail = "operator_mail"
         }
 
         package init(
-            session: String, pane: UUID?, foregroundPid: Int32?, waiting: Waiting? = nil,
-            report: Report? = nil, done: BenchDone? = nil, operatorMail: BenchOperatorMail? = nil
+            session: String, handle: String? = nil, pane: UUID?, foregroundPid: Int32?,
+            waiting: Waiting? = nil, report: Report? = nil, done: BenchDone? = nil,
+            operatorMail: BenchOperatorMail? = nil
         ) {
             self.session = session
+            self.handle = handle
             self.pane = pane
             self.foregroundPid = foregroundPid
             self.waiting = waiting

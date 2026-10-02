@@ -1027,6 +1027,18 @@ fn settled(req: &Request, result: Result<Value, sessions::Refusal>) -> (Response
     (response, AfterResponse::Done)
 }
 
+/// A layout verb. ⌘⇧J (`focus/waiting`) walks mail to the operator too, so his inbox is read
+/// first, off the core lock, like the `sessions` answers read it.
+fn layout_answer(core: &Arc<Mutex<Core>>, req: &Request) -> Response {
+    let mail = if req.verb == "focus/waiting" {
+        let root = core.lock().unwrap().root.clone();
+        attention::operator_mail(&root)
+    } else {
+        HashMap::new()
+    };
+    layout::answer(&mut core.lock().unwrap(), req, &mail)
+}
+
 /// A verb's answer to `req`, or its refusal, closing the connection.
 fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterResponse) {
     let (status, reason, data) = match result {
@@ -1196,10 +1208,7 @@ fn dispatch(
         Some(Verb::PrpStores) => answered(req, prp::stores(&req.args)),
         Some(Verb::PrpArtifacts) => answered(req, prp::artifacts(&req.args)),
         Some(Verb::PathResolve) => answered(req, prp::resolve_path(&req.args)),
-        Some(Verb::Layout) => {
-            let response = layout::answer(&mut core.lock().unwrap(), req);
-            (response, AfterResponse::Done)
-        }
+        Some(Verb::Layout) => (layout_answer(core, req), AfterResponse::Done),
         Some(Verb::Events) => {
             let since = req.args.get("since").and_then(Value::as_u64).unwrap_or(0);
             let path = {

@@ -80,8 +80,22 @@ final class TerminalManager: ObservableObject {
         forwarding = surfaces.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        foregrounds.onAsking = { [weak self] items in self?.tellAsking(items) }
         // No pty is created until a workspace is first visited. This bounds
         // startup cost to the active context rather than all remembered folders.
+    }
+
+    /// An agent started asking the operator something (M1, #357): a desktop notification when he
+    /// cannot see its pane or helm is not in front, by the gate a terminal's own notification
+    /// answers to. Asking only: a finished turn or mail waits for him to look.
+    private func tellAsking(_ items: [AttentionItem]) {
+        for item in items {
+            let pane = item.pane.flatMap { pane in sessions.first { $0.id == pane } }
+            let shown = TerminalNotificationGate.shouldDeliver(
+                appIsActive: NSApp.isActive, paneIsVisible: pane?.isVisible ?? false)
+            guard shown else { continue }
+            TerminalNotifier.shared.deliver(title: item.who, body: item.words ?? "asking")
+        }
     }
 
     func sessions(for workspacePath: WorkspacePath) -> [TerminalSession] {

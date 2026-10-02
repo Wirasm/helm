@@ -61,6 +61,14 @@ final class SessionsModel: ObservableObject {
         }
     }
 
+    /// Go to the pane of an agent that needs the operator (M1, #357), as his own gesture: focus
+    /// arriving there is what marks a finished turn seen. One with no pane goes nowhere.
+    func goTo(_ item: AttentionItem) {
+        guard let pane = item.pane else { return }
+        actions.hideDrawer()
+        actions.send(.paneShow(pane))
+    }
+
     /// Hide the drawer, then carry out the row's own action, so the keyboard lands on what the
     /// action opened. A terminal that could not run its line leaves the reason on `problem`.
     func open(_ row: BenchSessionRow) async {
