@@ -10,9 +10,11 @@ import HelmWire
 /// protocol is the same bytes either way.
 ///
 /// Not `Sendable`: a connection belongs to the one thread that opened it.
-final class BenchSocket {
-    struct Failure: Error, Equatable, CustomStringConvertible {
-        let description: String
+package final class BenchSocket {
+    package struct Failure: Error, Equatable, CustomStringConvertible {
+        package let description: String
+
+        package init(description: String) { self.description = description }
     }
 
     private let fd: Int32
@@ -25,7 +27,7 @@ final class BenchSocket {
     /// Connect, with `timeout` bounding every read and write after it. nil timeout is a
     /// connection that may wait for ever, which only the follower wants: frames arrive when
     /// something changes, and an idle bench changes nothing for hours.
-    init(endpoint: BenchEndpoint, timeout: TimeInterval?) throws {
+    package init(endpoint: BenchEndpoint, timeout: TimeInterval?) throws {
         switch endpoint {
         case let .unix(path): fd = try Self.connectUnix(path)
         case let .tcp(host, port): fd = try Self.connectTCP(host: host, port: port)
@@ -114,7 +116,7 @@ final class BenchSocket {
 
     deinit { close() }
 
-    func close() {
+    package func close() {
         guard !closed else { return }
         closed = true
         Darwin.close(fd)
@@ -122,11 +124,11 @@ final class BenchSocket {
 
     /// Wake a thread blocked in `readLine` from another thread; it then reads end of file.
     /// The descriptor stays open until `close`, so it cannot be reused under the reader.
-    func interrupt() {
+    package func interrupt() {
         shutdown(fd, SHUT_RDWR)
     }
 
-    func writeLine(_ line: Data) throws {
+    package func writeLine(_ line: Data) throws {
         var bytes = line
         bytes.append(0x0A)
         try bytes.withUnsafeBytes { raw in
@@ -144,7 +146,7 @@ final class BenchSocket {
     }
 
     /// The next line without its newline, or nil at end of file.
-    func readLine() throws -> Data? {
+    package func readLine() throws -> Data? {
         while true {
             let from = buffer.index(buffer.startIndex, offsetBy: scanned)
             if let newline = buffer[from...].firstIndex(of: 0x0A) {

@@ -90,7 +90,8 @@ fn usage() -> &'static str {
      \x20                                         rows above it\n\
      \x20     watch screen <pane|session>         one JSON line per change of that screen\n\
      \x20     send <pane|session> <text>          type into a terminal (a bracketed paste when the\n\
-     \x20           [--enter]                     program asked for one); --enter adds Return\n\
+     \x20           [--enter] [--keys]            program asked for one); --enter adds Return;\n\
+     \x20                                         --keys types it as keys, never pasted\n\
      \x20     (every pane verb lands in the background; --asked says the operator asked, and\n\
      \x20      only then may it bring something forward or move his focus)\n\
      \x20     sessions                            list bench sessions\n\

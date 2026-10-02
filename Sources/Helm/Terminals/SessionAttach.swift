@@ -43,7 +43,7 @@ enum SessionLaunch: Equatable {
 extension BenchDocument.Bench {
     /// The launch for every terminal pane on this bench that shows a benchd session. Asked of
     /// the bench being drawn only — its terminals are the ones helm starts — and `bench`
-    /// (`BenchClient.benchExecutable`) is asked for only when a pane here shows a session, since
+    /// (`AttachBench`) is asked for only when a pane here shows a session, since
     /// asking is a round trip to benchd.
     func attachCommands(
         bench: @autoclosure () -> Result<String, BenchExecutable.Unusable>

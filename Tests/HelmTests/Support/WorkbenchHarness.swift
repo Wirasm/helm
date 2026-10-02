@@ -1,4 +1,5 @@
 import AppKit
+import BenchKit
 import HelmWire
 import SwiftUI
 import XCTest

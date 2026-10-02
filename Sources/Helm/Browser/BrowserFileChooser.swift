@@ -1,4 +1,5 @@
 import AppKit
+import BenchKit
 import HelmWire
 
 /// The files the operator chose for a page's file input (#549), as paths Chrome can open.

@@ -136,6 +136,39 @@ jobs:
           path: .build
           key: swiftpm-ghostty2-${{ runner.os }}-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Packages/GhosttyTerminal/Package.swift') }}
 
+  # Pocket, the iPhone app, built for the iOS simulator (scripts/check.sh `ios`): nothing else on
+  # the way to development builds HelmWire and BenchKit for iOS, so without it a macOS-only call
+  # in the code helm shares with Pocket lands unseen. Skipped, and still reporting success, when
+  # nothing it compiles changed, as the Swift job does.
+  ios:
+    name: pocket · ios build
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: does this change need the iOS build?
+        id: needs
+        run: |
+          if [ "${{ github.event_name }}" != pull_request ] \
+              || bash scripts/check.sh --needs ios "origin/${{ github.base_ref }}"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "nothing Pocket compiles changed; skipping"
+          fi
+
+      - name: install xcodegen
+        if: steps.needs.outputs.run == 'true'
+        run: brew install xcodegen
+
+      - name: build Pocket for the iOS simulator
+        if: steps.needs.outputs.run == 'true'
+        run: |
+          xcodebuild -version
+          bash scripts/check.sh ios
+
   skills:
     name: skill gates
     runs-on: macos-26

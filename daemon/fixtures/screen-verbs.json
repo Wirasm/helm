@@ -1,0 +1,49 @@
+{
+  "get": {
+    "id": "pocket-1",
+    "verb": "screen/get",
+    "args": {
+      "target": "s7"
+    }
+  },
+  "get_reply": {
+    "session": "s7",
+    "rows": 4,
+    "cols": 40,
+    "cursor": [2, 3],
+    "cursor_visible": true,
+    "title": "claude",
+    "pwd": "/Users/operator/Projects/helm",
+    "alt_screen": false,
+    "bracketed_paste": true,
+    "lines": ["› status?", "attention: building.", "", "> "]
+  },
+  "send": {
+    "id": "pocket-2",
+    "verb": "screen/send",
+    "by": {
+      "kind": "operator"
+    },
+    "args": {
+      "target": "s7",
+      "text": "\u001b",
+      "keys": true
+    }
+  },
+  "message": {
+    "id": "pocket-3",
+    "verb": "screen/send",
+    "by": {
+      "kind": "operator"
+    },
+    "args": {
+      "target": "s7",
+      "text": "status?",
+      "enter": true
+    }
+  },
+  "send_reply": {
+    "session": "s7",
+    "bracketed": false
+  }
+}

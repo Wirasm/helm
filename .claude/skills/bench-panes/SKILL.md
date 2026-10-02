@@ -181,7 +181,9 @@ session id: his shells, a spawned agent's pane, one you opened.
   second. `--history` puts the rows above the screen first.
 - `bench send <pane|session> <text> --enter` types the text as one paste (bracketed when the
   program asked for that), then Return on its own. Without `--enter` it only types. The log
-  records who sent how many bytes, never the text.
+  records who sent how many bytes, never the text. `--keys` types the text as keys instead of a
+  paste: what answers a TUI prompt (`bench send --keys <pane> $'\e'` for Esc, `2` to pick an
+  option). A paste of Esc reaches a program like Claude Code as text.
 - `bench watch screen <pane|session>` prints one JSON line, the same shape, each time the screen
   changes, at most ten a second and never from inside a frame being drawn. It runs until the
   session ends or you stop it.

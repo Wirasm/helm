@@ -679,6 +679,18 @@ pub struct ScreenSendArgs {
     pub text: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enter: bool,
+    /// `text` is keys (Esc, Ctrl-C, an arrow, a digit picking an option): written as they are,
+    /// never inside a bracketed paste, where a program reads them as pasted text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keys: bool,
+}
+
+/// `screen/send`'s answer: the session typed into, and whether the text went in as a bracketed
+/// paste.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenSent {
+    pub session: String,
+    pub bracketed: bool,
 }
 
 /// A terminal's screen at a finished frame: `screen/get`'s answer.
@@ -1232,6 +1244,40 @@ mod tests {
         assert_eq!(serde_json::to_value(&args).unwrap(), who.args);
         let reply: MailWho = serde_json::from_value(value["who_reply"].clone()).unwrap();
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
+    }
+
+    /// `fixtures/screen-verbs.json` holds what Pocket sends to read and type into a session's
+    /// screen (#625), a key and a message, and both answers. helm's `BenchWireConformanceTests`
+    /// encodes the same requests and decodes the answers.
+    #[test]
+    fn the_screen_fixture_is_what_the_daemon_reads_and_answers() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/screen-verbs.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let get: Request = serde_json::from_value(value["get"].clone()).unwrap();
+        assert_eq!(Verb::parse(&get.verb), Some(Verb::ScreenGet));
+        let args: ScreenGetArgs = serde_json::from_value(get.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), get.args);
+        for key in ["send", "message"] {
+            let send: Request = serde_json::from_value(value[key].clone()).unwrap();
+            assert_eq!(Verb::parse(&send.verb), Some(Verb::ScreenSend));
+            assert_eq!(send.by, Some(Actor::Operator));
+            let args: ScreenSendArgs = serde_json::from_value(send.args.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&args).unwrap(), send.args);
+        }
+        let key: ScreenSendArgs = serde_json::from_value(value["send"]["args"].clone()).unwrap();
+        assert!(key.keys && !key.enter, "the key is sent as a key");
+        let message: ScreenSendArgs =
+            serde_json::from_value(value["message"]["args"].clone()).unwrap();
+        assert!(
+            !message.keys && message.enter,
+            "a message is pasted, then Return"
+        );
+        let screen: ScreenAnswer = serde_json::from_value(value["get_reply"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&screen).unwrap(), value["get_reply"]);
+        let sent: ScreenSent = serde_json::from_value(value["send_reply"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&sent).unwrap(), value["send_reply"]);
     }
 
     /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535) and the

@@ -15,6 +15,12 @@ package enum BenchEndpoint: Equatable, Sendable, CustomStringConvertible {
     /// nil for any other value, which the caller refuses by name.
     static func parse(url: String?, socket: String) -> BenchEndpoint? {
         guard let url, !url.isEmpty else { return .unix(path: socket) }
+        return tcp(url)
+    }
+
+    /// `tcp://<host>:<port>`, or nil: the one form a benchd on another machine is named by. Pocket
+    /// reaches benchd only this way.
+    package static func tcp(_ url: String) -> BenchEndpoint? {
         guard url.hasPrefix("tcp://") else { return nil }
         let address = url.dropFirst("tcp://".count)
         guard let colon = address.lastIndex(of: ":"),

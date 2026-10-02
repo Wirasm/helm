@@ -1,4 +1,5 @@
 import AppKit
+import BenchKit
 import Foundation
 import HelmWire
 import XCTest
