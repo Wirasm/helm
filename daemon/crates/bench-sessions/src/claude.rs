@@ -378,7 +378,8 @@ struct Entry {
 pub struct Cache {
     entries: HashMap<PathBuf, Entry>,
     touched: Vec<PathBuf>,
-    /// Transcript bytes the pending-task scan has read, ever. A warm build must add only
+    /// Harness-file bytes the scans have read, ever: the pending-task scan and every
+    /// [`crate::latest`] scan, each on its own offset. A warm build must add only
     /// what was appended since the last one — the regression check for a scan that starts
     /// over each time (the spike's naive search once read 193 MB per build).
     pub bytes_scanned: u64,
@@ -453,7 +454,9 @@ impl Cache {
             .latest
             .entry((path.to_path_buf(), field.needle))
             .or_default();
-        latest::read(path, field, scan)
+        let (value, read) = latest::read(path, field, scan);
+        self.bytes_scanned += read;
+        value
     }
 
     /// Drop every entry this build did not ask about.

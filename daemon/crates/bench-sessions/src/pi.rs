@@ -114,7 +114,7 @@ mod tests {
             r#"{"type":"model_change","provider":"openrouter","modelId":"google/gemini-2.5-flash"}"#,
         ];
         fs::write(&path, lines.join("\n") + "\n").unwrap();
-        let read = |field: &Field| crate::latest::read(&path, field, &mut Default::default());
+        let read = |field: &Field| crate::latest::read(&path, field, &mut Default::default()).0;
         assert_eq!(read(&NAME).as_deref(), Some("Fix the build"));
         assert_eq!(read(&MODEL).as_deref(), Some("google/gemini-2.5-flash"));
         fs::write(

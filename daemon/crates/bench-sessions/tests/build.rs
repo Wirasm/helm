@@ -571,9 +571,11 @@ fn a_warm_build_scans_only_what_was_appended() {
     let mut cache = Cache::default();
     let first = f.build_with(&mut cache, &f.ws());
     assert!(row(&first, "big").is_some());
+    // Two scans read it: the pending tasks, and the model.
     assert_eq!(
-        cache.bytes_scanned, size,
-        "a cold build scans the file once"
+        cache.bytes_scanned,
+        2 * size,
+        "a cold build reads the file once per scan"
     );
 
     let appended = format!(
@@ -589,9 +591,9 @@ fn a_warm_build_scans_only_what_was_appended() {
     assert!(row(&second, "big").is_none(), "the task reported back");
     assert_eq!(
         cache.bytes_scanned,
-        size + appended.len() as u64,
+        2 * size + appended.len() as u64,
         "a warm build read {} bytes for a {}-byte append",
-        cache.bytes_scanned - size,
+        cache.bytes_scanned - 2 * size,
         appended.len()
     );
 }
