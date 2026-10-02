@@ -4490,77 +4490,198 @@ fn an_idle_claude_is_started_through_its_socket_and_a_busy_one_is_not() {
     );
 }
 
-/// A stand-in for the app-server a benchd-spawned codex runs its TUI against, speaking what
-/// codex 0.157.0 speaks on `--listen unix://`: WebSocket, one JSON-RPC message per text frame.
-/// Answers `initialize`, then `turn/start` with the next of `answers` (`true` starts a turn,
-/// `false` refuses), and hands each `turn/start`'s params to the test. `thread/read` answers
-/// the thread's status from `status`, which the test sets.
-struct FakeAppServer {
-    started: std::sync::mpsc::Receiver<serde_json::Value>,
-    status: std::sync::Arc<std::sync::Mutex<&'static str>>,
+/// benchd's codex app-server, played by the test (#466): what codex 0.160.0 speaks on
+/// `--listen unix://` (WebSocket, one JSON-RPC message per text frame), as much of it as benchd
+/// asks. It answers and records every request, and sends a notification to every connection on
+/// demand. The fake `codex` benchd starts as its app-server links benchd's socket to this one,
+/// as real codex links it to a short socket of its own ([`write_fake_codex`]).
+struct FakeCodex {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    /// The answers to the next `turn/start`s: `Some(true)` starts a turn, `Some(false)` refuses,
+    /// `None` answers naming no turn. Empty starts one.
+    turns: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Option<bool>>>>,
+    /// A thread status to send before answering the next `turn/start`, as codex does when a
+    /// turn fails at once (a usage limit).
+    early: std::sync::Arc<std::sync::Mutex<Option<&'static str>>>,
+    clients: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<std::sync::Mutex<UnixStream>>>>>,
 }
 
-impl FakeAppServer {
-    fn bind(socket: &Path, answers: Vec<bool>) -> FakeAppServer {
-        fs::create_dir_all(socket.parent().unwrap()).unwrap();
-        let listener =
-            std::os::unix::net::UnixListener::bind(socket).expect("bind fake app-server");
-        let (tx, started) = std::sync::mpsc::channel();
-        let status = std::sync::Arc::new(std::sync::Mutex::new("active"));
-        let thread_status = std::sync::Arc::clone(&status);
+impl FakeCodex {
+    fn bind(home: &Path) -> FakeCodex {
+        let listener = std::os::unix::net::UnixListener::bind(home.join("fcx.sock"))
+            .expect("bind the fake codex app-server");
+        let fake = FakeCodex {
+            seen: Default::default(),
+            turns: Default::default(),
+            early: Default::default(),
+            clients: Default::default(),
+        };
+        let (seen, turns, early, clients) = (
+            std::sync::Arc::clone(&fake.seen),
+            std::sync::Arc::clone(&fake.turns),
+            std::sync::Arc::clone(&fake.early),
+            std::sync::Arc::clone(&fake.clients),
+        );
         std::thread::spawn(move || {
-            let mut answers = answers.into_iter();
+            let next = std::sync::Arc::new(AtomicU32::new(1));
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let mut head = Vec::new();
                 let mut byte = [0u8; 1];
                 while !head.ends_with(b"\r\n\r\n") && stream.read_exact(&mut byte).is_ok() {
                     head.push(byte[0]);
                 }
                 let _ = stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: websocket\r\n\r\n");
-                while let Some(message) = read_client_frame(&mut stream) {
-                    let id = message["id"].clone();
-                    match message["method"].as_str() {
-                        Some("initialize") => server_frame(
-                            &mut stream,
-                            &serde_json::json!({"id": id, "result": {"userAgent": "fake"}}),
-                        ),
-                        Some("thread/read") => {
-                            let now = *thread_status.lock().unwrap();
-                            let status = if now == "active" {
-                                serde_json::json!({"type": "active", "activeFlags": []})
-                            } else {
-                                serde_json::json!({"type": now})
-                            };
-                            let thread = serde_json::json!({"id": message["params"]["threadId"], "status": status});
+                let writer =
+                    std::sync::Arc::new(std::sync::Mutex::new(stream.try_clone().unwrap()));
+                clients.lock().unwrap().push(std::sync::Arc::clone(&writer));
+                let (seen, turns, early, next) = (
+                    std::sync::Arc::clone(&seen),
+                    std::sync::Arc::clone(&turns),
+                    std::sync::Arc::clone(&early),
+                    std::sync::Arc::clone(&next),
+                );
+                std::thread::spawn(move || {
+                    while let Some(message) = read_client_frame(&mut stream) {
+                        let (Some(method), Some(id)) =
+                            (message["method"].as_str(), message.get("id"))
+                        else {
+                            continue;
+                        };
+                        let params = message["params"].clone();
+                        let answer = codex_answer(method, &params, &turns, &next);
+                        if method != "initialize" {
+                            seen.lock()
+                                .unwrap()
+                                .push(serde_json::json!({"method": method, "params": params}));
+                        }
+                        if method == "turn/start"
+                            && let Some(status) = early.lock().unwrap().take()
+                        {
                             server_frame(
-                                &mut stream,
-                                &serde_json::json!({"id": id, "result": {"thread": thread}}),
+                                &mut writer.lock().unwrap(),
+                                &serde_json::json!({"method": "thread/status/changed",
+                                    "params": {"threadId": params["threadId"], "status": {"type": status}}}),
                             );
                         }
-                        Some("turn/start") => {
-                            // A notification first, as the real one sends them unasked.
-                            server_frame(
-                                &mut stream,
-                                &serde_json::json!({"method": "thread/status/changed", "params": {"threadId": message["params"]["threadId"], "status": {"type": "active", "activeFlags": []}}}),
-                            );
-                            let answer = if answers.next().unwrap_or(true) {
-                                // Long enough for a 16-bit length, as real answers are.
-                                serde_json::json!({"id": id, "result": {"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}})
-                            } else {
-                                serde_json::json!({"id": id, "error": {"code": -32600, "message": "thread is busy"}})
-                            };
-                            server_frame(&mut stream, &answer);
-                            let _ = tx.send(message["params"].clone());
-                        }
-                        _ => {}
+                        let reply = match answer {
+                            Ok(result) => serde_json::json!({"id": id, "result": result}),
+                            Err(why) => {
+                                serde_json::json!({"id": id, "error": {"code": -32600, "message": why}})
+                            }
+                        };
+                        server_frame(&mut writer.lock().unwrap(), &reply);
                     }
-                }
+                });
             }
         });
-        FakeAppServer { started, status }
+        fake
     }
+
+    /// A notification to every connection, as codex sends them unasked.
+    fn notify(&self, message: serde_json::Value) {
+        for client in self.clients.lock().unwrap().iter() {
+            server_frame(&mut client.lock().unwrap(), &message);
+        }
+    }
+
+    /// The params of every `method` request so far.
+    fn asked_now(&self, method: &str) -> Vec<serde_json::Value> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m["method"] == method)
+            .map(|m| m["params"].clone())
+            .collect()
+    }
+
+    /// The params of every `method` request, once there are `n`.
+    fn asked(&self, method: &str, n: usize) -> Vec<serde_json::Value> {
+        wait_until(
+            &format!("{n} {method} request(s)"),
+            Duration::from_secs(15),
+            || self.asked_now(method).len() >= n,
+        );
+        self.asked_now(method)
+    }
+}
+
+/// What the fake codex answers: a thread per `thread/start` and `thread/fork`, the thread asked
+/// for on `thread/resume`, a recorded model on `thread/read`. A thread id is a UUIDv7 as codex's
+/// are, from 2026-10-01, the day the session list looks for its rollout under.
+fn codex_answer(
+    method: &str,
+    params: &serde_json::Value,
+    turns: &std::sync::Mutex<std::collections::VecDeque<Option<bool>>>,
+    next: &AtomicU32,
+) -> Result<serde_json::Value, String> {
+    let new_thread = || {
+        let n = next.fetch_add(1, Ordering::Relaxed);
+        serde_json::json!({"thread": {"id": format!("01a0f663-47f0-7d53-b41a-{n:012}")}})
+    };
+    match method {
+        "initialize" => Ok(serde_json::json!({"userAgent": "fake"})),
+        "thread/start" | "thread/fork" => Ok(new_thread()),
+        "thread/resume" => Ok(serde_json::json!({"thread": {"id": params["threadId"]}})),
+        "thread/read" => Ok(serde_json::json!({"thread": {"id": params["threadId"],
+            "model": "gpt-recorded", "reasoningEffort": "low"}})),
+        "turn/start" => match turns.lock().unwrap().pop_front().unwrap_or(Some(true)) {
+            // Long enough for a 16-bit length, as real answers are.
+            Some(true) => Ok(
+                serde_json::json!({"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}),
+            ),
+            Some(false) => Err("thread is busy".into()),
+            None => Ok(serde_json::json!({"turn": {"status": "inProgress"}})),
+        },
+        "thread/unsubscribe" => Ok(serde_json::json!({"status": "unsubscribed"})),
+        "turn/interrupt" => Ok(serde_json::json!({})),
+        other => Err(format!("the fake codex does not know {other}")),
+    }
+}
+
+/// `HOME`'s codex config trusting each of `dirs`, as the operator's own codex records it.
+fn trust_codex(home: &Path, dirs: &[&Path]) -> String {
+    let config: String = dirs
+        .iter()
+        .map(|d| {
+            format!(
+                "[projects.{:?}]\ntrust_level = \"trusted\"\n",
+                d.display().to_string()
+            )
+        })
+        .collect();
+    fs::create_dir_all(home.join(".codex")).unwrap();
+    fs::write(home.join(".codex/config.toml"), &config).unwrap();
+    config
+}
+
+/// A daemon whose `codex` is the fake in `bin` ([`write_fake_codex`]).
+fn codex_daemon(home: &Path, bin: &Path) -> DaemonGuard {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    DaemonGuard::start_with(home, None, cmd)
+}
+
+/// `bench spawn --agent codex` in `cwd` with `extra` flags: its answer.
+fn spawn_codex(home: &Path, cwd: &Path, extra: &[&str]) -> serde_json::Value {
+    let cwd = cwd.display().to_string();
+    let mut args = vec!["spawn", "--agent", "codex", "--cwd", &cwd];
+    args.extend_from_slice(extra);
+    let run = bench(home, &args);
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    json_of(&run)
+}
+
+/// A codex hook as benchd's app-server runs it: the thread and nothing that names a session,
+/// from the server's process (here this test's own, which is alive).
+fn codex_hook(daemon: &DaemonGuard, event: &str, thread: &str, cwd: &str) -> serde_json::Value {
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": event, "session": thread,
+            "cwd": cwd, "pid": std::process::id()}),
+    )
 }
 
 fn read_client_frame(stream: &mut UnixStream) -> Option<serde_json::Value> {
@@ -4604,172 +4725,537 @@ fn server_frame(stream: &mut UnixStream, message: &serde_json::Value) {
     let _ = stream.write_all(&frame);
 }
 
+/// One codex benchd spawned (#466): its thread made with its own cwd, model, posture and
+/// environment, its first message sent as a turn, its pane recording the thread before any hook,
+/// and its TUI attached to that thread.
+fn assert_codex_thread(
+    h: &Path,
+    runs: &Path,
+    spawned: &serde_json::Value,
+    cwd: &Path,
+    model: &str,
+    start: &serde_json::Value,
+    turns: &[serde_json::Value],
+) {
+    let root = h.join(".bench");
+    let thread = spawned["runtime_session"].as_str().expect("known at spawn");
+    assert_eq!(start["cwd"], cwd.display().to_string());
+    assert_eq!(start["model"], model);
+    assert_eq!(start["sandbox"], "danger-full-access");
+    assert_eq!(start["approvalPolicy"], "never");
+    assert_eq!(start["config"]["bypass_hook_trust"], true);
+    let set = &start["config"]["shell_environment_policy"]["set"];
+    assert_eq!(set["BENCH_SESSION"], spawned["session"]);
+    assert_eq!(set["BENCH_HANDLE"], spawned["handle"]);
+    assert_eq!(set["BENCH_DIR"], root.display().to_string());
+    assert!(
+        turns.iter().any(|t| t["threadId"] == thread),
+        "its first message is a turn: {turns:?}"
+    );
+    let pane = spawned["pane"].as_str().unwrap();
+    assert_eq!(pane_agent(h, pane)["session"], thread);
+    let socket = format!("unix://{}", root.join("codex.sock").display());
+    let tui = format!("resume {thread} --remote {socket} -c check_for_update_on_startup=false");
+    assert!(
+        recorded_runs(runs, 3).iter().any(|r| r.starts_with(&tui)),
+        "{tui}"
+    );
+}
+
 #[test]
-fn an_idle_codex_benchd_spawned_is_started_through_its_app_server_and_a_busy_one_is_not() {
+fn every_codex_is_a_thread_benchd_makes_on_its_one_app_server() {
+    // #466: one server, whatever the number of codex agents. benchd makes each thread with the
+    // agent's own cwd, model, posture and environment, sends its first message as a turn, and
+    // the pane only attaches. The server sees none of the agent variables benchd itself has.
+    let home = TestHome::claim("cxone");
+    let h = &home.dir;
+    let root = h.join(".bench");
+    let (a, b) = (h.join("wa"), h.join("wb"));
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(&b).unwrap();
+    trust_codex(h, &[&a, &b]);
+    let fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = isolated(benchd_bin());
+    cmd.env("PATH", format!("{}:{path}", bin.display()))
+        .env("HELM_PANE", "operator-pane")
+        .env("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/operator.sock")
+        .env("BENCH_HANDLE", "operator-agent");
+    let _daemon = DaemonGuard::start_with(h, None, cmd);
+    let prompt = h.join("brief.md");
+    fs::write(&prompt, "do the thing").unwrap();
+    let first = spawn_codex(
+        h,
+        &a,
+        &[
+            "--name",
+            "cx-a",
+            "--model",
+            "gpt-a",
+            "--effort",
+            "low",
+            "--prompt-file",
+            prompt.to_str().unwrap(),
+        ],
+    );
+    let second = spawn_codex(h, &b, &["--name", "cx-b", "--model", "gpt-b"]);
+
+    let servers: Vec<String> = recorded_runs(&runs, 3)
+        .into_iter()
+        .filter(|r| r.starts_with("app-server "))
+        .collect();
+    let socket = format!("unix://{}", root.join("codex.sock").display());
+    assert_eq!(servers.len(), 1, "one app-server for both: {servers:?}");
+    assert!(
+        servers[0].ends_with(&format!(" --listen {socket}")),
+        "{}",
+        servers[0]
+    );
+    // A TUI that resumes against a remote server reviews hooks whatever its own flag says, so the
+    // server trusts the hooks codex says need review.
+    assert!(
+        servers[0].contains(
+            r#" -c hooks.state={ "/h/hooks.json:stop:0:0" = { trusted_hash = "sha256:new" } } "#
+        ),
+        "{}",
+        servers[0]
+    );
+    let env = fs::read_to_string(h.join("codex-server.env")).unwrap();
+    assert!(
+        env.contains(&format!("BENCH_DIR={}\n", root.display())),
+        "{env}"
+    );
+    for leak in [
+        "HELM_PANE=",
+        "CLAUDE_CODE_MESSAGING_SOCKET=",
+        "BENCH_HANDLE=",
+        "BENCH_SESSION=",
+    ] {
+        assert!(!env.contains(leak), "the server must not see {leak}: {env}");
+    }
+
+    let starts = fake.asked("thread/start", 2);
+    let turns = fake.asked("turn/start", 2);
+    for (spawned, cwd, model, start) in [
+        (&first, &a, "gpt-a", &starts[0]),
+        (&second, &b, "gpt-b", &starts[1]),
+    ] {
+        assert_codex_thread(h, &runs, spawned, cwd, model, start, &turns);
+    }
+    assert_eq!(starts[0]["config"]["model_reasoning_effort"], "low");
+    let brief = turns
+        .iter()
+        .find(|t| t["threadId"] == first["runtime_session"])
+        .unwrap();
+    assert_eq!(
+        brief["input"][0]["text"],
+        format!("Read and act on the prompt in {}", prompt.display())
+    );
+    let sessions = json_of(&bench(h, &["sessions"]));
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["handle"] == "cx-b")
+        .unwrap()
+        .clone();
+    assert_eq!(row["runtime_session"], second["runtime_session"]);
+}
+
+#[test]
+fn a_codex_hook_names_only_its_thread_and_reaches_the_session_benchd_made_it_for() {
+    // codex runs every hook with its app-server's environment, so a hook says nothing about
+    // which benchd session it is from. The thread does.
+    let home = TestHome::claim("cxhook");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let thread = spawned["runtime_session"].as_str().unwrap();
+    let cwd = ws.display().to_string();
+    let reply = codex_hook(&daemon, "SessionStart", thread, &cwd);
+    assert_eq!(reply["handle"], "cx");
+    let record = hosted_record(&h.join(".bench"));
+    let entry = record["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == thread)
+        .expect("the thread is in the record");
+    assert_eq!(entry["via"]["kind"], "bench");
+    assert_eq!(entry["via"]["handle"], "cx");
+    // A thread benchd did not make, from a hook that declares nothing, gets no mailbox.
+    let stranger = codex_hook(&daemon, "SessionStart", "019f-not-benchds", &cwd);
+    assert!(stranger["handle"].is_null(), "{stranger}");
+    // The hook's process is the shared server, which outlives the pane; the hook is read as the
+    // session's own, so the agent dies with its TUI and its conversation can come back.
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+    let again = bench(
+        h,
+        &[
+            "spawn", "--agent", "codex", "--cwd", &cwd, "--resume", thread,
+        ],
+    );
+    assert_eq!(again.code, 0, "not held by a dead pane: {}", again.stderr);
+    // Two sessions now hold the thread, the exited one and its resume: a hook is the live one's.
+    let resumed = json_of(&again)["session"].clone();
+    for _ in 0..5 {
+        codex_hook(&daemon, "UserPromptSubmit", thread, &cwd);
+        let row = json_of(&bench(h, &["sessions"]))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session"] == resumed)
+            .unwrap()
+            .clone();
+        assert_eq!(row["report"]["activity"]["kind"], "busy", "{row}");
+    }
+}
+
+#[test]
+fn an_idle_codex_is_woken_through_benchds_app_server_and_a_busy_one_is_not() {
     let home = TestHome::claim("cxpush");
     let h = &home.dir;
-    let daemon = DaemonGuard::start(h, None);
-    let (session, pid) = terminal_process(h, "cx");
-    let server = FakeAppServer::bind(
-        &h.join(".bench/codex").join(format!("{session}.sock")),
-        vec![true, false],
-    );
-    let thread = "01a0dde2-1128-7572-8528-e0979f7e706f";
-    let event = |name: &str| {
-        hook_verb(
-            &daemon.socket,
-            serde_json::json!({"harness": "codex", "event": name, "session": thread,
-                "cwd": "/tmp", "pid": pid, "bench_session": session}),
-        )
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let thread = spawned["runtime_session"].as_str().unwrap().to_string();
+    let cwd = ws.display().to_string();
+    let woken = || {
+        fake.asked_now("turn/start")
+            .into_iter()
+            .filter(|t| t["threadId"] == thread)
+            .count()
     };
+    assert_eq!(woken(), 1, "benchd sent the first message");
+    fake.turns.lock().unwrap().extend([Some(true), Some(false)]);
     let send = |body: &str| json_of(&bench(h, &["mail", "send", "--to", "cx", "--body", body]));
-    assert_eq!(
-        event("SessionStart")["handle"],
-        "cx",
-        "joins its benchd session"
-    );
-
-    // Busy: nothing is started; the next tool call is the channel.
-    event("UserPromptSubmit");
+    // Busy from spawn: benchd has just started its first turn.
     assert_eq!(send("while busy")["wake"], "queued");
-    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
-    // A permission prompt: still nothing.
-    event("PermissionRequest");
-    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(woken(), 1, "nothing is started while it is busy");
+    codex_hook(&daemon, "PermissionRequest", &thread, &cwd);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(woken(), 1);
 
     // Idle: one turn on its own thread, carrying the pointer and never the body.
-    event("Stop");
-    let params = server
-        .started
-        .recv_timeout(Duration::from_secs(5))
-        .expect("a turn is started once idle");
-    assert_eq!(params["threadId"], thread);
+    codex_hook(&daemon, "Stop", &thread, &cwd);
+    wait_until(
+        "a turn is started once idle",
+        Duration::from_secs(5),
+        || woken() == 2,
+    );
     let read = h.join(".bench/mail/cx/read/m1.md");
-    assert_eq!(
-        params["input"],
-        serde_json::json!([{"type": "text", "text": format!("You have mail from operator: {}", read.display())}])
+    let pushed = fake.asked_now("turn/start").pop().unwrap();
+    assert!(
+        pushed["input"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("You have mail from operator: {}", read.display())),
+        "{pushed}"
     );
     assert!(read.exists() && inbox_count(h, "cx") == 0);
-    // It is busy with that turn: no second push before any hook says so.
-    send("during the turn");
-    assert!(server.started.recv_timeout(Duration::from_secs(2)).is_err());
 
     // A refused turn: the mail goes back, unread, and the session is not pushed again.
-    event("Stop");
-    server
-        .started
-        .recv_timeout(Duration::from_secs(5))
-        .expect("tried once idle again");
+    send("during the turn");
+    codex_hook(&daemon, "Stop", &thread, &cwd);
     wait_until("the refused push is held", Duration::from_secs(5), || {
         event_kinds(h).iter().any(|(k, _)| k == "mail/held")
     });
     assert_eq!(inbox_count(h, "cx"), 1, "back in the inbox, unread");
     assert_eq!(send("after the refusal")["wake"], "next-turn");
-
-    let log = event_kinds(h);
-    let delivered: Vec<_> = log
-        .iter()
+    let delivered: Vec<_> = event_kinds(h)
+        .into_iter()
         .filter(|(k, _)| k == "mail/delivered")
         .map(|(_, d)| d["channel"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(delivered, ["codex"]);
-    assert!(
-        log.iter().any(|(k, d)| k == "agent/state"
-            && d["event"] == "turn/start"
-            && d["activity"]["kind"] == "busy"),
-        "the started turn is logged as the agent going busy"
-    );
 }
 
 #[test]
 fn a_codex_turn_that_failed_is_found_idle_by_its_thread_status() {
     // A turn refused by a usage limit fires no Stop (measured on codex 0.157.0): the hooks last
-    // said busy, and only the app-server knows the thread went idle.
+    // said busy, and only the app-server knows the thread stopped. It says so unasked.
     let home = TestHome::claim("cxstale");
     let h = &home.dir;
-    let daemon = DaemonGuard::start(h, None);
-    let (session, pid) = terminal_process(h, "cx");
-    let server = FakeAppServer::bind(
-        &h.join(".bench/codex").join(format!("{session}.sock")),
-        vec![true],
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let thread = spawned["runtime_session"].as_str().unwrap().to_string();
+    codex_hook(
+        &daemon,
+        "UserPromptSubmit",
+        &thread,
+        &ws.display().to_string(),
     );
-    let thread = "01a0dded-514e-7681-9834-ce30a42cf6c5";
-    for event in ["SessionStart", "UserPromptSubmit"] {
-        hook_verb(
-            &daemon.socket,
-            serde_json::json!({"harness": "codex", "event": event, "session": thread,
-                "cwd": "/tmp", "pid": pid, "bench_session": session}),
-        );
-    }
     bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
-    // Still running by the server's word: held, however quiet the hooks are.
-    assert!(server.started.recv_timeout(Duration::from_secs(7)).is_err());
-    // What a usage-limit refusal leaves behind (measured): no turn is running.
-    *server.status.lock().unwrap() = "systemError";
-    let params = server
-        .started
-        .recv_timeout(Duration::from_secs(8))
-        .expect("pushed once the server says idle");
-    assert_eq!(params["threadId"], thread);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(fake.asked_now("turn/start").len(), 1, "held while running");
+    fake.notify(serde_json::json!({"method": "thread/status/changed",
+        "params": {"threadId": thread, "status": {"type": "systemError"}}}));
+    let turns = fake.asked("turn/start", 2);
+    assert_eq!(turns[1]["threadId"], thread);
     assert!(
         event_kinds(h)
             .iter()
-            .any(|(k, d)| k == "agent/state" && d["event"] == "thread/read"),
+            .any(|(k, d)| k == "agent/state" && d["event"] == "thread/status"),
         "the log says which record found it idle"
     );
 }
 
 #[test]
-fn a_codex_spawn_clears_a_socket_an_earlier_daemons_session_left_behind() {
-    // Session ids restart at s1 with the daemon, and a codex app-server that died uncleanly
-    // leaves its socket, which the next app-server on that path refuses to bind ("File
-    // exists", measured on 0.157.0).
-    let home = TestHome::claim("cxstalesock");
+fn codex_runs_only_where_the_operator_trusts_it() {
+    // Without `-C`, codex itself never asks "Trust this folder?" for a bench agent, so benchd
+    // asks his rule: the folder's own entry, else its git repository's, worktrees included.
+    // Nothing starts for a refused one, and his codex config is never written.
+    let home = TestHome::claim("cxtrust");
     let h = &home.dir;
-    let stale = h.join(".bench/codex/s1.sock");
-    fs::create_dir_all(stale.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink("/nonexistent/codex-daemon/gone", &stale).unwrap();
-    let _daemon = DaemonGuard::start_with_fake(h, "codex");
-    let run = bench(
+    let trusted = git_repo_with_worktree(h, "t");
+    let untrusted = git_repo_with_worktree(h, "u");
+    let config = trust_codex(h, &[&h.join("t").canonicalize().unwrap()]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let refused = bench(
         h,
-        &["spawn", "--agent", "codex", "--cwd", "/tmp", "--name", "cx"],
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            untrusted.to_str().unwrap(),
+        ],
     );
-    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-    assert_eq!(json_of(&run)["session"], "s1");
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
     assert!(
-        fs::symlink_metadata(&stale).is_err(),
-        "the stale socket is gone before the app-server binds"
+        refused
+            .stderr
+            .contains("codex runs only in a folder you trust"),
+        "{}",
+        refused.stderr
+    );
+    assert!(!runs.exists(), "nothing started for it");
+    spawn_codex(h, &trusted, &[]);
+    assert_eq!(
+        fs::read_to_string(h.join(".codex/config.toml")).unwrap(),
+        config,
+        "benchd never writes the operator's codex config"
     );
 }
 
-/// A benchd-spawned codex is listed by its thread, as its hooks report it, and once it ends by
-/// its rollout; `bench log` reads that rollout. The rollout's lines are real codex 0.157 shapes.
-/// `bench sessions`, `bench sessions --all` and `mail who` name a spawned codex by the thread it
-/// runs now, never benchd's `sN`, and after `/new` by the new one.
 #[test]
-fn a_spawned_codex_is_named_by_the_thread_it_runs_now_in_every_answer() {
+fn benchds_codex_app_server_ends_with_benchd_however_benchd_ends() {
+    let home = TestHome::claim("cxleash");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let server_pid = || -> i32 {
+        fs::read_to_string(h.join("codex-server.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    // `bench stop`.
+    {
+        let _daemon = codex_daemon(h, &bin);
+        spawn_codex(h, &ws, &[]);
+        let pid = server_pid();
+        assert!(libc_alive(pid));
+        assert_eq!(bench(h, &["stop"]).code, 0);
+        wait_until("the server is gone", Duration::from_secs(5), || {
+            !libc_alive(pid)
+        });
+    }
+    fs::remove_file(h.join("codex-server.pid")).unwrap();
+    // Killed outright: the leash's pipe closes.
+    let mut daemon = codex_daemon(h, &bin);
+    spawn_codex(h, &ws, &[]);
+    let pid = server_pid();
+    let _ = daemon.child.kill();
+    let _ = daemon.child.wait();
+    wait_until("the server is gone", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+}
+
+#[test]
+fn a_codex_thread_no_session_holds_any_more_is_let_go() {
+    // benchd's connection is subscribed to every thread it made; once the pane that showed one
+    // is closed, it lets go, so codex unloads the thread rather than keeping it for its life.
+    let home = TestHome::claim("cxrelease");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &[]);
+    let thread = spawned["runtime_session"].as_str().unwrap();
+    // Not the bench's last pane, which a close refuses.
+    let ws = ws.display().to_string();
+    let other = bench(h, &["open", "terminal", "--workspace", &ws]);
+    assert_eq!(other.code, 0, "{}", other.stderr);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        fake.asked_now("thread/unsubscribe").is_empty(),
+        "kept while its session holds it"
+    );
+    let pane = spawned["pane"].as_str().unwrap();
+    let closed = bench(h, &["close", pane, "--force"]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    assert_eq!(fake.asked("thread/unsubscribe", 1)[0]["threadId"], thread);
+}
+
+#[test]
+fn a_codex_spawn_whose_first_turn_is_refused_fails_and_lets_its_thread_go() {
+    // Nothing may run that no pane shows: a thread whose spawn failed is let go, its turn
+    // stopped if one started.
+    let home = TestHome::claim("cxabandon");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    fake.turns.lock().unwrap().push_back(Some(false));
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let run = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_ne!(run.code, 0, "the spawn reports its failure");
+    let thread = fake.asked("thread/start", 1);
+    assert_eq!(thread.len(), 1);
+    assert_eq!(fake.asked("thread/unsubscribe", 1).len(), 1);
+    let sessions = json_of(&bench(h, &["sessions"]));
+    assert_eq!(sessions["sessions"], serde_json::json!([]), "{sessions}");
+}
+
+#[test]
+fn a_codex_whose_session_fails_after_its_first_turn_has_that_turn_stopped() {
+    // The thread step succeeds and its first turn runs; then the session cannot start (its
+    // program is no longer executable). The turn is interrupted by its id and the thread let go,
+    // so no agent runs that no pane shows.
+    let home = TestHome::claim("cxstop");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    spawn_codex(h, &ws, &[]);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let run = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_ne!(run.code, 0, "{}", run.stdout);
+    let turn = fake.asked("turn/start", 2)[1].clone();
+    let interrupt = &fake.asked("turn/interrupt", 1)[0];
+    assert_eq!(interrupt["threadId"], turn["threadId"], "its own turn");
+    assert_eq!(interrupt["turnId"], "t1");
+    assert!(
+        fake.asked("thread/unsubscribe", 1)
+            .iter()
+            .any(|u| u["threadId"] == turn["threadId"]),
+        "and its thread let go"
+    );
+}
+
+#[test]
+fn a_codex_first_turn_codex_names_no_id_for_fails_the_spawn_and_lets_the_thread_go() {
+    // An answer with no turn in it may be a turn benchd cannot stop: the spawn fails, and the
+    // thread is let go, with nothing interrupted because nothing can be named.
+    let home = TestHome::claim("cxnameless");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    fake.turns.lock().unwrap().push_back(None);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let run = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_ne!(run.code, 0, "{}", run.stdout);
+    assert!(run.stderr.contains("named no turn"), "{}", run.stderr);
+    assert_eq!(fake.asked("thread/unsubscribe", 1).len(), 1);
+    assert!(fake.asked_now("turn/interrupt").is_empty());
+}
+
+#[test]
+fn a_codex_status_sent_before_its_session_is_registered_is_not_lost() {
+    // A first turn that fails at once fires no Stop; codex says so in a status that can arrive
+    // before benchd has registered the session. The agent starts idle, and its mail goes out.
+    let home = TestHome::claim("cxearly");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    *fake.early.lock().unwrap() = Some("systemError");
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
+    let turns = fake.asked("turn/start", 2);
+    assert_eq!(turns[1]["threadId"], spawned["runtime_session"]);
+}
+
+/// A benchd-spawned codex is listed by its thread, and once it ends by its rollout; `bench log`
+/// reads that rollout. The rollout's lines are real codex 0.157 shapes. `bench sessions`, `bench
+/// sessions --all` and `mail who` name a spawned codex by its thread from the moment it is
+/// spawned, never benchd's `sN`: benchd made the thread (#466).
+#[test]
+fn a_spawned_codex_is_named_by_its_thread_in_every_answer_before_any_hook() {
     let home = TestHome::claim("cxname");
     let h = &home.dir;
-    let daemon = DaemonGuard::start_with_fake(h, "codex");
-    let ws = workspace(h).display().to_string();
-    let run = bench(h, &["spawn", "--agent", "codex", "--cwd", &ws]);
-    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-    let v = json_of(&run);
-    let (session, pane) = (
-        v["session"].clone(),
-        v["pane"].as_str().unwrap().to_string(),
-    );
-    let pid = v["pid"].as_u64().unwrap() as u32;
-    wait_until("the stand-in has exec'd", Duration::from_secs(5), || {
-        bench_sessions::process::hook_caller(pid) == pid
-    });
-    let report = |thread: &str| {
-        hook_verb(
-            &daemon.socket,
-            serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
-                "cwd": ws, "pid": pid, "bench_session": session}),
-        );
-    };
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &[]);
+    let thread = spawned["runtime_session"].clone();
+    let pane = spawned["pane"].as_str().unwrap().to_string();
+    let ws = ws.display().to_string();
     let answers = || {
         let plain = bench(h, &["sessions"]);
         assert_eq!(plain.code, 0, "stderr: {}", plain.stderr);
@@ -4783,52 +5269,30 @@ fn a_spawned_codex_is_named_by_the_thread_it_runs_now_in_every_answer() {
             json_of(&all)["rows"][0]["id"].clone(),
         ]
     };
-    let first = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
-    report(first);
-    assert_eq!(
-        answers(),
-        [first; 3].map(serde_json::Value::from),
-        "not {session}"
-    );
-    // `/new`: the same process reports a second thread, which is the one it runs now.
-    std::thread::sleep(Duration::from_millis(20));
-    let second = "01a0f663-47f0-7d53-b41a-68f3a1f656ac";
-    report(second);
-    assert_eq!(answers(), [second; 3].map(serde_json::Value::from));
+    assert_eq!(answers(), [thread.clone(), thread.clone(), thread.clone()]);
+    codex_hook(&daemon, "SessionStart", thread.as_str().unwrap(), &ws);
+    assert_eq!(answers(), [thread.clone(), thread.clone(), thread]);
 }
 
 #[test]
 fn a_spawned_codex_is_listed_by_its_thread_and_its_rollout_reads_as_a_log() {
     let home = TestHome::claim("cxrow");
     let h = &home.dir;
-    let daemon = DaemonGuard::start_with_fake(h, "codex");
     let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
     let ws_arg = ws.display().to_string();
-    let run = bench(
-        h,
-        &[
-            "spawn", "--agent", "codex", "--cwd", &ws_arg, "--name", "cx",
-        ],
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let (session, pid) = (
+        spawned["session"].as_str().unwrap().to_string(),
+        spawned["pid"].as_i64().unwrap() as i32,
     );
-    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-    let (session, pid) = {
-        let v = json_of(&run);
-        (
-            v["session"].as_str().unwrap().to_string(),
-            v["pid"].as_i64().unwrap() as i32,
-        )
-    };
-    // Until its `/bin/sh` has exec'd, a hook from it would be read as its parent's.
-    wait_until("the stand-in has exec'd", Duration::from_secs(5), || {
-        bench_sessions::process::hook_caller(pid as u32) == pid as u32
-    });
-    let thread = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    let thread = spawned["runtime_session"].as_str().unwrap().to_string();
+    let thread = thread.as_str();
     for event in ["SessionStart", "UserPromptSubmit"] {
-        hook_verb(
-            &daemon.socket,
-            serde_json::json!({"harness": "codex", "event": event, "session": thread,
-                "cwd": ws_arg, "pid": pid, "bench_session": session}),
-        );
+        codex_hook(&daemon, event, thread, &ws_arg);
     }
     fs::create_dir_all(h.join(".codex")).unwrap();
     fs::write(
@@ -8006,11 +8470,12 @@ fn a_shell_comes_back_in_the_directory_it_was_last_working_in() {
     assert_eq!(session_row(&home.dir, &sid)["cwd"], elsewhere.as_str());
 }
 
-/// `<home>/bin/codex`: a stand-in that appends each invocation's argv to `<home>/codex-runs`, one
-/// line each. As the app-server (`codex app-server --listen …`) it exits at once, which ends
-/// the served script's wait for its socket; as the TUI it echoes its pty, like `cat`. Asked
-/// `hooks/list` on stdio (benchd's probe before a resume, not recorded) it answers
-/// [`FAKE_CODEX_HOOKS`].
+/// `<home>/bin/codex`, benchd's codex in these tests (#466). Asked `hooks/list` on stdio
+/// (benchd's probe as its app-server starts, not recorded) it answers [`FAKE_CODEX_HOOKS`].
+/// Otherwise it appends its argv to `<home>/codex-runs`, one line each. As the app-server
+/// (`app-server … --listen unix://P`) it writes its pid and environment beside it, links `P` to
+/// the test's [`FakeCodex`], as real codex links it to a short socket of its own, and lives until
+/// benchd's leash TERMs it. As a TUI it echoes its pty, like `cat`.
 fn write_fake_codex(home: &Path) -> (PathBuf, PathBuf) {
     let runs = home.join("codex-runs");
     let bin = write_agent_script(
@@ -8020,9 +8485,19 @@ fn write_fake_codex(home: &Path) -> (PathBuf, PathBuf) {
             "if [ \"$*\" = app-server ]; then\n\
              while IFS= read -r line; do case \"$line\" in *'\"hooks/list\"'*) \
              printf '{{\"id\":2,\"result\":%s}}\\n' '{hooks}' ;; esac; done; exit 0; fi\n\
-             printf '%s\\n' \"$*\" >> {runs}\n[ \"$1\" = app-server ] && exit 0\nexec cat",
+             printf '%s\\n' \"$*\" >> {runs}\n\
+             if [ \"$1\" = app-server ]; then\n\
+             echo $$ > {home}/codex-server.pid\n\
+             env > {home}/codex-server.env\n\
+             for a; do case \"$a\" in unix://*) l=\"${{a#unix://}}\" ;; esac; done\n\
+             ln -sf {fake} \"$l\"\n\
+             exec sleep 120\n\
+             fi\n\
+             exec cat",
             hooks = FAKE_CODEX_HOOKS,
-            runs = runs.display()
+            runs = runs.display(),
+            home = home.display(),
+            fake = home.join("fcx.sock").display(),
         ),
     );
     (bin, runs)
@@ -8044,39 +8519,56 @@ fn recorded_runs(runs: &Path, n: usize) -> Vec<String> {
     lines()
 }
 
-/// The two invocations a served codex session `session` is (#454): its own app-server on the
-/// session's socket, and the TUI against it, re-entering `thread`.
-fn assert_served_resume(root: &Path, runs: &[String], session: &str, thread: &str) {
-    let socket = format!(
-        "unix://{}",
-        root.join("codex").join(format!("{session}.sock")).display()
-    );
-    let server = runs
-        .iter()
-        .find(|r| r.starts_with("app-server ") && r.ends_with(&format!(" --listen {socket}")))
-        .unwrap_or_else(|| panic!("{session} runs its own app-server: {runs:?}"));
-    // A TUI resuming against a separate server reviews hooks whatever its own flag says, so the
-    // server trusts, for this session, the hooks codex says need review.
+/// A codex re-entered by benchd (#466): the thread resumed on its app-server in the posture
+/// `sandbox` with session `session`'s own environment, then its first message, the resume
+/// notice, as a turn, then a TUI attached to it.
+fn assert_codex_resumed(
+    home: &Path,
+    fake: &FakeCodex,
+    runs: &Path,
+    session: &str,
+    thread: &str,
+    sandbox: &str,
+) {
+    let resume = fake
+        .asked("thread/resume", 1)
+        .into_iter()
+        .rev()
+        .find(|r| {
+            r["threadId"] == thread
+                && r["config"]["shell_environment_policy"]["set"]["BENCH_SESSION"] == session
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "{session} re-enters {thread}: {:?}",
+                fake.asked_now("thread/resume")
+            )
+        });
+    assert_eq!(resume["sandbox"], sandbox);
+    assert_eq!(resume["config"]["bypass_hook_trust"], true);
+    let turn = fake
+        .asked("turn/start", 1)
+        .into_iter()
+        .rev()
+        .find(|t| t["threadId"] == thread)
+        .unwrap();
+    let text = turn["input"][0]["text"].as_str().unwrap();
+    let path = text
+        .strip_prefix("Read and act on the prompt in ")
+        .unwrap_or_else(|| panic!("a pointer: {text}"));
+    let notice = fs::read_to_string(path).unwrap();
     assert!(
-        server.contains(
-            r#" -c hooks.state={ "/h/hooks.json:stop:0:0" = { trusted_hash = "sha256:new" } } "#
-        ),
-        "{server}"
+        notice.starts_with("benchd resumed this conversation"),
+        "a resume's first message is the notice: {notice:?}"
     );
-    let tui = runs
-        .iter()
-        .find(|r| r.starts_with("--remote"))
-        .unwrap_or_else(|| panic!("a TUI against the app-server: {runs:?}"));
-    assert!(
-        tui.starts_with(&format!("--remote {socket} resume {thread} ")),
-        "{tui}"
-    );
-    // The thread takes its posture from the server: codex exits on a permission flag here.
-    assert!(
-        !tui.contains("--dangerously-bypass-approvals-and-sandbox"),
-        "{tui}"
-    );
-    assert_resume_notice(tui);
+    let socket = home.join(".bench/codex.sock");
+    let tui = format!("resume {thread} --remote unix://{}", socket.display());
+    wait_until("the TUI attaches", Duration::from_secs(5), || {
+        fs::read_to_string(runs)
+            .unwrap_or_default()
+            .lines()
+            .any(|r| r.starts_with(&tui))
+    });
 }
 
 /// The text of the prompt file an agent's argv line (its args joined by spaces) points at last.
@@ -8102,20 +8594,19 @@ fn assert_resume_notice(line: &str) -> String {
 }
 
 #[test]
-fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_server() {
-    // Without its app-server a restored codex cannot be started by mail, so mail to it waits for
-    // a turn nobody starts (harness parity G2).
+fn a_codex_its_hook_recorded_in_a_pane_is_restored_on_benchds_app_server_with_its_model() {
+    // A codex the operator started in a pane comes back after a restart as a thread on benchd's
+    // app-server: re-entered with the model its record says it ran (restore knows only the
+    // conversation), wakeable by mail (harness parity G2).
     let home = TestHome::claim("m5b-codex");
-    let ws = workspace(&home.dir).display().to_string();
-    let (bin, runs) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let with_codex = || {
-        let mut cmd = isolated(benchd_bin());
-        cmd.env("PATH", format!("{}:{path}", bin.display()));
-        cmd
-    };
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let ws = ws.display().to_string();
+    let fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
     let pane = {
-        let daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
+        let daemon = codex_daemon(h, &bin);
         ok_data(layout(
             &daemon.socket,
             "workspace/open",
@@ -8123,11 +8614,11 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
             operator(),
             false,
         ));
-        let pane = json_of(&bench(&home.dir, &["open", "terminal"]))["pane"]
+        let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
             .as_str()
             .unwrap()
             .to_string();
-        let (_, pid) = terminal_process(&home.dir, "holder");
+        let (_, pid) = terminal_process(h, "holder");
         hook_verb(
             &daemon.socket,
             serde_json::json!({"harness": "codex", "event": "SessionStart", "session": "019a-thread",
@@ -8135,20 +8626,25 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
         );
         pane
     };
-    let _daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
-    let run = json_of(&bench(&home.dir, &["restore", &pane]));
+    let _daemon = codex_daemon(h, &bin);
+    let run = json_of(&bench(h, &["restore", &pane]));
     assert_eq!(run["restored"][0]["how"], "resumed", "{run}");
     let session = run["restored"][0]["session"].as_str().unwrap();
-    let root = home.dir.join(".bench");
-    assert_served_resume(&root, &recorded_runs(&runs, 2), session, "019a-thread");
-
-    // Mail wakes it before any hook has reported: a resumed codex fires none until a turn runs.
-    // The stand-in's app-server never binds, so the test answers on the session's socket.
-    let server = FakeAppServer::bind(
-        &root.join("codex").join(format!("{session}.sock")),
-        vec![true],
+    assert_codex_resumed(
+        h,
+        &fake,
+        &runs,
+        session,
+        "019a-thread",
+        "danger-full-access",
     );
-    let handle = json_of(&bench(&home.dir, &["sessions"]))["sessions"]
+    assert_eq!(fake.asked("thread/read", 1)[0]["threadId"], "019a-thread");
+    let resume = &fake.asked_now("thread/resume")[0];
+    assert_eq!(resume["model"], "gpt-recorded");
+    assert_eq!(resume["config"]["model_reasoning_effort"], "low");
+
+    // Busy with its notice; mail waits until codex says the thread stopped.
+    let handle = json_of(&bench(h, &["sessions"]))["sessions"]
         .as_array()
         .unwrap()
         .iter()
@@ -8156,80 +8652,55 @@ fn a_codex_its_hook_recorded_in_a_pane_is_resumed_by_its_own_id_on_its_own_app_s
         .map(|s| s["handle"].as_str().unwrap().to_string())
         .unwrap();
     let sent = json_of(&bench(
-        &home.dir,
+        h,
         &["mail", "send", "--to", &handle, "--body", "wake up"],
     ));
     assert_eq!(sent["wake"], "queued", "{sent}");
-    // Not before its server says the thread is idle: the TUI may not have loaded it yet.
-    assert!(server.started.recv_timeout(Duration::from_secs(7)).is_err());
-    *server.status.lock().unwrap() = "idle";
-    let params = server
-        .started
-        .recv_timeout(Duration::from_secs(15))
-        .expect("a turn is started on the resumed thread once its server says it is idle");
-    assert_eq!(params["threadId"], "019a-thread");
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        fake.asked_now("turn/start").len(),
+        1,
+        "only the notice so far"
+    );
+    fake.notify(serde_json::json!({"method": "thread/status/changed",
+        "params": {"threadId": "019a-thread", "status": {"type": "idle"}}}));
+    assert_eq!(fake.asked("turn/start", 2)[1]["threadId"], "019a-thread");
 }
 
 #[test]
 fn a_codex_thread_a_live_session_holds_is_not_resumed_a_second_time() {
-    // A new codex names its thread after the fact, so only its hook says a live session holds it.
     let home = TestHome::claim("cxheld");
-    let ws = workspace(&home.dir).display().to_string();
-    let (bin, _) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()));
-    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
-    let run = bench(&home.dir, &["spawn", "--agent", "codex", "--cwd", &ws]);
-    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-    let spawned = json_of(&run);
-    let thread = "019a0dde-1128-7572-8528-e0979f7e7070";
-    hook_verb(
-        &daemon.socket,
-        serde_json::json!({"harness": "codex", "event": "SessionStart", "session": thread,
-            "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"]}),
-    );
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &[]);
+    let thread = spawned["runtime_session"].as_str().unwrap();
+    let ws = ws.display().to_string();
     let again = bench(
-        &home.dir,
+        h,
         &[
             "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
         ],
     );
     assert_eq!(again.code, 3, "{}", again.stderr);
     assert!(again.stderr.contains("already live"), "{}", again.stderr);
-    // `/new` in that codex: it reports another thread, and its app-server keeps the first open.
-    std::thread::sleep(Duration::from_millis(20));
-    hook_verb(
-        &daemon.socket,
-        serde_json::json!({"harness": "codex", "event": "SessionStart",
-            "session": "019a0dde-1128-7572-8528-e0979f7e7071",
-            "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"]}),
-    );
-    let after_new = bench(
-        &home.dir,
-        &[
-            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
-        ],
-    );
-    assert_eq!(after_new.code, 3, "{}", after_new.stderr);
-    assert!(
-        after_new.stderr.contains("already live"),
-        "{}",
-        after_new.stderr
-    );
 }
 
 #[test]
 fn a_codex_the_operator_started_in_a_pane_is_not_resumed_a_second_time() {
     let home = TestHome::claim("cxpane");
-    let ws = workspace(&home.dir).display().to_string();
-    let (bin, _) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()));
-    let daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let ws = ws.display().to_string();
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
     // His codex in a shell pane: its hook declares the pane, never a benchd session.
-    let (_, pid) = terminal_process(&home.dir, "his-codex");
+    let (_, pid) = terminal_process(h, "his-codex");
     let thread = "019a0dde-1128-7572-8528-e0979f7e7072";
     let reply = hook_verb(
         &daemon.socket,
@@ -8238,7 +8709,7 @@ fn a_codex_the_operator_started_in_a_pane_is_not_resumed_a_second_time() {
     );
     assert!(reply["handle"].is_string(), "it claimed a mailbox: {reply}");
     let again = bench(
-        &home.dir,
+        h,
         &[
             "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
         ],
@@ -8248,54 +8719,38 @@ fn a_codex_the_operator_started_in_a_pane_is_not_resumed_a_second_time() {
 }
 
 #[test]
-fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_resume() {
-    // codex takes `resume <id>` as claude and pi take theirs, so `--resume` is refused only for
-    // what argv refuses (harness parity G10). Each session runs its own app-server, so `bench
-    // resume` serves the new session on its own socket, never on the exited one's.
+fn a_codex_conversation_is_resumed_by_spawn_and_again_by_resume_in_each_sessions_own_name() {
+    // codex takes `resume <id>` as claude and pi take theirs (harness parity G10). Each resume
+    // re-enters the thread on benchd's app-server with the new session's own environment, after
+    // benchd lets go of it, so codex restarts it with that environment rather than keep the
+    // exited session's.
     let home = TestHome::claim("cxresume");
-    let ws = workspace(&home.dir).display().to_string();
-    let (bin, runs) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()));
-    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
     let thread = "019a0dde-1128-7572-8528-e0979f7e706f";
-    let run = bench(
-        &home.dir,
-        &[
-            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
-        ],
-    );
-    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
-    let spawned = json_of(&run);
+    let spawned = spawn_codex(h, &ws, &["--resume", thread, "--model", "gpt-asked"]);
     let first = spawned["session"].as_str().unwrap().to_string();
-    let root = home.dir.join(".bench");
-    assert_served_resume(&root, &recorded_runs(&runs, 2), &first, thread);
-    // Mail wakes it through its own session's server, before any hook has reported.
-    let wakes = |session: &str| {
-        let server = FakeAppServer::bind(
-            &root.join("codex").join(format!("{session}.sock")),
-            vec![true],
-        );
-        *server.status.lock().unwrap() = "idle";
-        let sent = json_of(&bench(
-            &home.dir,
-            &["mail", "send", "--to", &first, "--body", "wake up"],
-        ));
-        assert_eq!(sent["wake"], "queued", "{session}: {sent}");
-        let params = server
-            .started
-            .recv_timeout(Duration::from_secs(15))
-            .unwrap_or_else(|_| panic!("{session}: a turn is started on its thread"));
-        assert_eq!(params["threadId"], thread);
-    };
-    wakes(&first);
+    assert_codex_resumed(h, &fake, &runs, &first, thread, "danger-full-access");
+    assert_eq!(fake.asked_now("thread/resume")[0]["model"], "gpt-asked");
+    assert!(
+        fake.asked_now("thread/read").is_empty(),
+        "a model asked for is not looked up"
+    );
 
-    // A conversation a live session holds is not resumed a second time: that forks it.
     let again = bench(
-        &home.dir,
+        h,
         &[
-            "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+            "--resume",
+            thread,
         ],
     );
     assert_eq!(again.code, 3, "{}", again.stderr);
@@ -8306,18 +8761,66 @@ fn a_codex_conversation_is_resumed_on_its_own_app_server_by_spawn_and_again_by_r
     wait_until("the session exits", Duration::from_secs(5), || {
         !libc_alive(pid)
     });
-    fs::remove_file(&runs).unwrap();
-    let mut resumed = bench(&home.dir, &["resume", &first]);
+    let mut resumed = bench(h, &["resume", &first]);
     let deadline = Instant::now() + Duration::from_secs(5);
     while resumed.stderr.contains("still live") && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
-        resumed = bench(&home.dir, &["resume", &first]);
+        resumed = bench(h, &["resume", &first]);
     }
     assert_eq!(resumed.code, 0, "stderr: {}", resumed.stderr);
     let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
     assert_ne!(second, first);
-    assert_served_resume(&root, &recorded_runs(&runs, 2), &second, thread);
-    wakes(&second);
+    assert_eq!(
+        fake.asked("thread/unsubscribe", 1)[0]["threadId"],
+        thread,
+        "benchd let go of it first"
+    );
+    assert_codex_resumed(h, &fake, &runs, &second, thread, "danger-full-access");
+    // The second session is woken by mail through the same server.
+    fake.notify(serde_json::json!({"method": "thread/status/changed",
+        "params": {"threadId": thread, "status": {"type": "idle"}}}));
+    let sent = json_of(&bench(
+        h,
+        &["mail", "send", "--to", &first, "--body", "wake up"],
+    ));
+    assert_eq!(sent["wake"], "queued", "{sent}");
+    wait_until(
+        "a turn is started on its thread",
+        Duration::from_secs(10),
+        || fake.asked_now("turn/start").len() >= 3,
+    );
+}
+
+#[test]
+fn a_codex_spawned_new_is_resumed_by_bench_resume() {
+    // Its thread is known from spawn (#466), so `bench resume` has an id to re-enter; before,
+    // codex named it only after the fact and the resume was refused.
+    let home = TestHome::claim("cxresnew");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &[]);
+    let (first, thread) = (
+        spawned["session"].as_str().unwrap().to_string(),
+        spawned["runtime_session"].as_str().unwrap().to_string(),
+    );
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+    let mut resumed = bench(h, &["resume", &first]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while resumed.stderr.contains("still live") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        resumed = bench(h, &["resume", &first]);
+    }
+    assert_eq!(resumed.code, 0, "stderr: {}", resumed.stderr);
+    let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
+    assert_codex_resumed(h, &fake, &runs, &second, &thread, "danger-full-access");
 }
 
 #[test]
@@ -10438,88 +10941,34 @@ fn a_pi_fork_is_its_own_conversation_with_only_read_tools_and_comes_back_so() {
 }
 
 #[test]
-fn a_codex_fork_runs_on_a_read_only_app_server_and_comes_back_on_one() {
-    // Harness parity G8/G9: codex forks on its own app-server, whose sandbox is read-only, since
-    // its TUI takes no permission flag there. codex names the fork itself, so its hook's id is the
-    // one the record keeps, marked as a fork, and the restored fork is served read-only again.
+fn a_codex_fork_is_a_read_only_thread_and_comes_back_read_only() {
+    // Harness parity G8/G9 on benchd's app-server (#466): the fork is `thread/fork` of the
+    // author's thread in the read-only sandbox, its id known at spawn and recorded as a fork, and
+    // the restored fork is re-entered read-only again.
     let home = TestHome::claim("cxfork");
-    let ws = workspace(&home.dir).display().to_string();
-    let (bin, runs) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let with_codex = || {
-        let mut cmd = isolated(benchd_bin());
-        cmd.env("PATH", format!("{}:{path}", bin.display()));
-        cmd
-    };
-    let root = home.dir.join(".bench");
-    let served = |runs: &[String], session: &str| {
-        let socket = format!(
-            "unix://{}",
-            root.join("codex").join(format!("{session}.sock")).display()
-        );
-        let server = runs
-            .iter()
-            .find(|r| r.starts_with("app-server ") && r.ends_with(&format!(" --listen {socket}")))
-            .unwrap_or_else(|| panic!("{session} runs its own app-server: {runs:?}"))
-            .clone();
-        let tui = runs
-            .iter()
-            .find(|r| r.starts_with(&format!("--remote {socket} ")))
-            .unwrap_or_else(|| panic!("a TUI against {socket}: {runs:?}"))
-            .clone();
-        (server, tui)
-    };
-    let fork_thread = "019b0dde-1128-7572-8528-e0979f7e7071";
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    let (bin, runs) = write_fake_codex(h);
     let pane = {
-        let daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
-        let run = bench(
-            &home.dir,
-            &[
-                "spawn",
-                "--agent",
-                "codex",
-                "--cwd",
-                &ws,
-                "--fork",
-                "019a-author",
-            ],
-        );
-        assert_eq!(run.code, 0, "{}", run.stderr);
-        let fork = json_of(&run);
+        let _daemon = codex_daemon(h, &bin);
+        let fork = spawn_codex(h, &ws, &["--fork", "019a-author"]);
         assert_eq!(fork["forked_from"], "019a-author");
-        assert_eq!(fork["runtime_session"], serde_json::Value::Null);
-        let sid = fork["session"].as_str().unwrap().to_string();
-        let (server, tui) = served(&recorded_runs(&runs, 2), &sid);
-        assert!(
-            server.contains(r#"-c sandbox_mode="read-only""#),
-            "{server}"
-        );
-        assert!(tui.contains(" fork 019a-author "), "{tui}");
-        assert!(
-            !tui.contains("--dangerously-bypass-approvals-and-sandbox"),
-            "{tui}"
-        );
-        // codex reports the fork's own thread at its first turn.
-        hook_verb(
-            &daemon.socket,
-            serde_json::json!({"harness": "codex", "event": "SessionStart", "session": fork_thread,
-                "cwd": ws, "pid": fork["pid"], "bench_session": sid}),
-        );
+        let forked = &fake.asked("thread/fork", 1)[0];
+        assert_eq!(forked["threadId"], "019a-author");
+        assert_eq!(forked["sandbox"], "read-only");
+        let thread = fork["runtime_session"].as_str().expect("known at spawn");
         let pane = fork["pane"].as_str().unwrap().to_string();
-        assert_eq!(pane_agent(&home.dir, &pane)["session"], fork_thread);
-        pane
+        assert_eq!(pane_agent(h, &pane)["session"], thread);
+        (pane, thread.to_string())
     };
-    fs::remove_file(&runs).unwrap();
-    let _daemon = DaemonGuard::start_with(&home.dir, None, with_codex());
-    let again = json_of(&bench(&home.dir, &["restore", &pane]));
+    let (pane, thread) = pane;
+    let _daemon = codex_daemon(h, &bin);
+    let again = json_of(&bench(h, &["restore", &pane]));
     assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
     let restored = again["restored"][0]["session"].as_str().unwrap();
-    let (server, tui) = served(&recorded_runs(&runs, 2), restored);
-    assert!(
-        server.contains(r#"-c sandbox_mode="read-only""#),
-        "a restored codex fork is served read-only again: {server}"
-    );
-    assert!(tui.contains(&format!(" resume {fork_thread} ")), "{tui}");
+    assert_codex_resumed(h, &fake, &runs, restored, &thread, "read-only");
 }
 
 /// `<home>/<name>`, a git repository with one commit and a linked worktree at
@@ -10542,63 +10991,6 @@ fn git_repo_with_worktree(home: &Path, name: &str) -> PathBuf {
         assert!(out.status.success(), "git {args:?}: {out:?}");
     }
     repo.join(".worktrees/wt")
-}
-
-#[test]
-fn a_codex_in_a_worktree_of_a_repo_the_operator_trusts_is_served_that_trust() {
-    // A served codex checks only its exact `-C` folder, so without this a worktree of a trusted
-    // repository stops at "Trust this folder?". A plain codex follows the worktree to its main
-    // repository; benchd does the same, and only for a repository the operator trusts.
-    let home = TestHome::claim("cxtrust");
-    let trusted = git_repo_with_worktree(&home.dir, "t");
-    let untrusted = git_repo_with_worktree(&home.dir, "u");
-    fs::create_dir_all(home.dir.join(".codex")).unwrap();
-    let config = format!(
-        "[projects.{:?}]\ntrust_level = \"trusted\"\n",
-        home.dir
-            .join("t")
-            .canonicalize()
-            .unwrap()
-            .display()
-            .to_string()
-    );
-    fs::write(home.dir.join(".codex/config.toml"), &config).unwrap();
-    let (bin, runs) = write_fake_codex(&home.dir);
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("PATH", format!("{}:{path}", bin.display()));
-    let _daemon = DaemonGuard::start_with(&home.dir, None, cmd);
-    let server_of = |cwd: &Path, n: usize| {
-        let run = bench(
-            &home.dir,
-            &["spawn", "--agent", "codex", "--cwd", cwd.to_str().unwrap()],
-        );
-        assert_eq!(run.code, 0, "{}", run.stderr);
-        let sid = json_of(&run)["session"].as_str().unwrap().to_string();
-        let socket = home.dir.join(format!(".bench/codex/{sid}.sock"));
-        recorded_runs(&runs, n)
-            .into_iter()
-            .find(|r| {
-                r.starts_with("app-server ")
-                    && r.ends_with(&format!(" --listen unix://{}", socket.display()))
-            })
-            .unwrap_or_else(|| panic!("{sid} runs its own app-server"))
-    };
-    let server = server_of(&trusted, 2);
-    assert!(
-        server.contains(&format!(
-            r#" -c projects={{"{}"={{trust_level="trusted"}}}} "#,
-            trusted.display()
-        )),
-        "{server}"
-    );
-    let server = server_of(&untrusted, 4);
-    assert!(!server.contains("projects="), "{server}");
-    assert_eq!(
-        fs::read_to_string(home.dir.join(".codex/config.toml")).unwrap(),
-        config,
-        "benchd never writes the operator's codex config"
-    );
 }
 
 #[test]

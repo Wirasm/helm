@@ -22,7 +22,7 @@ use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, RestoreArgs};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// What `restore` did for one pane.
@@ -42,14 +42,21 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         Some(p) => Some(PaneId::parse(p.trim()).map_err(|why| format!("restore: {why}"))?),
         None => None,
     };
-    let Prepared { starts, trusts } = prepare(core, only);
+    let Prepared { starts, mut codex } = prepare(core, only);
+    let mut abandoned: Vec<SpawnSpec> = Vec::new();
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
     let waiting = waiting(&c, &next, only);
     if let Some(pane) = only
         && waiting.is_empty()
     {
-        return Err(match next.pane(pane) {
+        drop(c);
+        // The pane changed while its thread was being re-entered: that thread goes too.
+        for spec in codex.into_values().filter_map(Result::ok).map(|r| r.spec) {
+            crate::codex::abandon(core, &spec);
+        }
+        let c = core.lock().unwrap();
+        return Err(match c.bench.document.pane(pane) {
             None => format!("no pane {pane} — `bench get` lists them"),
             Some(_) => format!("pane {pane} is not a terminal whose session has ended"),
         });
@@ -79,14 +86,25 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "claude conversation {} was never written in: nothing to resume",
                 a.session
             ))),
-            Some(a) => match starts.get(&pane) {
-                Some(Ok(start)) => {
-                    let trust = trusts.get(&start.cwd).cloned().flatten();
-                    resume(&mut c, pane, &a, start, trust).map_err(Some)
-                }
-                Some(Err(why)) => Err(Some(why.clone())),
+            Some(a) => match (codex.remove(&pane), starts.get(&pane)) {
+                (Some(prepared), _) => prepared
+                    .and_then(|r| {
+                        let spec = r.spec.clone();
+                        start(&mut c, pane, &a, r).inspect_err(|_| abandoned.push(spec))
+                    })
+                    .map_err(Some),
+                // A codex runs only on a thread `prepare` re-entered on benchd's server; one it
+                // did not prepare (held then, free now) waits for the next restore.
+                (None, Some(Ok(_))) if a.command == AgentKind::Codex.name() => Err(Some(format!(
+                    "codex conversation {} was held when this restore began",
+                    a.session
+                ))),
+                (None, Some(Ok(at))) => reserve(&mut c, &a, at)
+                    .and_then(|r| start(&mut c, pane, &a, r))
+                    .map_err(Some),
+                (None, Some(Err(why))) => Err(Some(why.clone())),
                 // A pane that ended while the lock was let go: the next restore takes it.
-                None => Err(Some("its session ended during this restore".to_string())),
+                (None, None) => Err(Some("its session ended during this restore".to_string())),
             },
             None => Err(None),
         };
@@ -117,14 +135,24 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         created: None,
         pane: None,
     };
-    match crate::layout::commit(&mut c, change) {
+    let committed = crate::layout::commit(&mut c, change);
+    drop(c);
+    // A thread re-entered for a pane that did not get it (its session failed to start, or the
+    // pane turned out held): its first turn is stopped, so nothing runs that no pane shows.
+    let unused = codex.into_values().filter_map(Result::ok).map(|r| r.spec);
+    for spec in abandoned.into_iter().chain(unused) {
+        crate::codex::abandon(core, &spec);
+    }
+    match committed {
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }
 }
 
 /// Where each recorded agent of the panes a restore takes resumes (its worktree may be gone,
-/// #621), and a codex's hook trust there, once per directory. Both start processes, git and
+/// #621). Then a codex's thread has to be re-entered on benchd's app-server before its TUI starts
+/// (`spawn::codex_thread`), which asks the server; so each codex pane that will be resumed gets
+/// its session reserved and its thread re-entered here too. Both start or ask processes, git and
 /// codex, so they are worked out before the lock is taken for the restore.
 fn prepare(core: &Arc<Mutex<Core>>, only: Option<PaneId>) -> Prepared {
     let agents: Vec<(PaneId, ResumableAgent)> = {
@@ -143,23 +171,38 @@ fn prepare(core: &Arc<Mutex<Core>>, only: Option<PaneId>) -> Prepared {
             (*pane, start)
         })
         .collect();
-    let codex_dirs: HashSet<&str> = agents
-        .iter()
-        .filter(|(_, a)| a.command == AgentKind::Codex.name())
-        .filter_map(|(pane, _)| Some(starts.get(pane)?.as_ref().ok()?.cwd.as_str()))
-        .collect();
-    let trusts: HashMap<String, Option<String>> = codex_dirs
+    let reserved: Vec<(PaneId, Result<Reserved, String>)> = {
+        let mut c = core.lock().unwrap();
+        let codex: Vec<&(PaneId, ResumableAgent)> = agents
+            .iter()
+            .filter(|(_, a)| a.command == AgentKind::Codex.name() && !held(&c, &a.session))
+            .collect();
+        codex
+            .into_iter()
+            .filter_map(|(pane, a)| {
+                let at = starts.get(pane)?.as_ref().ok()?;
+                let r = crate::codex_trust::may_run(&at.cwd).and_then(|()| reserve(&mut c, a, at));
+                Some((*pane, r))
+            })
+            .collect()
+    };
+    let codex = reserved
         .into_iter()
-        .map(|cwd| (cwd.to_string(), spawn::codex_hook_trust(cwd)))
+        .map(|(pane, r)| {
+            let r = r.and_then(|mut r| {
+                spawn::codex_thread(core, &mut r.spec, &r.id, &r.handle).map(|()| r)
+            });
+            (pane, r)
+        })
         .collect();
-    Prepared { starts, trusts }
+    Prepared { starts, codex }
 }
 
-/// What [`prepare`] worked out: where each pane's agent resumes, or why it cannot, and the hook
-/// trust for each directory a codex resumes in.
+/// What [`prepare`] worked out: where each pane's agent resumes, or why it cannot, and each codex
+/// pane's session with its thread already re-entered, or why not.
 struct Prepared {
     starts: HashMap<PaneId, Result<Start, String>>,
-    trusts: HashMap<String, Option<String>>,
+    codex: HashMap<PaneId, Result<Reserved, String>>,
 }
 
 /// The terminal panes of `doc` (or only `only`) that show no live session: the ones a restore
@@ -205,12 +248,8 @@ fn has_transcript(id: &str) -> bool {
 }
 
 /// Whether a live session already holds conversation `runtime`: by the id it was started with,
-/// or, for a codex that names its thread after the fact, by the id its hook recorded; or a live
-/// agent whose hook reported it, which is how a codex the operator started in a pane is seen.
-/// A thread a benchd codex left with `/new` stays held until that session ends: its app-server
-/// keeps the thread open, and a second codex on it is read-only ("This conversation is open in
-/// another app", measured on codex 0.159.3). The operator's own codex ends the old thread on
-/// `/new` (`SessionEnd`), so his is free at once.
+/// or by the id its hook recorded; or a live agent whose hook reported it, which is how a codex
+/// the operator started in a pane is seen.
 pub fn held(core: &Core, runtime: &str) -> bool {
     let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
     core.sessions
@@ -247,16 +286,16 @@ fn recorded_agent(pane: &bench_doc::Pane) -> Option<ResumableAgent> {
     }
 }
 
-/// Resume `agent`'s conversation as a benchd session for `pane`, in the folder `start` names,
-/// under the mailbox the record gave it when it has one; a codex with `hook_trust`
-/// ([`spawn::hook_trust`]).
-fn resume(
-    core: &mut Core,
-    pane: PaneId,
-    agent: &ResumableAgent,
-    start: &Start,
-    hook_trust: Option<String>,
-) -> Result<Arc<Session>, String> {
+/// A resume's session, reserved: its id, its handle and the spec it will run.
+struct Reserved {
+    id: String,
+    handle: String,
+    spec: SpawnSpec,
+}
+
+/// Reserve a session for resuming `agent`'s conversation in the folder `at` names, under the
+/// mailbox the record gave it when it has one, in the posture it was spawned in.
+fn reserve(core: &mut Core, agent: &ResumableAgent, at: &Start) -> Result<Reserved, String> {
     let kind = AgentKind::parse(&agent.command, false)?;
     let id = format!("s{}", core.next_session);
     core.next_session += 1;
@@ -269,7 +308,7 @@ fn resume(
         .unwrap_or_else(|| id.clone());
     let mut spec = SpawnSpec {
         agent: kind,
-        cwd: start.cwd.clone(),
+        cwd: at.cwd.clone(),
         model: None,
         effort: None,
         conversation: Conversation::Resume(agent.session.clone()),
@@ -277,11 +316,20 @@ fn resume(
         prompt_file: None,
         extra_args: Vec::new(),
         settings: None,
-        codex_server: None,
-        codex_hook_trust: hook_trust,
-        codex_trust_folder: false,
+        codex: None,
     };
-    spawn::wire(&mut spec, &core.root, &id, start.note.as_deref())?;
+    spawn::wire(&mut spec, &core.root, at.note.as_deref())?;
+    Ok(Reserved { id, handle, spec })
+}
+
+/// Start the reserved resume of `agent`'s conversation as a benchd session for `pane`.
+fn start(
+    core: &mut Core,
+    pane: PaneId,
+    agent: &ResumableAgent,
+    r: Reserved,
+) -> Result<Arc<Session>, String> {
+    let Reserved { id, handle, spec } = r;
     let session = Session::spawn(
         id.clone(),
         handle.clone(),
@@ -292,14 +340,14 @@ fn resume(
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_resumed(core, &session);
+    hook::serve_codex(core, &session);
     let _ = core.append(
         "session/spawned",
         json!({
             "session": id,
             "handle": handle,
-            "agent": kind.name(),
-            "cwd": start.cwd,
+            "agent": spec.agent.name(),
+            "cwd": spec.cwd,
             "pid": session.pid,
             "runtime_session": agent.session,
             "resumed": true,

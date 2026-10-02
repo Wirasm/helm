@@ -3,8 +3,8 @@
 //! whose reply the harness puts in front of the model.
 //!
 //! An idle agent is not waiting for a tool call, so [`deliver_to_idle`] starts a turn for it
-//! through the harness's own [`Channel`]: Claude's inbox socket, or the app-server of a codex
-//! session benchd spawned. pi's extension starts its own. Nothing is ever typed into a pty.
+//! through the harness's own [`Channel`]: Claude's inbox socket, or benchd's codex app-server for
+//! a codex benchd spawned. pi's extension starts its own. Nothing is ever typed into a pty.
 //!
 //! State lives in `Core::agents`, keyed by the harness's own session id: an agent for a
 //! session with a mailbox, `None` for one that was asked once and gets none. The address is
@@ -56,10 +56,9 @@ pub struct Agent {
 pub enum Channel {
     /// Claude's inbox socket, as its hooks last reported it.
     ClaudeSocket(PathBuf),
-    /// The app-server a codex session benchd spawned runs its TUI against
-    /// (`bench_wire::codex_server_socket`). A codex the operator started has its app-server
-    /// embedded, which nothing outside the process can reach, so it has no channel.
-    CodexServer(PathBuf),
+    /// benchd's codex app-server, where every codex benchd spawned is a thread (#466). A codex
+    /// the operator started runs on an app-server benchd cannot reach, so it has no channel.
+    Codex,
     /// pi's extension watches its own inbox and starts its own turn (`wake`), so benchd never
     /// pushes to it but can promise a send will wake it.
     PiItself,
@@ -128,29 +127,80 @@ impl Agent {
     }
 }
 
-/// A codex benchd resumed on its own app-server (`spawn::wire`) can be woken before its hooks
-/// report: codex fires `SessionStart` with a session's first turn (measured on 0.157.0), and a
-/// resumed session takes no turn until somebody starts one, so without this its mail could only
-/// wait. Its activity is unknown until a hook reports or its app-server says the thread is idle
-/// ([`reconcile`]), so no turn is started on a thread its TUI has not loaded yet.
-pub fn serve_resumed(c: &mut Core, session: &bench_session::Session) {
-    let (Some(thread), Some(socket)) = (session.spec.served_resume(), &session.spec.codex_server)
+/// Every codex benchd starts is an agent from the moment its session is: benchd created its
+/// thread (`spawn::codex_thread`), so the thread id is known before any hook reports, and benchd
+/// has just started its first turn on it, so it is busy. Its hooks and its thread's status
+/// ([`codex_notification`]) say what it does from there.
+pub fn serve_codex(c: &mut Core, session: &bench_session::Session) {
+    let (bench_session::AgentKind::Codex, Some(thread)) =
+        (session.spec.agent, session.spec.conversation.id())
     else {
         return;
     };
-    let channel = Channel::CodexServer(PathBuf::from(socket));
     let key = SessionKey {
         harness: Harness::Codex,
         id: thread.to_string(),
     };
-    let agent = Agent::new(session.handle.clone(), Some(channel), session.pid, None);
+    let mut agent = Agent::new(
+        session.handle.clone(),
+        Some(Channel::Codex),
+        session.pid,
+        None,
+    );
+    // What codex said about the thread before its session was here, if anything: a first turn
+    // that failed at once (a usage limit) fires no `Stop`, only a status.
+    let earlier = crate::codex::running(&c.codex).and_then(|server| server.claim(thread));
+    agent.set_activity(match earlier.as_deref() {
+        Some(status) if crate::codex::stopped(status) => Activity::Idle,
+        _ => Activity::Busy,
+    });
     c.agents.insert(key, Some(agent));
+}
+
+/// What benchd's codex app-server says about one of its threads (`codex.rs`'s connection is
+/// subscribed to every thread benchd created). Today: a thread that stopped running, idle or
+/// failed (a turn refused by a usage limit fires no `Stop`, measured on codex 0.157.0), makes its
+/// agent idle, so its mail is pushed. Attention (#357) reads codex's status here: turns starting
+/// and ending, and `active` with `waitingOnApproval` or `waitingOnUserInput`.
+pub fn codex_notification(core: &Arc<Mutex<Core>>, method: &str, params: &Value) {
+    if method != "thread/status/changed" {
+        return;
+    }
+    let (Some(thread), Some(status)) = (
+        params["threadId"].as_str(),
+        params["status"]["type"].as_str(),
+    ) else {
+        return;
+    };
+    if !crate::codex::stopped(status) {
+        return;
+    }
+    let key = SessionKey {
+        harness: Harness::Codex,
+        id: thread.to_string(),
+    };
+    let mut c = core.lock().unwrap();
+    let Some(Some(agent)) = c.agents.get_mut(&key) else {
+        return;
+    };
+    if agent.activity == Some(Activity::Idle) {
+        return;
+    }
+    agent.set_activity(Activity::Idle);
+    let handle = agent.handle.clone();
+    let _ = c.append(
+        "agent/state",
+        json!({ "harness": "codex", "session": thread, "handle": handle, "activity": Activity::Idle, "event": "thread/status" }),
+    );
 }
 
 pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     let mut args: HookArgs = serde_json::from_value(args.clone())
         .map_err(|e| Refusal::Refused(format!("hook args: {e}")))?;
     args.pid = bench_sessions::process::hook_caller(args.pid);
+    if args.harness == Harness::Codex {
+        own_codex_thread(&core.lock().unwrap(), &mut args);
+    }
     if args.session.trim().is_empty() {
         return Err(Refusal::Refused(
             "hook: a session id is required — the harness's own session id".into(),
@@ -248,6 +298,27 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     Ok(json!(reply))
 }
 
+/// A codex hook runs in benchd's app-server, with the server's environment, so it never says
+/// which benchd session it is from (#466). Its thread does: the session that owns the thread
+/// is the one benchd created it for. The hook is then read as that session's own, its process
+/// the session's TUI rather than the shared server, so every rule below that reads the declared
+/// session (the claim, the pane, the channel) and every liveness check that reads the pid holds
+/// for it as for any other agent. A codex the operator started is owned by no session and is
+/// read as it came.
+fn own_codex_thread(c: &Core, args: &mut HookArgs) {
+    // The live one: a thread re-entered by a new session after its old one exited is held by
+    // both until the old pane goes.
+    let owners = || {
+        c.sessions
+            .values()
+            .filter(|s| s.runtime_session.as_deref() == Some(args.session.as_str()))
+    };
+    if let Some(session) = owners().find(|s| s.is_live()).or_else(|| owners().next()) {
+        args.bench_session = Some(session.id.clone());
+        args.pid = session.pid;
+    }
+}
+
 /// The channel an agent starts with. Claude's is the socket its hooks report, on any event.
 fn channel(c: &Core, args: &HookArgs) -> Option<Channel> {
     match args.harness {
@@ -256,7 +327,7 @@ fn channel(c: &Core, args: &HookArgs) -> Option<Channel> {
             .bench_session
             .as_deref()
             .filter(|id| c.sessions.contains_key(*id))
-            .map(|id| Channel::CodexServer(bench_wire::codex_server_socket(&c.root, id))),
+            .map(|_| Channel::Codex),
         Harness::Claude => None,
     }
 }
@@ -457,9 +528,8 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
     {
         let (session, handle) = (spawned.id.clone(), spawned.handle.clone());
         let forked_from = spawned.spec.conversation.forked_from().map(str::to_string);
-        // codex names its session after the fact, a fork's too, so its spawn recorded nothing;
-        // the hook's id is the first the daemon hears of it. A fork's record says so, which is
-        // what brings it back read-only (#531).
+        // A conversation the spawn did not record: the hook's id is the first the daemon hears of
+        // it. A fork's record says so, which is what brings it back read-only (#531).
         sessions::record_claim(
             c,
             HostedSession {
@@ -554,6 +624,7 @@ pub fn deliver_to_idle(core: &Arc<Mutex<Core>>) {
     };
     settle_unanswered(core, &root);
     reconcile(core, &root, &home);
+    release_codex_threads(core);
     let idle: Vec<(SessionKey, String, Channel)> = {
         let c = core.lock().unwrap();
         c.agents
@@ -599,7 +670,14 @@ fn push(core: &Arc<Mutex<Core>>, root: &Path, key: &SessionKey, handle: &str, ch
     // The channel names are read back by `daemon/mail-ring.py`'s CHANNELS.
     let (name, sent) = match channel {
         Channel::ClaudeSocket(socket) => ("socket", poke(socket, &text)),
-        Channel::CodexServer(socket) => ("codex", crate::codex::start_turn(socket, &key.id, &text)),
+        Channel::Codex => {
+            let host = Arc::clone(&core.lock().unwrap().codex);
+            let sent = match crate::codex::running(&host) {
+                Some(server) => server.start_turn(&key.id, &text),
+                None => Err("benchd's codex app-server is not running".into()),
+            };
+            ("codex", sent)
+        }
         Channel::PiItself => return,
     };
     if let Err(why) = sent {
@@ -713,49 +791,41 @@ fn settle_unanswered(core: &Arc<Mutex<Core>>, root: &Path) {
     }
 }
 
-/// Agents the hooks last saw busy or waiting (or a served codex resume no hook has reported
-/// yet), quiet for [`RECONCILE_AFTER`], with mail
+/// Claude agents the hooks last saw busy or waiting, quiet for [`RECONCILE_AFTER`], with mail
 /// waiting or waiting on the operator (a wait nobody ends would send him to a pane that is not
-/// waiting, M1): the harness's own record says whether they went idle without a hook saying so.
-/// Claude's registry row, for Esc on a prompt (sensor research, run B). A served codex's thread
-/// status, for a turn that failed: a turn refused by a usage limit fires no `Stop` (measured on
-/// codex 0.157.0), so without this the agent looks busy until its next prompt.
+/// waiting, M1): Claude's registry row says whether they went idle without a hook saying so, for
+/// Esc on a prompt (sensor research, run B). A codex needs no asking: its app-server says when a
+/// thread stops running ([`codex_notification`]).
 fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
-    let quiet: Vec<(SessionKey, String, Option<Channel>, bool)> = {
+    let quiet: Vec<(SessionKey, String, bool)> = {
         let c = core.lock().unwrap();
         c.agents
             .iter()
             .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
             .filter(|(_, a)| {
-                matches!(
-                    a.channel,
-                    Some(Channel::ClaudeSocket(_) | Channel::CodexServer(_))
-                ) && a.can_push()
+                matches!(a.channel, Some(Channel::ClaudeSocket(_)))
+                    && a.can_push()
                     && matches!(a.push, Push::Ready)
-                    && match &a.activity {
-                        Some(x) => *x != Activity::Idle,
-                        // A served codex resume, before any hook (`serve_resumed`).
-                        None => matches!(a.channel, Some(Channel::CodexServer(_))),
-                    }
+                    && a.activity.as_ref().is_some_and(|x| *x != Activity::Idle)
                     && a.seen.elapsed() > RECONCILE_AFTER
             })
             .map(|(key, a)| {
                 let waiting = matches!(a.activity, Some(Activity::Waiting { .. }));
-                (key.clone(), a.handle.clone(), a.channel.clone(), waiting)
+                (key.clone(), a.handle.clone(), waiting)
             })
             .collect()
     };
     let stale: Vec<_> = quiet
         .into_iter()
-        .filter(|(_, handle, _, waiting)| *waiting || bench_mail::unread(root, handle) > 0)
-        .map(|(key, handle, channel, _)| (key, handle, channel))
+        .filter(|(_, handle, waiting)| *waiting || bench_mail::unread(root, handle) > 0)
+        .map(|(key, handle, _)| (key, handle))
         .collect();
     if stale.is_empty() {
         return;
     }
     let idle = went_idle(home, &stale);
     let mut c = core.lock().unwrap();
-    for ((key, handle, _), idle) in stale.into_iter().zip(idle) {
+    for ((key, handle), idle) in stale.into_iter().zip(idle) {
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
             continue;
         };
@@ -770,29 +840,17 @@ fn reconcile(core: &Arc<Mutex<Core>>, root: &Path, home: &Path) {
     }
 }
 
-/// Per agent, the record that says it is idle (`registry`, `thread/read`), or `None`. Asked
-/// outside the core lock: a registry read is disk, a thread read a socket round trip.
-fn went_idle(
-    home: &Path,
-    agents: &[(SessionKey, String, Option<Channel>)],
-) -> Vec<Option<&'static str>> {
-    let claude = agents.iter().any(|(k, _, _)| k.harness == Harness::Claude);
-    let rows = if claude {
-        bench_sessions::claude::registry(home, |pid, started| {
-            bench_sessions::process::alive(pid, Some(started))
-        })
-        .0
-    } else {
-        Vec::new()
-    };
+/// Per agent, the registry row that says it is idle, or `None`. Read outside the core lock: it
+/// is disk.
+fn went_idle(home: &Path, agents: &[(SessionKey, String)]) -> Vec<Option<&'static str>> {
+    let rows = bench_sessions::claude::registry(home, |pid, started| {
+        bench_sessions::process::alive(pid, Some(started))
+    })
+    .0;
     agents
         .iter()
-        .map(|(key, _, channel)| match channel {
-            Some(Channel::CodexServer(socket)) => crate::codex::thread_idle(socket, &key.id)
-                .is_ok_and(|idle| idle)
-                .then_some("thread/read"),
-            _ => rows
-                .iter()
+        .map(|(key, _)| {
+            rows.iter()
                 .any(|r| {
                     r.session == key.id
                         && matches!(
@@ -800,9 +858,33 @@ fn went_idle(
                             Activity::Idle | Activity::Waiting { waiting_for: None }
                         )
                 })
-                .then_some("registry"),
+                .then_some("registry")
         })
         .collect()
+}
+
+/// benchd's codex connection lets go of every thread no session holds any more (its pane
+/// closed, `bench close`), so codex unloads it once idle. An exited session whose pane remains
+/// keeps its thread until it is resumed or its pane goes. Outside the core lock: it asks codex.
+fn release_codex_threads(core: &Arc<Mutex<Core>>) {
+    let (host, owned) = {
+        let c = core.lock().unwrap();
+        let owned: std::collections::HashSet<String> = c
+            .sessions
+            .values()
+            .filter_map(|s| s.runtime_session.clone())
+            .collect();
+        (Arc::clone(&c.codex), owned)
+    };
+    if let Some(server) = crate::codex::running(&host) {
+        server.release(&owned, |thread| {
+            core.lock()
+                .unwrap()
+                .sessions
+                .values()
+                .any(|s| s.runtime_session.as_deref() == Some(thread))
+        });
+    }
 }
 
 /// The mailbox of the agent in a helm pane: of the live agents whose claim put them in that
