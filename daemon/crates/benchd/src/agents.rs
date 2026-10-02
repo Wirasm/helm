@@ -46,7 +46,7 @@ pub fn report() -> Value {
 }
 
 /// The first executable `name` on `path`, as a `Command` spawned by that name would run it.
-fn resolve(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+pub(crate) fn resolve(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     std::env::split_paths(path)
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -174,12 +174,14 @@ mod tests {
     }
 
     /// `report` resolves `kind.name()` on PATH; a spawn runs what `argv` names. They must be the
-    /// same program, or `status` reports a binary no spawn runs.
+    /// same program, or `status` reports a binary no spawn runs. A codex benchd runs is the
+    /// program its app-server was started from, which is this same resolution, canonicalized:
+    /// `status`'s `resolves_to` (`codex::Server::start`).
     #[test]
     fn the_program_reported_is_the_program_a_spawn_runs() {
         use bench_session::{Conversation, Posture, SpawnSpec, argv};
         for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Pi] {
-            let mut spec = SpawnSpec {
+            let spec = SpawnSpec {
                 agent: kind,
                 cwd: "/tmp".into(),
                 model: None,
@@ -189,19 +191,9 @@ mod tests {
                 prompt_file: None,
                 settings: None,
                 extra_args: Vec::new(),
-                codex_server: None,
-                codex_hook_trust: None,
-                codex_trust_folder: false,
+                codex: None,
             };
             assert_eq!(argv(&spec).unwrap().0, kind.name());
-            if matches!(kind, AgentKind::Codex) {
-                // A served codex is a script that runs both halves by name.
-                spec.codex_server = Some("/tmp/s.sock".into());
-                let (program, args) = argv(&spec).unwrap();
-                assert_eq!(program, "/bin/sh");
-                assert!(args[1].contains("\ncodex app-server "));
-                assert!(args[1].contains("exec codex --remote"));
-            }
         }
     }
 

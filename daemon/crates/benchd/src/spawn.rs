@@ -22,7 +22,8 @@ use bench_doc::{
     Surface,
 };
 use bench_session::{
-    AgentKind, Conversation, Posture, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id,
+    AgentKind, CodexAttach, Conversation, Posture, Session, SpawnSpec, TEST_AGENT_ENV,
+    mint_session_id,
 };
 use bench_wire::{
     Actor, LayoutVerb, OPERATOR_HANDLE, OpenInto, PaneOpen, Request, Response, SpawnArgs, Status,
@@ -70,7 +71,15 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
     let rules = c.placement.rules();
-    let pane = match place(&mut next, rules, &plan, &id, focus) {
+    // The started session's conversation: a codex's thread exists only from here.
+    let pane = match place(
+        &mut next,
+        rules,
+        &plan,
+        &session.spec.conversation,
+        &id,
+        focus,
+    ) {
         Ok(pane) => pane,
         Err(refusal) => {
             // The bench changed under the spawn. Nothing shows the session, so it goes.
@@ -124,8 +133,15 @@ fn reserve(core: &Arc<Mutex<Core>>, plan: &Plan, focus: Focus) -> Outcome<(Strin
     claimable(&c, &handle).map_err(|why| (Status::Refused, why))?;
     layout::refresh_rules(&mut c);
     let mut dry = c.bench.document.clone();
-    place(&mut dry, c.placement.rules(), plan, &id, focus)
-        .map_err(|refusal| (Status::Refused, refusal.to_string()))?;
+    place(
+        &mut dry,
+        c.placement.rules(),
+        plan,
+        &plan.spec.conversation,
+        &id,
+        focus,
+    )
+    .map_err(|refusal| (Status::Refused, refusal.to_string()))?;
     c.next_session += 1;
     Ok((id, handle))
 }
@@ -138,8 +154,8 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
         (c.root.clone(), c.notices.clone())
     };
     let mut spec = plan.spec.clone();
-    wire(&mut spec, &root, id).map_err(|why| (Status::Error, why))?;
-    spec.codex_hook_trust = hook_trust(&spec);
+    wire(&mut spec, &root).map_err(|why| (Status::Error, why))?;
+    codex_thread(core, &mut spec, id, handle).map_err(|why| (Status::Error, why))?;
     Session::spawn(
         id.to_string(),
         handle.to_string(),
@@ -153,30 +169,17 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 }
 
 /// What an agent's session `id` needs from this root to report to benchd and be woken by it:
-/// claude's settings (its hooks), and codex's own app-server socket (#454), plus the folder
-/// trust a plain `codex` would have there ([`crate::codex_trust`]), which a served one does not
-/// work out for itself. Every route that starts an agent, `spawn`, `restore` and `resume`, goes
-/// through here, so none starts one benchd cannot reach or one that stops at "Trust this folder?"
-/// in a worktree of a repository the operator trusts.
+/// claude's settings (its hooks). Every route that starts an agent, `spawn`, `restore` and
+/// `resume`, goes through here, and a codex then through [`codex_thread`].
 ///
 /// It also gives a resumed conversation its first message when the caller sent none: the
 /// [`resume_notice`], so the agent starts a turn rather than sitting at its prompt after its
 /// last turn was cut off. A caller's own prompt (`bench spawn --resume --prompt-file`, what
 /// `just release-resume` sends) wins. `bench resume` drops the old spawn's prompt before it
 /// gets here, so the notice is the only thing a resume ever sends that the caller did not.
-pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
-    match spec.agent {
-        AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
-        AgentKind::Codex => {
-            spec.codex_server = Some(codex_server_socket(root, id)?);
-            spec.codex_trust_folder = std::env::var_os("HOME").is_some_and(|home| {
-                crate::codex_trust::operator_trusts(
-                    std::path::Path::new(&spec.cwd),
-                    std::path::Path::new(&home),
-                )
-            });
-        }
-        _ => {}
+pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path) -> Result<(), String> {
+    if spec.agent == AgentKind::Claude {
+        spec.settings = Some(claude_settings(root)?);
     }
     if matches!(spec.conversation, Conversation::Resume(_)) && spec.prompt_file.is_none() {
         spec.prompt_file = Some(write_prompt(root, &resume_notice(&crate::now_rfc3339()))?);
@@ -196,31 +199,89 @@ fn resume_notice(at: &str) -> String {
     )
 }
 
-/// The hook trust `spec` starts with ([`SpawnSpec::codex_hook_trust`]): asked of codex for a
-/// codex resume, the one start whose TUI reviews hooks despite the bypass flag, and `None` for
-/// everything else. It starts a process, so it runs outside the core lock, on every route that
-/// resumes a codex: `spawn` and `resume` call it, `restore` asks [`codex_hook_trust`] for each
-/// directory before it takes the lock.
-pub fn hook_trust(spec: &SpawnSpec) -> Option<String> {
-    let resume = matches!(spec.conversation, bench_session::Conversation::Resume(_));
-    (spec.agent == AgentKind::Codex && resume)
-        .then(|| codex_hook_trust(&spec.cwd))
-        .flatten()
-}
-
-/// The trust a resumed codex's app-server gives the hooks that need review in `cwd`, asked of
-/// codex itself (`hooks/list`, 60 ms on 0.159.3, at most 10 s). Without it the TUI opens on
-/// "Hooks need review", none of its hooks run, and mail to it waits. A failed probe starts the
-/// session anyway: its screen then shows the dialog, which `bench sessions` reports as `hook
-/// review`.
-pub fn codex_hook_trust(cwd: &str) -> Option<String> {
-    match bench_wire::hook::codex_hooks_list(std::path::Path::new(cwd)) {
-        Ok(list) => bench_wire::hook::codex_session_trust(&list),
-        Err(why) => {
-            eprintln!("benchd: codex in {cwd} resumes without hook trust: {why}");
-            None
-        }
+/// A codex's thread on benchd's app-server (#466), made before its TUI starts: new, forked from
+/// the conversation it copies, or re-entered. The thread holds everything about the agent: its
+/// cwd, model, effort and posture, and the environment its commands see ([`agent_env`]), since the
+/// TUI's own environment never reaches them. Then its first message goes in as a turn: a TUI
+/// cannot attach to a thread with no turn yet (codex 0.160.0), so a new codex sent no prompt is
+/// told to wait. `spec` comes back naming the thread and the server, which is all `argv` needs.
+///
+/// It talks to the server, so it runs outside the core lock: `spawn` and `resume` call it after
+/// [`wire`], and `restore` calls it for each codex pane before it takes the lock.
+pub fn codex_thread(
+    core: &Arc<Mutex<Core>>,
+    spec: &mut SpawnSpec,
+    id: &str,
+    handle: &str,
+) -> Result<(), String> {
+    if spec.agent != AgentKind::Codex {
+        return Ok(());
     }
+    let server = crate::codex::server(core)?;
+    let root = core.lock().unwrap().root.clone();
+    let env: serde_json::Map<String, Value> = agent_env(&root, id, handle)
+        .set
+        .into_iter()
+        .map(|(k, v)| (k, json!(v)))
+        .collect();
+    let mut params = json!({
+        "cwd": spec.cwd,
+        // Nobody is at an unattended pane to approve anything, and a write a read-only fork
+        // attempts fails rather than asking.
+        "sandbox": match spec.posture {
+            Posture::Unattended => "danger-full-access",
+            Posture::ReadOnly => "read-only",
+        },
+        "approvalPolicy": "never",
+        // Hooks run only once trusted, a choice made in a dialog nobody is at an unattended pane
+        // to answer; the server's own trust keeps the TUI's review screen away (`codex.rs`).
+        "config": { "bypass_hook_trust": true, "shell_environment_policy": { "set": env } },
+    });
+    if let Conversation::Resume(thread) = &spec.conversation
+        && spec.model.is_none()
+    {
+        // A resume without a model runs on the server's default, not on what the thread ran
+        // with; `restore` knows only the conversation, so the thread's record says.
+        let (model, effort) = server.thread_model(thread)?;
+        spec.model = model;
+        spec.effort = spec.effort.take().or(effort);
+    }
+    if let Some(model) = &spec.model {
+        params["model"] = json!(model);
+    }
+    if let Some(effort) = &spec.effort {
+        params["config"]["model_reasoning_effort"] = json!(effort);
+    }
+    let thread = match &spec.conversation {
+        Conversation::New(_) => {
+            let thread = server.start_thread(params)?;
+            spec.conversation = Conversation::New(Some(thread.clone()));
+            thread
+        }
+        Conversation::Fork { from, .. } => {
+            let from = from.clone();
+            let thread = server.fork_thread(&from, params)?;
+            spec.conversation = Conversation::Fork {
+                from,
+                id: Some(thread.clone()),
+            };
+            thread
+        }
+        Conversation::Resume(thread) => {
+            server.resume_thread(thread, params)?;
+            thread.clone()
+        }
+    };
+    let first = match spec.prompt_file.as_deref() {
+        Some(path) => bench_session::prompt_pointer(path),
+        None => "benchd started this conversation. Wait for instructions.".to_string(),
+    };
+    server.start_turn(&thread, &first)?;
+    spec.codex = Some(CodexAttach {
+        program: server.program.display().to_string(),
+        socket: server.socket.display().to_string(),
+    });
+    Ok(())
 }
 
 /// What an agent benchd starts learns about itself: its session, its address and this root, so
@@ -241,7 +302,7 @@ fn register(core: &mut Core, plan: &Plan, session: &Arc<Session>, pane: PaneId) 
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
-    hook::serve_resumed(core, session);
+    hook::serve_codex(core, session);
     core.append(
         "session/spawned",
         json!({
@@ -288,6 +349,9 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         ));
     }
     let workspace = StandardPath::new(cwd)?;
+    if agent == AgentKind::Codex {
+        crate::codex_trust::may_run(cwd)?;
+    }
     if args.prompt.is_some() && args.prompt_file.is_some() {
         return Err("pass the first prompt as prompt or as prompt_file, not both".into());
     }
@@ -326,7 +390,8 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             )
         }
         // A fork answers questions about the original's work in the original's worktree, so it
-        // runs read-only: the operator's ruling (#531). codex names the fork itself.
+        // runs read-only: the operator's ruling (#531). codex mints the fork's id when benchd
+        // forks the thread ([`codex_thread`]).
         (None, Some(from)) => (
             Conversation::Fork {
                 from: conversation_id("--fork", from)?,
@@ -349,9 +414,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         prompt_file: args.prompt_file,
         settings: None,
         extra_args: args.args,
-        codex_server: None,
-        codex_hook_trust: None,
-        codex_trust_folder: false,
+        codex: None,
     };
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
     // runtime cannot run (a fork of the test agent, say) is refused here, before anything is
@@ -432,9 +495,9 @@ fn claimable(core: &Core, handle: &str) -> Result<(), String> {
 /// The pane that shows session `id`: named for what runs in it and where (helm's
 /// `PaneName.derived`, so the agent's own first `bench name` replaces it without `--rename`),
 /// and carrying the conversation to offer resuming after a restart.
-fn pane_for(plan: &Plan, id: &str) -> Surface {
+fn pane_for(plan: &Plan, conversation: &Conversation, id: &str) -> Surface {
     Surface::Terminal {
-        agent: plan.spec.conversation.id().map(|session| ResumableAgent {
+        agent: conversation.id().map(|session| ResumableAgent {
             command: plan.agent.name().to_string(),
             session: session.to_string(),
             cwd: plan.spec.cwd.clone(),
@@ -464,10 +527,11 @@ fn place(
     doc: &mut Document,
     rules: &Rules,
     plan: &Plan,
+    conversation: &Conversation,
     id: &str,
     focus: Focus,
 ) -> Result<PaneId, Refusal> {
-    let surface = pane_for(plan, id);
+    let surface = pane_for(plan, conversation, id);
     let workspace = &plan.workspace;
     let pane = if doc.workspace(workspace).is_none() {
         let pane = bench_doc::Pane::new(surface);
@@ -488,19 +552,4 @@ fn place(
     };
     doc.name_pane(pane, derived_name(plan), focus)?;
     Ok(pane)
-}
-
-/// The socket codex's own app-server listens on for this session (#454), so benchd can start
-/// an idle codex's turn. Session ids restart at s1 with the daemon, so a server that died
-/// uncleanly under an earlier daemon can have left this socket (codex then refuses to bind:
-/// "File exists"). No live session holds this id, so what is there is stale.
-fn codex_server_socket(root: &std::path::Path, id: &str) -> Result<String, String> {
-    let socket = bench_wire::codex_server_socket(root, id);
-    if let Some(dir) = socket.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    }
-    let _ = std::fs::remove_file(&socket);
-    let _ = std::fs::remove_file(socket.with_extension("sock.log"));
-    Ok(socket.display().to_string())
 }

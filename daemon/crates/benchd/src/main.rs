@@ -333,6 +333,8 @@ struct Core {
     stopping: bool,
     /// Each harness's plan limits as last reported (#143, `usage`).
     usage: std::collections::BTreeMap<bench_wire::Harness, bench_wire::Usage>,
+    /// The one codex app-server every codex agent is a thread on (#466), started on first use.
+    codex: Arc<codex::Host>,
 }
 
 /// How many frames a follower may fall behind before it is dropped.
@@ -596,6 +598,7 @@ fn boot(
         unflushed: Arc::new(AtomicBool::new(false)),
         stopping: false,
         usage: Default::default(),
+        codex: Default::default(),
     }));
 
     let listener = {
@@ -921,6 +924,8 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
                 let _ = s.close(Duration::from_secs(1));
             }
             let _ = stop_browser(&core, Duration::from_secs(2), Unwant::No);
+            let host = Arc::clone(&core.lock().unwrap().codex);
+            codex::stop(&host);
             // The flusher runs every FLUSH_EVERY; the last events must not wait on it.
             let _ = core.lock().unwrap().log.sync_data();
             let root = core.lock().unwrap().root.clone();
@@ -1013,16 +1018,6 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
     (response, AfterResponse::Done)
 }
 
-/// Why `bench resume` cannot re-enter session `sid`, which holds no conversation id.
-fn unresumable(agent: bench_session::AgentKind, sid: &str) -> String {
-    match agent {
-        bench_session::AgentKind::Codex => format!(
-            "codex names its own sessions after the fact, so session {sid} holds no id to re-enter — `bench spawn --agent codex --resume <thread id>` re-enters a codex conversation"
-        ),
-        other => format!("{} has no conversation to resume", other.name()),
-    }
-}
-
 /// `bench resume <session>`: re-enter an exited session's conversation as a new session, under
 /// its handle, in the posture it ran in.
 fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Status, String)> {
@@ -1045,8 +1040,14 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
     // The same conversation, and the same posture: a fork stays read-only (#531). Never the
     // spawn's first prompt: `spawn::wire` gives the resume its notice instead.
     let Some(runtime) = old.spec.conversation.id() else {
-        return Err(refused(unresumable(old.spec.agent, sid)));
+        return Err(refused(format!(
+            "{} has no conversation to resume",
+            old.spec.agent.name()
+        )));
     };
+    if old.spec.agent == bench_session::AgentKind::Codex {
+        codex_trust::may_run(&old.spec.cwd).map_err(refused)?;
+    }
     let mut spec = old.spec.resuming(runtime.to_string());
     let (id, root, notices) = {
         let mut c = core.lock().unwrap();
@@ -1054,10 +1055,8 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
         c.next_session += 1;
         (id, c.root.clone(), c.notices.clone())
     };
-    // A new session id, so codex gets an app-server of its own rather than the exited
-    // session's socket.
-    spawn::wire(&mut spec, &root, &id).map_err(errored)?;
-    spec.codex_hook_trust = spawn::hook_trust(&spec);
+    spawn::wire(&mut spec, &root).map_err(errored)?;
+    spawn::codex_thread(core, &mut spec, &id, &old.handle).map_err(errored)?;
     let session = Session::spawn(
         id.clone(),
         old.handle.clone(),
@@ -1071,7 +1070,7 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
     let mut c = core.lock().unwrap();
     c.sessions.remove(sid);
     c.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_resumed(&mut c, &session);
+    hook::serve_codex(&mut c, &session);
     c.append(
         "session/resumed",
         json!({ "session": id, "from": sid, "runtime_session": session.runtime_session }),

@@ -42,9 +42,8 @@ impl Harness {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRow {
     pub harness: Harness,
-    /// The harness's own id: Claude session id, pi session id, subagent id. A benchd
-    /// session whose runtime names itself after the fact (codex) has no harness id, and
-    /// carries its bench session id here instead.
+    /// The harness's own id: Claude session id, pi session id, codex thread id, subagent id. A
+    /// benchd session with no harness id carries its bench session id here instead.
     pub id: String,
     /// Some only for a subagent: the session or subagent that started it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

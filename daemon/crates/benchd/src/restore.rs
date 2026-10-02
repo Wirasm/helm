@@ -21,7 +21,7 @@ use bench_doc::{PaneId, ResumableAgent};
 use bench_session::{AgentKind, Conversation, Posture, Session, SpawnSpec};
 use bench_wire::{Actor, RestoreArgs};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// What `restore` did for one pane.
@@ -41,23 +41,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         Some(p) => Some(PaneId::parse(p.trim()).map_err(|why| format!("restore: {why}"))?),
         None => None,
     };
-    // Asking codex for its hook trust starts a process, so it is asked before the lock is
-    // taken for the restore, once per directory a codex is recorded in.
-    let codex_dirs: HashSet<String> = {
-        let c = core.lock().unwrap();
-        let doc = &c.bench.document;
-        waiting(&c, doc, only)
-            .iter()
-            .filter_map(|(pane, _, _)| doc.pane(*pane).and_then(recorded_agent))
-            .filter(|a| a.command == AgentKind::Codex.name())
-            .map(|a| a.cwd)
-            .collect()
-    };
-    let trusts: HashMap<String, Option<String>> = codex_dirs
-        .into_iter()
-        .map(|cwd| (spawn::codex_hook_trust(&cwd), cwd))
-        .map(|(trust, cwd)| (cwd, trust))
-        .collect();
+    let mut codex = prepare_codex(core, only);
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
     let waiting = waiting(&c, &next, only);
@@ -94,10 +78,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                 "claude conversation {} was never written in: nothing to resume",
                 a.session
             ))),
-            Some(a) => {
-                let trust = trusts.get(&a.cwd).cloned().flatten();
-                resume(&mut c, pane, &a, trust).map_err(Some)
-            }
+            Some(a) => match codex.remove(&pane) {
+                Some(prepared) => prepared
+                    .and_then(|r| start(&mut c, pane, &a, r))
+                    .map_err(Some),
+                None => reserve(&mut c, &a)
+                    .and_then(|r| start(&mut c, pane, &a, r))
+                    .map_err(Some),
+            },
             None => Err(None),
         };
         let one = match resumed {
@@ -176,12 +164,8 @@ fn has_transcript(id: &str) -> bool {
 }
 
 /// Whether a live session already holds conversation `runtime`: by the id it was started with,
-/// or, for a codex that names its thread after the fact, by the id its hook recorded; or a live
-/// agent whose hook reported it, which is how a codex the operator started in a pane is seen.
-/// A thread a benchd codex left with `/new` stays held until that session ends: its app-server
-/// keeps the thread open, and a second codex on it is read-only ("This conversation is open in
-/// another app", measured on codex 0.159.3). The operator's own codex ends the old thread on
-/// `/new` (`SessionEnd`), so his is free at once.
+/// or by the id its hook recorded; or a live agent whose hook reported it, which is how a codex
+/// the operator started in a pane is seen.
 pub fn held(core: &Core, runtime: &str) -> bool {
     let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
     core.sessions
@@ -218,14 +202,51 @@ fn recorded_agent(pane: &bench_doc::Pane) -> Option<ResumableAgent> {
     }
 }
 
-/// Resume `agent`'s conversation as a benchd session for `pane`, under the mailbox the record
-/// gave it when it has one; a codex with `hook_trust` ([`spawn::hook_trust`]).
-fn resume(
-    core: &mut Core,
-    pane: PaneId,
-    agent: &ResumableAgent,
-    hook_trust: Option<String>,
-) -> Result<Arc<Session>, String> {
+/// A codex's thread has to be re-entered on benchd's app-server before its TUI starts
+/// (`spawn::codex_thread`), and that asks the server, which must not happen under the core lock
+/// the restore holds. So each codex pane that will be resumed gets its session reserved and its
+/// thread re-entered first: what the restore loop then starts, or why it gives the pane a shell.
+fn prepare_codex(
+    core: &Arc<Mutex<Core>>,
+    only: Option<PaneId>,
+) -> HashMap<PaneId, Result<Reserved, String>> {
+    let reserved: Vec<(PaneId, Result<Reserved, String>)> = {
+        let mut c = core.lock().unwrap();
+        let doc = c.bench.document.clone();
+        let codex: Vec<(PaneId, ResumableAgent)> = waiting(&c, &doc, only)
+            .into_iter()
+            .filter_map(|(pane, _, _)| Some((pane, doc.pane(pane).and_then(recorded_agent)?)))
+            .filter(|(_, a)| a.command == AgentKind::Codex.name() && !held(&c, &a.session))
+            .collect();
+        codex
+            .into_iter()
+            .map(|(pane, a)| {
+                let r = crate::codex_trust::may_run(&a.cwd).and_then(|()| reserve(&mut c, &a));
+                (pane, r)
+            })
+            .collect()
+    };
+    reserved
+        .into_iter()
+        .map(|(pane, r)| {
+            let r = r.and_then(|mut r| {
+                spawn::codex_thread(core, &mut r.spec, &r.id, &r.handle).map(|()| r)
+            });
+            (pane, r)
+        })
+        .collect()
+}
+
+/// A resume's session, reserved: its id, its handle and the spec it will run.
+struct Reserved {
+    id: String,
+    handle: String,
+    spec: SpawnSpec,
+}
+
+/// Reserve a session for resuming `agent`'s conversation, under the mailbox the record gave it
+/// when it has one, in the posture it was spawned in.
+fn reserve(core: &mut Core, agent: &ResumableAgent) -> Result<Reserved, String> {
     let kind = AgentKind::parse(&agent.command, false)?;
     let id = format!("s{}", core.next_session);
     core.next_session += 1;
@@ -246,11 +267,20 @@ fn resume(
         prompt_file: None,
         extra_args: Vec::new(),
         settings: None,
-        codex_server: None,
-        codex_hook_trust: hook_trust,
-        codex_trust_folder: false,
+        codex: None,
     };
-    spawn::wire(&mut spec, &core.root, &id)?;
+    spawn::wire(&mut spec, &core.root)?;
+    Ok(Reserved { id, handle, spec })
+}
+
+/// Start the reserved resume of `agent`'s conversation as a benchd session for `pane`.
+fn start(
+    core: &mut Core,
+    pane: PaneId,
+    agent: &ResumableAgent,
+    r: Reserved,
+) -> Result<Arc<Session>, String> {
+    let Reserved { id, handle, spec } = r;
     let session = Session::spawn(
         id.clone(),
         handle.clone(),
@@ -261,13 +291,13 @@ fn resume(
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_resumed(core, &session);
+    hook::serve_codex(core, &session);
     let _ = core.append(
         "session/spawned",
         json!({
             "session": id,
             "handle": handle,
-            "agent": kind.name(),
+            "agent": spec.agent.name(),
             "cwd": agent.cwd,
             "pid": session.pid,
             "runtime_session": agent.session,
