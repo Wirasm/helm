@@ -14,6 +14,47 @@ final class BrowserCompositionClickLiveTests: BrowserControlLiveCase {
         try await composeAndClick("i")
     }
 
+    func testSwitchingTabsDiscardsPreeditInsteadOfCommittingItToTheNewPage() async throws {
+        try await beginComposition()
+        try await show("<input id=i autofocus>")
+        try await assertNewPageReceivesOnlyNewText()
+    }
+
+    func testNavigationDiscardsPreeditInsteadOfCommittingItToTheNewDocument() async throws {
+        try await beginComposition()
+        let next = scratch.appendingPathComponent("next.html")
+        try "<input id=i autofocus><title>next</title>".write(
+            to: next, atomically: true, encoding: .utf8)
+        pane.navigate(to: next.absoluteString)
+        try await eventually("next document loaded") {
+            try await self.read(
+                "document.title === 'next' && document.activeElement === i", as: Bool.self)
+        }
+        try await assertNewPageReceivesOnlyNewText()
+    }
+
+    private func beginComposition() async throws {
+        try await show("<input id=i autofocus>")
+        surface.setMarkedText(
+            "あ", selectedRange: .init(location: 1, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        try await eventually("preedit visible") {
+            try await self.read("i.value", as: String.self) == "あ"
+        }
+    }
+
+    private func assertNewPageReceivesOnlyNewText() async throws {
+        XCTAssertFalse(surface.hasMarkedText(), "composition belongs to the old document")
+        _ = surface.resignFirstResponder()
+        pane.insertText("x")
+        try await eventually("new text arrived") {
+            try await self.read("i.value.endsWith('x')", as: Bool.self)
+        }
+        let value = try await read("i.value", as: String.self)
+        XCTAssertEqual(
+            value, "x", "old preedit must never migrate to the current input destination")
+    }
+
     private func composeAndClick(_ target: String) async throws {
         try await show(
             "<input id=i style='margin:80px;font:20px monospace'><button id=b>elsewhere</button>"

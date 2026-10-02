@@ -139,6 +139,17 @@ final class BrowserTextInputTests: XCTestCase {
         XCTAssertEqual(recorder.inserted, ["あ"])
     }
 
+    func testDiscardingAnExpiredCompositionNeverCommitsItOnFocusLoss() {
+        surface.setMarkedText(
+            "あ", selectedRange: .init(location: 1, length: 0),
+            replacementRange: .init(location: NSNotFound, length: 0))
+        surface.discardComposition()
+        window.makeFirstResponder(nil)
+        surface.unmarkText()
+        XCTAssertFalse(surface.hasMarkedText())
+        XCTAssertTrue(recorder.inserted.isEmpty)
+    }
+
     func testUnknownCaretFallsBackToThePaneBounds() async throws {
         let expected = window.convertToScreen(surface.convert(surface.bounds, to: nil))
         XCTAssertEqual(candidateRect(), expected, "no caret or frame yet")

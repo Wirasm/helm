@@ -155,3 +155,13 @@ struct BrowserTabs: Equatable {
         return .stay
     }
 }
+
+extension BrowserPaneModel {
+    /// ⌘1–⌘8 pick a tab by position, and ⌘9 the last one, as in Chrome.
+    func show(tabAt index: Int) {
+        let all = tabs.tabs
+        guard let tab = index >= 8 ? all.last : (all.indices.contains(index) ? all[index] : nil)
+        else { return }
+        show(tab: tab.targetId)
+    }
+}

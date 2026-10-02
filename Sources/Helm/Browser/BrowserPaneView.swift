@@ -557,6 +557,12 @@ final class BrowserSurfaceView: NSView, @preconcurrency NSTextInputClient {
         inputContext?.discardMarkedText()
     }
 
+    /// A replaced input destination cannot receive the old page's preedit.
+    func discardComposition() {
+        clearMarkedText()
+        inputContext?.discardMarkedText()
+    }
+
     func insertText(_ string: Any, replacementRange _: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
         let wasComposing = hasMarkedText()
