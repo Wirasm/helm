@@ -9,14 +9,15 @@
 //! the background and benchd refuses one that would move the operator's focus; with it, it may
 //! bring something forward. Pass it only when the operator asked (bench-architecture.md).
 
-use crate::{Cli, exchange, print_response, record_root, refuse};
+use crate::{Cli, exchange, fail, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
-    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, MoveTo, OpenInto, PaneOpen, ScreenGetArgs,
-    ScreenSendArgs, SpawnArgs, Status,
+    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, LiveSessions, MoveTo, OpenInto, PaneOpen,
+    ScreenGetArgs, ScreenSendArgs, SessionEntry, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// The verbs this module answers, by their first word. `close` and `get` are shared with the
 /// session and document verbs; [`owns`] decides by the word after them.
@@ -56,6 +57,8 @@ const VALUED: &[&str] = &[
     "--before",
     "--beside",
     "--side",
+    "--timeout",
+    "--after",
 ];
 
 /// Whether `raw` (the arguments after `bench`) is one of these verbs. `close <pane uuid>` is,
@@ -420,7 +423,10 @@ fn send(p: &Parsed) -> Result<(String, Value), String> {
 fn watch(p: &Parsed, root: PathBuf) -> i32 {
     let target = match (p.words.get(1).map(String::as_str), p.words.get(2)) {
         (Some("screen"), Some(t)) => t.clone(),
-        _ => return refuse("watch needs `screen <pane|session>`"),
+        (Some("screen"), None) | (None, _) => {
+            return refuse("watch needs `screen <pane|session>` or `<handle>`");
+        }
+        (Some(handle), _) => return watch_agent(p, root, handle),
     };
     let cli = Cli {
         verb: "screen/get".into(),
@@ -448,6 +454,124 @@ fn watch(p: &Parsed, root: PathBuf) -> i32 {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+/// How often `watch <handle>` asks. Each ask is one `sessions` answer, which costs benchd a few
+/// file reads; no model turn is spent while it waits.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+
+/// `watch <handle>` (M1, #357): wait until the agent in the benchd session with that handle waits
+/// on the operator, ends a turn, or its session ends, then print one line saying which, with the
+/// session as `sessions` gives it. A turn that had already ended counts, unless it ended at or
+/// before `--after` (the `since_ms` of the done an earlier watch printed), so a watch right after
+/// mailing new work is not answered with the turn before it. Exit 3 at `--timeout` (1800 s).
+fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
+    let number = |flag: &str| p.value(flag).map(|v| v.parse::<u64>());
+    let timeout = match number("--timeout") {
+        None => 1800,
+        Some(Ok(secs)) => secs,
+        Some(Err(_)) => return refuse("--timeout needs a number of seconds"),
+    };
+    let after = match number("--after") {
+        None => None,
+        Some(Ok(ms)) => Some(ms),
+        Some(Err(_)) => return refuse("--after needs epoch ms: an earlier done's since_ms"),
+    };
+    let cli = Cli {
+        verb: "sessions".into(),
+        args: Value::Null,
+        root,
+        asked: false,
+    };
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    // A closed session leaves the list: one this watch saw and cannot find again has ended.
+    let mut last: Option<SessionEntry> = None;
+    loop {
+        let response = match exchange(&cli) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
+        if response.status != Status::Ok {
+            return print_response(&response);
+        }
+        let live: LiveSessions = match serde_json::from_value(response.data.unwrap_or_default()) {
+            Ok(live) => live,
+            Err(e) => {
+                return fail(&format!(
+                    "sessions answered a shape this bench cannot read: {e}"
+                ));
+            }
+        };
+        let (entry, outcome) = match (session_of(&live.sessions, handle), last.take()) {
+            (Some(entry), _) => (entry.clone(), watched(entry, after)),
+            (None, Some(gone)) => (gone, Some(Watched::Ended)),
+            (None, None) => {
+                return refuse(&format!(
+                    "no bench session has the handle {handle:?} — `bench sessions` lists them"
+                ));
+            }
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        let outcome = match outcome {
+            Some(outcome) => outcome,
+            None if left.is_zero() => Watched::Timeout,
+            None => {
+                last = Some(entry);
+                std::thread::sleep(WATCH_EVERY.min(left));
+                continue;
+            }
+        };
+        println!(
+            "{}",
+            json!({ "handle": handle, "outcome": outcome.word(), "session": entry })
+        );
+        return match outcome {
+            Watched::Timeout => Status::Refused.exit_code(),
+            Watched::Waiting | Watched::Done | Watched::Ended => 0,
+        };
+    }
+}
+
+/// The session a handle names: the live one, else the latest to have run under it.
+fn session_of<'a>(sessions: &'a [SessionEntry], handle: &str) -> Option<&'a SessionEntry> {
+    sessions
+        .iter()
+        .filter(|s| s.handle == handle)
+        .min_by_key(|s| (!s.live, s.uptime_secs))
+}
+
+/// Why `watch <handle>` stopped: its `outcome`, the word a caller reads.
+#[derive(Clone, Copy)]
+enum Watched {
+    Waiting,
+    Done,
+    Ended,
+    Timeout,
+}
+
+impl Watched {
+    fn word(self) -> &'static str {
+        match self {
+            Watched::Waiting => "waiting",
+            Watched::Done => "done",
+            Watched::Ended => "ended",
+            Watched::Timeout => "timeout",
+        }
+    }
+}
+
+/// What `watch <handle>` stops for, when anything.
+fn watched(s: &SessionEntry, after: Option<u64>) -> Option<Watched> {
+    if !s.live {
+        return Some(Watched::Ended);
+    }
+    if s.waiting.is_some() {
+        return Some(Watched::Waiting);
+    }
+    s.done
+        .as_ref()
+        .filter(|d| after.is_none_or(|after| d.since_ms > after))
+        .map(|_| Watched::Done)
 }
 
 /// `get screenshot`: helm draws its window and sends the PNG back; benchd writes it at `--out`

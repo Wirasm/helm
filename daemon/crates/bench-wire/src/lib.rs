@@ -60,10 +60,10 @@ pub use just::{
 
 mod sessions;
 pub use sessions::{
-    Activity, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
-    HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord, HostedSession,
-    HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow, SessionState,
-    SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
+    Activity, AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal,
+    DismissedRecord, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord,
+    HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow,
+    SessionState, SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
 /// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
@@ -184,6 +184,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     "sessions",
     "sessions/all",
     "sessions/dismiss",
+    // M1 (#357): the operator has seen a session's finished turn.
+    "sessions/seen",
     "attach",
     "close",
     "resume",
@@ -258,6 +260,8 @@ pub enum Verb {
     SessionsAll,
     /// Hide a finished session from `sessions/all`.
     SessionsDismiss,
+    /// Mark a session's finished turn seen (`SessionKey`): what focusing its pane does.
+    SessionsSeen,
     Attach,
     Close,
     Resume,
@@ -328,6 +332,7 @@ impl Verb {
             "sessions" => Some(Verb::Sessions),
             "sessions/all" => Some(Verb::SessionsAll),
             "sessions/dismiss" => Some(Verb::SessionsDismiss),
+            "sessions/seen" => Some(Verb::SessionsSeen),
             "attach" => Some(Verb::Attach),
             "close" => Some(Verb::Close),
             "resume" => Some(Verb::Resume),
@@ -606,6 +611,37 @@ pub struct SessionEntry {
     /// its prompt, a harness whose hooks are not wired).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<AgentReport>,
+    /// The agent's last turn ended and it has not started another (M1, #357); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<Done>,
+    /// Mail the agent sent the operator that he has not read; absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_mail: Option<OperatorMail>,
+}
+
+/// An agent whose turn ended (Claude's and codex's `Stop`, pi's `agent_settled`) and that has not
+/// started another (M1, #357). Present whether or not anybody looked, so `bench watch` can wait on
+/// it; `seen` says whether the operator did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Done {
+    /// When the turn ended, in epoch ms.
+    pub since_ms: u64,
+    /// Whose it is: the handle of the agent that spawned it, or `operator` for one he started.
+    pub to: String,
+    /// The operator focused its pane, or marked it seen (`sessions/seen`), after the turn ended.
+    /// Looking is the only thing that clears it: nothing acknowledges or decays.
+    pub seen: bool,
+}
+
+/// Unread mail from an agent to the operator (M1, #357): how much, and the oldest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorMail {
+    pub unread: usize,
+    /// When the oldest unread message arrived, in epoch ms.
+    pub since_ms: u64,
+    /// Its subject, the agent's own words, when it gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 /// An agent's own report of what it is doing, read on benchd's machine (M5c, #459): Claude
@@ -1280,6 +1316,20 @@ mod tests {
             reply.sessions.iter().any(|s| s.report.is_some()),
             "the sample carries a report, so helm's decoder is pinned too"
         );
+        // Attention (M1, #357) has a sample of its own, so the one above stays what helm's
+        // presence reads.
+        let attention: LiveSessions = serde_json::from_value(value["attention"].clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&attention).unwrap(),
+            value["attention"]
+        );
+        assert!(
+            attention
+                .sessions
+                .iter()
+                .any(|s| s.done.is_some() && s.operator_mail.is_some()),
+            "a finished turn and mail to the operator, so helm's decoder is pinned too"
+        );
         assert_eq!(
             reply.usage.iter().map(|u| u.harness).collect::<Vec<_>>(),
             [Harness::Claude, Harness::Codex],
@@ -1385,7 +1435,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            56,
+            57,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

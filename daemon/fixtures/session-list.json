@@ -60,5 +60,39 @@
         ]
       }
     ]
+  },
+  "attention": {
+    "sessions": [
+      {
+        "session": "s6",
+        "handle": "reviewer",
+        "agent": "claude",
+        "cwd": "/Users/rasmus/Projects/mine/sild/helm",
+        "pid": 51610,
+        "pane": "7d1c2b3a-4e5f-4a6b-9c8d-0e1f2a3b4c5d",
+        "foreground_pid": 51610,
+        "live": true,
+        "attached": true,
+        "output_bytes": 40960,
+        "runtime_session": "5f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
+        "uptime_secs": 900,
+        "report": {
+          "activity": {
+            "kind": "idle"
+          },
+          "since_ms": 1790540812000
+        },
+        "done": {
+          "since_ms": 1790540812000,
+          "to": "orchestrator",
+          "seen": false
+        },
+        "operator_mail": {
+          "unread": 2,
+          "since_ms": 1790540790000,
+          "subject": "reviewer: blocked"
+        }
+      }
+    ]
   }
 }

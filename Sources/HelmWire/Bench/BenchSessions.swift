@@ -72,6 +72,10 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var state: State
     package var open: Open
     package var updatedAtMs: UInt64
+    /// A running session whose last turn ended and that has not started another (M1, #357).
+    package var done: BenchDone?
+    /// Unread mail this session sent the operator (M1, #357).
+    package var operatorMail: BenchOperatorMail?
 
     package enum State: Equatable, Sendable {
         /// `activity` is the harness's own word: busy, shell, idle, waiting, blocked,
@@ -91,14 +95,16 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case harness, id, parent, name, branch, model, cwd, state, open
+        case harness, id, parent, name, branch, model, cwd, state, open, done
         case updatedAtMs = "updated_at_ms"
+        case operatorMail = "operator_mail"
     }
 
     package init(
         harness: String, id: String, parent: String? = nil, name: String? = nil,
         branch: String? = nil, model: String? = nil, cwd: String,
-        state: State, open: Open, updatedAtMs: UInt64
+        state: State, open: Open, updatedAtMs: UInt64, done: BenchDone? = nil,
+        operatorMail: BenchOperatorMail? = nil
     ) {
         self.harness = harness
         self.id = id
@@ -110,6 +116,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         self.state = state
         self.open = open
         self.updatedAtMs = updatedAtMs
+        self.done = done
+        self.operatorMail = operatorMail
     }
 
     package init(from decoder: any Decoder) throws {
@@ -124,6 +132,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         state = try c.decode(State.self, forKey: .state)
         open = try c.decode(Open.self, forKey: .open)
         updatedAtMs = try c.decode(UInt64.self, forKey: .updatedAtMs)
+        done = try c.decodeIfPresent(BenchDone.self, forKey: .done)
+        operatorMail = try c.decodeIfPresent(BenchOperatorMail.self, forKey: .operatorMail)
     }
 }
 
@@ -224,21 +234,28 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
         package var waiting: Waiting?
         /// What the agent in it says it is doing (M5c); nil when nothing there reports.
         package var report: Report?
+        /// Its last turn ended and it has not started another (M1, #357).
+        package var done: BenchDone?
+        /// Unread mail it sent the operator (M1, #357).
+        package var operatorMail: BenchOperatorMail?
 
         private enum CodingKeys: String, CodingKey {
-            case session, pane, waiting, report
+            case session, pane, waiting, report, done
             case foregroundPid = "foreground_pid"
+            case operatorMail = "operator_mail"
         }
 
         package init(
             session: String, pane: UUID?, foregroundPid: Int32?, waiting: Waiting? = nil,
-            report: Report? = nil
+            report: Report? = nil, done: BenchDone? = nil, operatorMail: BenchOperatorMail? = nil
         ) {
             self.session = session
             self.pane = pane
             self.foregroundPid = foregroundPid
             self.waiting = waiting
             self.report = report
+            self.done = done
+            self.operatorMail = operatorMail
         }
     }
 

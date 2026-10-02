@@ -72,6 +72,12 @@ pub struct SessionRow {
     /// Claude's `statusUpdatedAt` for a live registry session; when its wait began for a row
     /// benchd sees waiting on the operator (M1, #357); a file's mtime otherwise.
     pub updated_at_ms: u64,
+    /// A running session whose last turn ended and that has not started another (M1, #357).
+    /// `null` otherwise, and always sent.
+    pub done: Option<crate::Done>,
+    /// Unread mail this session's mailbox sent the operator (M1, #357), unlike `mail`, which is
+    /// mail waiting for it. `null` when there is none, and always sent.
+    pub operator_mail: Option<crate::OperatorMail>,
 }
 
 /// A benchd mailbox: who to `bench mail send --to`, and what that send will do.
@@ -251,6 +257,26 @@ pub struct HostedSession {
     /// was spawned. Absent for everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<String>,
+    /// What attention needs to remember about it (M1, #357), kept beside the rest of the entry.
+    #[serde(flatten)]
+    pub attention: AttentionRecord,
+}
+
+/// The only state attention keeps (M1, #357); everything else it says is projected from what
+/// benchd already knows. Every field is absent in entries recorded before it existed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionRecord {
+    /// The handle of the agent that spawned it: whose its finished turns are. Absent for a
+    /// session the operator started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawner: Option<String>,
+    /// When its last turn ended, in epoch ms; cleared when it starts another. Kept on disk so a
+    /// finished turn nobody looked at is still one after a daemon restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_ended_ms: Option<u64>,
+    /// When the operator last looked at it: focused its pane, or marked it seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_ms: Option<u64>,
 }
 
 impl HostedSession {
@@ -407,9 +433,10 @@ mod tests {
         let models: Vec<Option<&str>> = list.rows.iter().map(|r| r.model.as_deref()).collect();
         assert!(models.contains(&Some("claude-opus-5-5[1m]")));
         assert!(models.contains(&None));
+        assert_the_fixture_carries_attention(&list, &hosted);
         // Each is sent as `null` rather than left out: every row says whether it has a mailbox,
-        // whether its worktree has a branch, and whether its model is known.
-        for key in ["mail", "branch", "model"] {
+        // whether its worktree has a branch, whether its model is known, and its attention.
+        for key in ["mail", "branch", "model", "done", "operator_mail"] {
             let rows = value["list"]["rows"].as_array().unwrap();
             assert!(rows.iter().all(|r| r.get(key).is_some()), "{key}");
         }
@@ -427,6 +454,26 @@ mod tests {
             "the spelling drifted from {}",
             path.display()
         );
+    }
+
+    /// Attention (M1, #357): a finished turn seen and not, to the operator and to the agent that
+    /// spawned it, mail to the operator with and without a subject, and the record's three fields.
+    fn assert_the_fixture_carries_attention(list: &SessionList, hosted: &HostedRecord) {
+        let done: Vec<(bool, &str)> = list
+            .rows
+            .iter()
+            .filter_map(|r| Some((r.done.as_ref()?.seen, r.done.as_ref()?.to.as_str())))
+            .collect();
+        assert!(done.contains(&(false, "orchestrator")) && done.contains(&(true, "operator")));
+        let subjects: Vec<bool> = list
+            .rows
+            .iter()
+            .filter_map(|r| Some(r.operator_mail.as_ref()?.subject.is_some()))
+            .collect();
+        assert!(subjects.contains(&true) && subjects.contains(&false));
+        assert!(hosted.sessions.iter().any(|h| h.attention.spawner.is_some()
+            && h.attention.turn_ended_ms.is_some()
+            && h.attention.seen_ms.is_some()));
     }
 
     #[test]

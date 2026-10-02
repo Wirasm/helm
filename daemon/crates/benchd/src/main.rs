@@ -28,6 +28,7 @@
 
 mod agents;
 mod ask;
+mod attention;
 mod cdp;
 mod codex;
 mod codex_trust;
@@ -333,6 +334,10 @@ struct Core {
     stopping: bool,
     /// Each harness's plan limits as last reported (#143, `usage`).
     usage: std::collections::BTreeMap<bench_wire::Harness, bench_wire::Usage>,
+    /// Who spawned each benchd session, by session id, when an agent did (`attention::spawner`):
+    /// what a codex's record is given when its hook first names its conversation, after the
+    /// spawn. Pruned to the sessions `sessions` still holds at each insert.
+    spawners: HashMap<String, String>,
 }
 
 /// How many frames a follower may fall behind before it is dropped.
@@ -596,6 +601,7 @@ fn boot(
         unflushed: Arc::new(AtomicBool::new(false)),
         stopping: false,
         usage: Default::default(),
+        spawners: HashMap::new(),
     }));
 
     let listener = {
@@ -999,6 +1005,23 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
 }
 
 /// A verb's answer to `req`, or its refusal, closing the connection.
+/// The answer to a verb whose handler tells a refusal (the caller's to fix) from a failure
+/// (benchd's own).
+fn settled(req: &Request, result: Result<Value, sessions::Refusal>) -> (Response, AfterResponse) {
+    let (status, reason, data) = match result {
+        Ok(data) => (Status::Ok, None, Some(data)),
+        Err(sessions::Refusal::Refused(why)) => (Status::Refused, Some(why), None),
+        Err(sessions::Refusal::Failed(why)) => (Status::Error, Some(why), None),
+    };
+    let response = Response {
+        id: req.id.clone(),
+        status,
+        reason,
+        data,
+    };
+    (response, AfterResponse::Done)
+}
+
 fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterResponse) {
     let (status, reason, data) = match result {
         Ok(data) => (Status::Ok, None, Some(data)),
@@ -1200,6 +1223,9 @@ fn dispatch(
             // up to DAEMON_IO_TIMEOUT), and every verb waits while the core lock does.
             // `waiting` is read here too: it takes no session lock, only benchd's own records
             // and each reporting agent's liveness from the kernel.
+            // The operator's inbox is read off the lock, like the session list's harness files.
+            let root = core.lock().unwrap().root.clone();
+            let mail = attention::operator_mail(&root);
             let (home, shown, usage): (_, Vec<_>, _) = {
                 let c = core.lock().unwrap();
                 let shown = c
@@ -1210,7 +1236,8 @@ fn dispatch(
                         let hooked = waiting::hook_report(&c, &s.id);
                         let runtime = hook::conversation(&c, s);
                         let waiting = waiting::of_session(&c, &s.id);
-                        (Arc::clone(s), pane, waiting, hooked, runtime)
+                        let attention = attention::of_session(&c, s, runtime.as_deref(), &mail);
+                        (Arc::clone(s), pane, waiting, hooked, runtime, attention)
                     })
                     .collect();
                 (c.home.clone(), shown, usage::held(&c))
@@ -1218,21 +1245,25 @@ fn dispatch(
             let sessions = shown
                 .into_iter()
                 .map(
-                    |(s, pane, waiting, hooked, runtime)| bench_wire::SessionEntry {
-                        report: waiting::report(&s, &home, hooked),
-                        session: s.id.clone(),
-                        handle: s.handle.clone(),
-                        agent: s.agent.name().to_string(),
-                        cwd: s.cwd.clone(),
-                        pid: s.pid,
-                        pane,
-                        foreground_pid: s.foreground_pid(),
-                        live: s.is_live(),
-                        attached: s.is_attached(),
-                        output_bytes: s.output_bytes(),
-                        runtime_session: runtime,
-                        uptime_secs: s.spawned_at.elapsed().as_secs(),
-                        waiting,
+                    |(s, pane, waiting, hooked, runtime, (done, operator_mail))| {
+                        bench_wire::SessionEntry {
+                            done,
+                            operator_mail,
+                            report: waiting::report(&s, &home, hooked),
+                            session: s.id.clone(),
+                            handle: s.handle.clone(),
+                            agent: s.agent.name().to_string(),
+                            cwd: s.cwd.clone(),
+                            pid: s.pid,
+                            pane,
+                            foreground_pid: s.foreground_pid(),
+                            live: s.is_live(),
+                            attached: s.is_attached(),
+                            output_bytes: s.output_bytes(),
+                            runtime_session: runtime,
+                            uptime_secs: s.spawned_at.elapsed().as_secs(),
+                            waiting,
+                        }
                     },
                 )
                 .collect();
@@ -1242,28 +1273,18 @@ fn dispatch(
             )
         }
 
-        Some(Verb::SessionsAll) => match sessions::answer_all(core, &req.args) {
-            Ok(data) => (ok(data), AfterResponse::Done),
-            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
-            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
-        },
+        Some(Verb::SessionsAll) => settled(req, sessions::answer_all(core, &req.args)),
 
         Some(Verb::UsageReport) => match usage::answer(&mut core.lock().unwrap(), &req.args) {
             Ok(data) => (ok(data), AfterResponse::Done),
             Err(why) => (refused(why), AfterResponse::Done),
         },
 
-        Some(Verb::Hook) => match hook::answer(core, &req.args) {
-            Ok(data) => (ok(data), AfterResponse::Done),
-            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
-            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
-        },
+        Some(Verb::Hook) => settled(req, hook::answer(core, &req.args)),
 
-        Some(Verb::SessionsDismiss) => match sessions::answer_dismiss(core, &req.args) {
-            Ok(data) => (ok(data), AfterResponse::Done),
-            Err(sessions::Refusal::Refused(why)) => (refused(why), AfterResponse::Done),
-            Err(sessions::Refusal::Failed(why)) => (errored(why), AfterResponse::Done),
-        },
+        Some(Verb::SessionsSeen) => settled(req, attention::answer_seen(core, req)),
+
+        Some(Verb::SessionsDismiss) => settled(req, sessions::answer_dismiss(core, &req.args)),
 
         Some(Verb::Attach) => {
             let parsed: SessionArgs = match serde_json::from_value(req.args.clone()) {

@@ -291,6 +291,9 @@ impl<'a> Rows<'a> {
             open,
             mail: d.mail,
             updated_at_ms: d.updated_at_ms,
+            // Attention (M1, #357) is benchd's own state; it fills these for the rows returned.
+            done: None,
+            operator_mail: None,
         });
     }
 }
@@ -382,6 +385,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 via: HostedVia::Pane { pane, handle: None },
                 recorded_at: inputs.now.to_string(),
                 forked_from: None,
+                attention: Default::default(),
             });
         }
     };

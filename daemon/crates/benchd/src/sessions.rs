@@ -13,7 +13,7 @@ use bench_doc::{PaneId, StandardPath, Surface};
 use bench_session::{AgentKind, Session};
 use bench_sessions::{BenchSession, Cache, Inputs, PaneAgent, Resumable, Waits};
 use bench_wire::{
-    DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
+    AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
     MailAddress, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
 };
@@ -120,12 +120,17 @@ pub fn answer_all(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusa
         )
     };
 
+    let operator_mail = crate::attention::operator_mail(&root);
+    let mut list = built.list;
     let mut c = core.lock().unwrap();
     record_hosted(&mut c, built.newly_hosted).map_err(Refusal::Failed)?;
-    for u in &built.list.unreadable {
+    for u in &list.unreadable {
         report(&mut c, u).map_err(Refusal::Failed)?;
     }
-    Ok(json!(built.list))
+    for row in &mut list.rows {
+        crate::attention::show(&c, row, &operator_mail);
+    }
+    Ok(json!(list))
 }
 
 /// Every terminal pane on the bench, the live shell it shows and the agent recorded in it. Only a
@@ -204,17 +209,16 @@ pub enum Refusal {
 
 /// A session benchd itself started: recorded at spawn, so it has a finished row even if the
 /// daemon restarts before anyone asks for the list. Only a runtime whose id the bench minted
-/// can be recorded — codex names its own sessions after the fact.
+/// can be recorded — codex names its own sessions after the fact. `spawner` is the agent that
+/// asked for it, `None` for the operator.
 pub fn record_spawn(
     core: &mut Core,
-    harness: Option<Harness>,
-    id: Option<&str>,
-    cwd: &str,
-    session: &str,
-    handle: &str,
-    forked_from: Option<&str>,
+    session: &Session,
+    spawner: Option<&str>,
 ) -> Result<(), String> {
-    let (Some(harness), Some(id)) = (harness, id) else {
+    let spec = &session.spec;
+    let (Some(harness), Some(id)) = (Harness::parse(spec.agent.name()), spec.conversation.id())
+    else {
         return Ok(());
     };
     record_hosted(
@@ -222,13 +226,17 @@ pub fn record_spawn(
         vec![HostedSession {
             harness,
             id: id.to_string(),
-            cwd: cwd.to_string(),
+            cwd: spec.cwd.clone(),
             via: HostedVia::Bench {
-                session: session.to_string(),
-                handle: Some(handle.to_string()),
+                session: session.id.clone(),
+                handle: Some(session.handle.clone()),
             },
             recorded_at: now_rfc3339(),
-            forked_from: forked_from.map(str::to_string),
+            forked_from: spec.conversation.forked_from().map(str::to_string),
+            attention: AttentionRecord {
+                spawner: spawner.map(str::to_string),
+                ..AttentionRecord::default()
+            },
         }],
     )
 }
@@ -244,8 +252,9 @@ pub fn recorded<'a>(core: &'a Core, agent: &str, id: &str) -> Option<&'a HostedS
 
 /// A mailbox claimed through `bench hook` (#358): logged as `mail/claimed`, then written.
 /// A session the record already holds keeps its entry and gains the handle; one it already
-/// has an address for is left alone, so a claim never renames anybody.
-pub fn record_claim(core: &mut Core, entry: HostedSession, pid: u32) -> Result<(), String> {
+/// has an address for is left alone, so a claim never renames anybody. What attention remembers
+/// of the entry it replaces is kept.
+pub fn record_claim(core: &mut Core, mut entry: HostedSession, pid: u32) -> Result<(), String> {
     let key = entry.key();
     let Some(handle) = entry.handle().map(str::to_string) else {
         return Err("a claim names a handle".into());
@@ -263,7 +272,14 @@ pub fn record_claim(core: &mut Core, entry: HostedSession, pid: u32) -> Result<(
         json!({ "handle": handle, "pid": pid, "session": entry }),
     )?;
     match existing {
-        Some(i) => core.session_records.hosted[i] = entry,
+        Some(i) => {
+            let kept = &core.session_records.hosted[i].attention;
+            entry.attention = AttentionRecord {
+                spawner: entry.attention.spawner.or_else(|| kept.spawner.clone()),
+                ..kept.clone()
+            };
+            core.session_records.hosted[i] = entry;
+        }
         None => core.session_records.hosted.push(entry),
     }
     save_hosted(&core.root, &core.session_records.hosted)
@@ -334,7 +350,7 @@ pub fn now_ms() -> u64 {
 // The two records
 // ---------------------------------------------------------------------------
 
-fn save_hosted(root: &Path, sessions: &[HostedSession]) -> Result<(), String> {
+pub fn save_hosted(root: &Path, sessions: &[HostedSession]) -> Result<(), String> {
     save(
         &hosted_path(root),
         &HostedRecord {

@@ -186,6 +186,42 @@ pub fn list(root: &Path, handle: &str) -> Vec<MailMeta> {
     out
 }
 
+/// An unread message, as attention reads it: who sent it, its subject, and when it arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unread {
+    pub from: String,
+    pub subject: Option<String>,
+    /// The file's mtime in epoch ms: a delivered message is never rewritten, so this is when it
+    /// was delivered (a hand-written file's own time otherwise).
+    pub delivered_ms: u64,
+}
+
+/// A handle's unread mail only, without the `read/` history [`list`] also walks.
+pub fn unread_list(root: &Path, handle: &str) -> Vec<Unread> {
+    let entries = fs::read_dir(inbox(root, handle))
+        .into_iter()
+        .flatten()
+        .flatten();
+    entries
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .filter_map(|path| {
+            let delivered_ms = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis() as u64;
+            let (from, _, subject) = parse_front_matter(&fs::read_to_string(&path).ok()?);
+            Some(Unread {
+                from,
+                subject,
+                delivered_ms,
+            })
+        })
+        .collect()
+}
+
 /// The first id no message in the mailroom has: one past the highest `m<n>` in any inbox
 /// or read directory. benchd seeds its counter from this at boot, so an id is never handed
 /// out twice across restarts. Files with other names (hand-written ones) are not ids.
@@ -367,6 +403,23 @@ mod tests {
         assert_eq!(listing.len(), 2);
         assert!(listing[0].unread && listing[0].from == "y");
         assert!(!listing[1].unread && listing[1].subject.as_deref() == Some("one"));
+        let _ = fs::remove_dir_all(r);
+    }
+
+    #[test]
+    fn the_unread_list_is_the_inbox_alone_with_who_sent_it() {
+        let r = root();
+        deliver(&r, 1, "a", "b", Some("first"), "t", "x").unwrap();
+        deliver(&r, 2, "c", "b", None, "t", "y").unwrap();
+        retire(&r, "b", "m1").unwrap();
+        let unread = unread_list(&r, "b");
+        assert_eq!(unread.len(), 1, "the retired one is not listed");
+        assert_eq!(
+            (unread[0].from.as_str(), unread[0].subject.as_deref()),
+            ("c", None)
+        );
+        assert!(unread[0].delivered_ms > 0);
+        assert!(unread_list(&r, "nobody").is_empty());
         let _ = fs::remove_dir_all(r);
     }
 

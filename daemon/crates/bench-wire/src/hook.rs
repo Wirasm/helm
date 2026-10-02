@@ -68,6 +68,10 @@ pub struct HookReply {
 pub enum Transition {
     /// The agent is now doing this.
     To(Activity),
+    /// Its turn ended and it is idle: the typed signal attention's `done` is (M1, #357). Only the
+    /// harness's own turn end: not a session starting, an interrupt (the operator is at the pane)
+    /// or a turn that failed.
+    TurnEnded,
     /// The session ended cleanly. (A killed one says nothing; its pid is the signal.)
     Ended,
     /// The event carries no state (a Claude `Notification`, pi's `wake`).
@@ -81,6 +85,17 @@ pub const QUESTION: &str = "question";
 /// the agent waiting on a person, not working.
 const ASK_TOOL: &str = "AskUserQuestion";
 
+impl Transition {
+    /// What the agent is doing after it, when the event says.
+    pub fn activity(&self) -> Option<Activity> {
+        match self {
+            Transition::To(now) => Some(now.clone()),
+            Transition::TurnEnded => Some(Activity::Idle),
+            Transition::Ended | Transition::Unchanged => None,
+        }
+    }
+}
+
 /// What an event means, per harness. `None` is an event this build does not know: benchd
 /// logs it once and changes nothing, so a harness that adds events never breaks a hook.
 pub fn transition(harness: Harness, event: &str, tool: Option<&str>) -> Option<Transition> {
@@ -93,7 +108,8 @@ pub fn transition(harness: Harness, event: &str, tool: Option<&str>) -> Option<T
     Some(match harness {
         // The same hook names on both (Claude's hooks docs; codex's hooks docs).
         Harness::Claude | Harness::Codex => match event {
-            "SessionStart" | "Stop" | "StopFailure" | "Interrupt" => To(Activity::Idle),
+            "Stop" => TurnEnded,
+            "SessionStart" | "StopFailure" | "Interrupt" => To(Activity::Idle),
             "PreToolUse" if tool == Some(ASK_TOOL) => waiting(QUESTION),
             "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
                 To(Activity::Busy)
@@ -107,7 +123,10 @@ pub fn transition(harness: Harness, event: &str, tool: Option<&str>) -> Option<T
         },
         // pi's extension events (`docs/extensions.md`), sent by the pi sensor.
         Harness::Pi => match event {
-            "session_start" | "agent_settled" => To(Activity::Idle),
+            // `agent_settled`, not `agent_end`: a run can retry or take a queued follow-up after
+            // `agent_end`; settled is pi's own "nothing more to do" (its extensions docs).
+            "agent_settled" => TurnEnded,
+            "session_start" => To(Activity::Idle),
             "agent_start" | "context" | "tool_execution_end" | "ui_prompt_end" => {
                 To(Activity::Busy)
             }
@@ -585,10 +604,29 @@ mod tests {
         }
         assert_eq!(
             transition(Harness::Pi, "agent_settled", None),
-            Some(Transition::To(Activity::Idle))
+            Some(Transition::TurnEnded)
         );
         assert!(carries_context(Harness::Pi, "context", None));
         assert!(!carries_context(Harness::Pi, "agent_settled", None));
+    }
+
+    /// Done is a turn that ended, nothing else that leaves the agent idle.
+    #[test]
+    fn only_the_harness_s_own_turn_end_ends_a_turn() {
+        let ends = |h, e| transition(h, e, None) == Some(Transition::TurnEnded);
+        for h in [Harness::Claude, Harness::Codex] {
+            assert!(ends(h, "Stop"));
+            for idle in ["SessionStart", "StopFailure", "Interrupt"] {
+                assert!(!ends(h, idle), "{idle}");
+                assert_eq!(
+                    transition(h, idle, None).and_then(|t| t.activity()),
+                    Some(Activity::Idle)
+                );
+            }
+        }
+        assert!(ends(Harness::Pi, "agent_settled"));
+        assert!(!ends(Harness::Pi, "session_start"));
+        assert_eq!(Transition::TurnEnded.activity(), Some(Activity::Idle));
     }
 
     #[test]

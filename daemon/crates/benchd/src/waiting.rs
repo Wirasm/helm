@@ -19,10 +19,11 @@
 //! A shell at its prompt is never read: what is on its screen is history (a trust prompt left
 //! behind by a claude that exited reads exactly like a live one).
 
+use crate::hook::Agent;
 use crate::{Core, prompts, sessions::now_ms};
 use bench_doc::PaneId;
 use bench_session::{AgentKind, Session};
-use bench_wire::{Activity, AgentReport, Waiting, WaitingSource};
+use bench_wire::{Activity, AgentReport, SessionKey, Waiting, WaitingSource};
 use serde_json::json;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -184,21 +185,30 @@ pub fn hook_report(c: &Core, id: &str) -> Option<AgentReport> {
     })
 }
 
-/// What the live agent running in a session last reported, and since when: the agent in the
-/// pane showing it (an agent the operator started in a shell), or the one benchd spawned there,
-/// which shares the session's handle.
+/// What the live agent running in a session last reported, and since when.
 fn reporting_agent<'a>(c: &'a Core, id: &str) -> Option<(&'a Activity, u64)> {
+    agents_in(c, id).find_map(|(_, a)| Some((a.activity.as_ref()?, a.activity_since_ms)))
+}
+
+/// The conversation of the live agent with a mailbox running in a session, as its hook reported
+/// it, and the agent: whose attention record the session's is (`attention`).
+pub fn reporting<'a>(c: &'a Core, id: &str) -> Option<(&'a SessionKey, &'a Agent)> {
+    agents_in(c, id).next()
+}
+
+/// The live agents with a mailbox in a session: the agent in the pane showing it (one the
+/// operator started in a shell), or the one benchd spawned there, which shares its handle.
+fn agents_in<'a>(c: &'a Core, id: &str) -> impl Iterator<Item = (&'a SessionKey, &'a Agent)> {
     let handle = c.sessions.get(id).map(|s| s.handle.as_str());
     let pane = c.bench.document.pane_showing_session(id);
     c.agents
-        .values()
-        .flatten()
-        .filter(|a| {
+        .iter()
+        .filter_map(|(key, a)| Some((key, a.as_ref()?)))
+        .filter(move |(_, a)| {
             (a.pane.is_some() && a.pane == pane)
                 || (a.pane.is_none() && Some(a.handle.as_str()) == handle)
         })
-        .filter(|a| bench_sessions::process::alive(a.pid, None))
-        .find_map(|a| Some((a.activity.as_ref()?, a.activity_since_ms)))
+        .filter(|(_, a)| bench_sessions::process::alive(a.pid, None))
 }
 
 #[cfg(test)]

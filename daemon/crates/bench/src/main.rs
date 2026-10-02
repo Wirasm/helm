@@ -52,8 +52,7 @@ fn main() {
     process::exit(code);
 }
 
-fn usage() -> &'static str {
-    "usage: bench [--suite <name>] <verb> [args]  (bench --version: this build)\n\
+const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --version: this build)\n\
      verbs: status                              daemon identity, root, uptime, counts\n\
      \x20     events [--since N]                  read the record back from seq N\n\
      \x20     events --follow                     the bench document, then one line per event as it\n\
@@ -89,6 +88,8 @@ fn usage() -> &'static str {
      \x20           [--history]                   modes, at a finished frame; --history adds the\n\
      \x20                                         rows above it\n\
      \x20     watch screen <pane|session>         one JSON line per change of that screen\n\
+     \x20     watch <handle> [--timeout <s>]      until its agent waits, ends a turn after --after\n\
+     \x20           [--after <ms>]                <ms>, or its session ends; exit 3 at --timeout\n\
      \x20     send <pane|session> <text>          type into a terminal (a bracketed paste when the\n\
      \x20           [--enter]                     program asked for one); --enter adds Return\n\
      \x20     (every pane verb lands in the background; --asked says the operator asked, and\n\
@@ -98,6 +99,7 @@ fn usage() -> &'static str {
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
+     \x20     sessions seen <id> --harness <h>    mark its finished turn seen; it closes nothing\n\
      \x20     log <session id | transcript path>  a Claude, pi or codex session's prompts, replies,\n\
      \x20         [-n N] [--since 30m|2h|1d|<time>] tool calls and errors, read from its transcript\n\
      \x20         [--json]                        with no daemon; the last 40 unless -n says so\n\
@@ -150,8 +152,7 @@ fn usage() -> &'static str {
      \x20     BENCH_URL=tcp://<host>:<port> (a benchd on another machine, started with\n\
      \x20     BENCH_LISTEN; unset, the root's benchd.sock) ·\n\
      \x20     BENCH_ASKED=1 (the operator asked: set by benchd on his own just runs)\n\
-     exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed"
-}
+     exit:  0 ok · 2 no daemon · 3 refused · 4 daemon failed";
 
 struct Cli {
     verb: String,
@@ -205,19 +206,19 @@ fn run() -> i32 {
                 }
             }
             "--help" | "-h" => {
-                println!("{}", usage());
+                println!("{USAGE}");
                 return 0;
             }
             other if verb.is_none() && !other.starts_with('-') => verb = Some(other.to_string()),
             other if verb.is_some() && !other.starts_with('-') => {
                 positional.push(other.to_string())
             }
-            other => return refuse(&format!("unknown argument {other:?}\n{}", usage())),
+            other => return refuse(&format!("unknown argument {other:?}\n{USAGE}")),
         }
     }
 
     let Some(mut verb) = verb else {
-        return refuse(usage());
+        return refuse(USAGE);
     };
     if verb == "mail" {
         if positional.is_empty() {
@@ -258,14 +259,16 @@ fn run() -> i32 {
     };
     if verb == "sessions" && all && !positional.is_empty() {
         return refuse(
-            "--all lists sessions; `bench sessions dismiss <id> --harness <h>` takes no --all",
+            "--all lists sessions; `bench sessions dismiss|seen <id> --harness <h>` take no --all",
         );
     }
     if verb == "sessions" && all {
         verb = "sessions/all".into();
-    } else if verb == "sessions" && positional.first().map(String::as_str) == Some("dismiss") {
+    } else if verb == "sessions"
+        && let Some(sub @ ("dismiss" | "seen")) = positional.first().map(String::as_str)
+    {
+        verb = format!("sessions/{sub}");
         positional.remove(0);
-        verb = "sessions/dismiss".into();
     }
     if verb == "just" {
         verb = "just/run".into();
@@ -369,16 +372,17 @@ fn run() -> i32 {
                 workspace: workspace.display().to_string(),
             })
         }
-        "sessions/dismiss" => {
+        "sessions/dismiss" | "sessions/seen" => {
+            let sub = verb.trim_start_matches("sessions/");
             let Some(id) = positional.first() else {
-                return refuse(
-                    "sessions dismiss needs a session id — `bench sessions --all` lists them",
-                );
+                return refuse(&format!(
+                    "sessions {sub} needs a session id — `bench sessions --all` lists them"
+                ));
             };
             let Some(harness) = flag("harness").as_deref().and_then(Harness::parse) else {
-                return refuse(
-                    "sessions dismiss needs --harness <claude|codex|pi>, the row's own harness",
-                );
+                return refuse(&format!(
+                    "sessions {sub} needs --harness <claude|codex|pi>, the row's own harness"
+                ));
             };
             json!(SessionKey {
                 harness,
