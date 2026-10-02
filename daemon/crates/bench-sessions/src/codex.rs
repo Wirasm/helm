@@ -1,8 +1,10 @@
 //! codex's files: rollouts at `~/.codex/sessions/YYYY/MM/DD/rollout-<local time>-<thread
 //! id>.jsonl`, whose first line is `{"type":"session_meta","payload":{"id":…}}`, and thread
 //! names in `~/.codex/session_index.jsonl`, one `{"id","thread_name","updated_at"}` line per
-//! rename (codex 0.157 and 0.159).
+//! rename (codex 0.157 and 0.159). Every turn writes a `turn_context` record naming its model
+//! (0.160).
 
+use crate::latest::Field;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -65,6 +67,17 @@ fn find(dir: &Path, suffix: &str, depth: u8) -> Option<PathBuf> {
     }
     None
 }
+
+/// The model a thread runs: its latest turn's. A switch takes effect, and is recorded, at the
+/// next turn; a thread no turn has run in yet has none.
+pub const MODEL: Field = Field {
+    needle: b"\"turn_context\"",
+    pick: |record| {
+        (record["type"] == "turn_context")
+            .then(|| record["payload"]["model"].as_str().map(str::to_string))
+            .flatten()
+    },
+};
 
 /// Thread names by thread id, the last rename winning. A line that does not parse is left out:
 /// a name is a label on a row, never a row.

@@ -66,6 +66,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var name: String?
     /// The short branch checked out in this row's worktree, when it has a readable branch.
     package var branch: String?
+    /// The model the agent runs, as its harness last recorded it; nil until it records one.
+    package var model: String?
     package var cwd: String
     package var state: State
     package var open: Open
@@ -89,13 +91,13 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case harness, id, parent, name, branch, cwd, state, open
+        case harness, id, parent, name, branch, model, cwd, state, open
         case updatedAtMs = "updated_at_ms"
     }
 
     package init(
         harness: String, id: String, parent: String? = nil, name: String? = nil,
-        branch: String? = nil, cwd: String,
+        branch: String? = nil, model: String? = nil, cwd: String,
         state: State, open: Open, updatedAtMs: UInt64
     ) {
         self.harness = harness
@@ -103,6 +105,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         self.parent = parent
         self.name = name
         self.branch = branch
+        self.model = model
         self.cwd = cwd
         self.state = state
         self.open = open
@@ -116,6 +119,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         parent = try c.decodeIfPresent(String.self, forKey: .parent)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
         cwd = try c.decode(String.self, forKey: .cwd)
         state = try c.decode(State.self, forKey: .state)
         open = try c.decode(Open.self, forKey: .open)

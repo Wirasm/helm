@@ -20,6 +20,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod latest;
 pub mod pi;
 pub mod process;
 pub mod scope;
@@ -283,6 +284,8 @@ impl<'a> Rows<'a> {
             cwd: d.cwd,
             root: root.to_string(),
             branch: self.branches.get(root).cloned().flatten(),
+            // Read once the rows are known: [`build`] fills it for the rows it returns.
+            model: None,
             state: d.state,
             host: d.host,
             open,
@@ -551,7 +554,6 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
             );
         }
     }
-    cache.end_build();
 
     // 5. Finished: the record, minus anything live, anything dismissed, and anything whose
     //    harness left nothing to resume.
@@ -566,24 +568,13 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         if live.contains(&k) || !seen.insert(k.clone()) || ws.root_of(&h.cwd).is_none() {
             continue;
         }
-        let transcript = match h.harness {
-            Harness::Claude => {
-                Some(claude::transcript(inputs.home, &h.cwd, &h.id)).filter(|p| p.is_file())
+        let transcript = match harness_file(inputs.home, h.harness, &h.cwd, &h.id) {
+            Ok(Some(p)) => p,
+            Ok(None) => continue,
+            Err(u) => {
+                out.unreadable.push(u);
+                continue;
             }
-            Harness::Pi => match pi::session(inputs.home, &h.cwd, &h.id) {
-                Ok(p) => p,
-                Err(u) => {
-                    out.unreadable.push(u);
-                    continue;
-                }
-            },
-            // codex names its thread after the spawn: the id reaches the record with the
-            // first hook's claim (`mail/claimed`).
-            // Only its day directory: a gone rollout must not walk the tree on every build.
-            Harness::Codex => codex::dated_rollout(inputs.home, &h.id),
-        };
-        let Some(transcript) = transcript else {
-            continue;
         };
         let at_ms = claude::mtime_ms(&transcript);
         if dismissed.get(&k).is_some_and(|d| at_ms <= *d) {
@@ -596,7 +587,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 id: h.id.clone(),
                 parent: None,
                 name: match h.harness {
-                    Harness::Pi => cache.pi_name(&transcript),
+                    Harness::Pi => cache.latest(&transcript, &pi::NAME),
                     _ => named(inputs.home, cache, &codex_names, h.harness, &h.cwd, &h.id),
                 },
                 cwd: h.cwd.clone(),
@@ -627,6 +618,10 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     });
     let total = rows.len();
     rows.truncate(MAX_ROWS);
+    for row in &mut rows {
+        row.model = model(inputs.home, cache, row);
+    }
+    cache.end_build();
     Built {
         list: SessionList {
             workspace: ws.root.clone(),
@@ -675,6 +670,39 @@ pub fn conversation(
         .or_else(|| runtime_session.map(str::to_string))
 }
 
+/// The file a harness keeps a session's conversation in: Claude's transcript, pi's session file,
+/// codex's rollout. `Ok(None)` when there is none (yet, or any more).
+fn harness_file(
+    home: &Path,
+    harness: Harness,
+    cwd: &str,
+    id: &str,
+) -> Result<Option<PathBuf>, Unreadable> {
+    Ok(match harness {
+        Harness::Claude => Some(claude::transcript(home, cwd, id)).filter(|p| p.is_file()),
+        Harness::Pi => pi::session(home, cwd, id)?,
+        // codex names its thread after the spawn: the id reaches the record with the first
+        // hook's claim (`mail/claimed`), and until then is the bench session's, which no rollout
+        // carries. Only its day directory: a gone rollout must not walk the tree on every build.
+        Harness::Codex => codex::dated_rollout(home, id),
+    })
+}
+
+/// The model a row's harness last recorded for it: a subagent's own transcript, else its
+/// session's file. `None` when the harness has recorded none.
+fn model(home: &Path, cache: &mut Cache, row: &SessionRow) -> Option<String> {
+    let path = match &row.host {
+        Host::InSession { transcript, .. } => PathBuf::from(transcript),
+        _ => harness_file(home, row.harness, &row.cwd, &row.id).ok()??,
+    };
+    let field = match row.harness {
+        Harness::Claude => &claude::MODEL,
+        Harness::Codex => &codex::MODEL,
+        Harness::Pi => &pi::MODEL,
+    };
+    cache.latest(&path, field)
+}
+
 /// The name a harness keeps for a session: codex's thread name, or pi's latest `/name`. Claude's
 /// comes from its registry row instead.
 fn named(
@@ -687,10 +715,10 @@ fn named(
 ) -> Option<String> {
     match harness {
         Harness::Codex => codex_names.get(id).cloned(),
-        Harness::Pi => pi::session(home, cwd, id)
+        Harness::Pi => harness_file(home, harness, cwd, id)
             .ok()
             .flatten()
-            .and_then(|path| cache.pi_name(&path)),
+            .and_then(|path| cache.latest(&path, &pi::NAME)),
         Harness::Claude => None,
     }
 }
