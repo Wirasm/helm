@@ -53,5 +53,8 @@ final class PocketPagesTests: XCTestCase {
     func testALiveFileThatIsNotAnObjectIsLeftAlone() {
         XCTAssertNil(PocketReply.adding("x", at: Date(), to: Data("[1, 2]".utf8)))
         XCTAssertNil(PocketReply.adding("x", at: Date(), to: Data("not json".utf8)))
+        XCTAssertNil(
+            PocketReply.adding("x", at: Date(), to: Data(#"{"replies": "the page's own"}"#.utf8)),
+            "a `replies` the page keeps as something else is not replaced")
     }
 }

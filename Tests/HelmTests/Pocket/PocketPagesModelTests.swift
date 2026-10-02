@@ -14,7 +14,9 @@ final class PocketPagesModelTests: XCTestCase {
     /// A stand-in whose bench holds `page` on a canvas an agent opened, and whose store lists it.
     /// `liveFile` answers `file/read` of the live file; nil is absent.
     private func benchd(liveFile: @escaping @Sendable () -> String?) throws -> FakeBenchd {
-        let canvas = BenchDocument.Pane(id: UUID(), surface: .canvas(path: page), opener: UUID())
+        // Spelled as benchd may spell it: the same file, not the same string.
+        let canvas = BenchDocument.Pane(
+            id: UUID(), surface: .canvas(path: "/s/plans/./a.plan.html"), opener: UUID())
         // The operator's own canvas: nobody to mail a reply to.
         let own = BenchDocument.Pane(id: UUID(), surface: .canvas(path: "/s/plans/b.plan.html"))
         let server = try FakeBenchd(
@@ -70,7 +72,8 @@ final class PocketPagesModelTests: XCTestCase {
         let refusal = await model.loadPages()
         XCTAssertNil(refusal)
         XCTAssertEqual(model.pages.map(\.title), ["plans/a.plan"])
-        XCTAssertEqual(model.opened, [page], "the canvas an agent opened on the bench")
+        let pages = model.pages
+        XCTAssertEqual(pages.map { model.isOpened($0) }, [true], "the canvas an agent opened")
         let stores = try XCTUnwrap(server.requests.first { $0["verb"] as? String == "prp/stores" })
         XCTAssertEqual((stores["args"] as? [String: Any])?["workspace"] as? String, "/w/helm")
     }
@@ -109,6 +112,21 @@ final class PocketPagesModelTests: XCTestCase {
         let last = try XCTUnwrap(writes.last?["args"] as? [String: Any])
         XCTAssertEqual((last["expect"] as? [String: Any])?["text"] as? String, #"{"page": 2}"#)
         XCTAssertTrue((last["text"] as? String ?? "").contains(#""page" : 2"#))
+    }
+
+    /// Reading a finished turn on the phone is the operator seeing it: `sessions/seen` by the
+    /// operator, so it leaves the top of the agents tab as it does when he focuses its pane.
+    func testSeeingAFinishedTurnTellsBenchd() async throws {
+        let server = try benchd { nil }
+        defer { server.stop() }
+        let model = try await connected(to: server)
+        let refusal = await model.markSeen(harness: "claude", session: "9496c9f4-8105")
+        XCTAssertNotNil(refusal, "the stand-in refuses every verb it does not know")
+        let seen = try XCTUnwrap(server.requests.last { $0["verb"] as? String == "sessions/seen" })
+        XCTAssertEqual((seen["by"] as? [String: Any])?["kind"] as? String, "operator")
+        let args = try XCTUnwrap(seen["args"] as? [String: Any])
+        XCTAssertEqual(args["harness"] as? String, "claude")
+        XCTAssertEqual(args["id"] as? String, "9496c9f4-8105")
     }
 
     /// Start is a spawn by helm with the first message as text, so benchd records it as the

@@ -7,8 +7,11 @@ import Foundation
 package enum BenchSessionsRequest: Encodable, Equatable, Sendable {
     case all(id: String, workspace: String)
     case dismiss(id: String, harness: String, session: String)
+    /// The operator saw the session's last turn (`sessions/seen`): Pocket showed it to him. Sent by
+    /// the operator; benchd refuses it from an agent he did not ask.
+    case seen(id: String, harness: String, session: String)
 
-    private enum CodingKeys: String, CodingKey { case id, verb, args }
+    private enum CodingKeys: String, CodingKey { case id, verb, args, by }
     private enum ArgKeys: String, CodingKey { case workspace, harness, id }
 
     package func encode(to encoder: any Encoder) throws {
@@ -24,9 +27,18 @@ package enum BenchSessionsRequest: Encodable, Equatable, Sendable {
             try c.encode("sessions/dismiss", forKey: .verb)
             try args.encode(harness, forKey: .harness)
             try args.encode(session, forKey: .id)
+        case let .seen(id, harness, session):
+            try c.encode(id, forKey: .id)
+            try c.encode("sessions/seen", forKey: .verb)
+            try c.encode(BenchActor.operatorGesture, forKey: .by)
+            try args.encode(harness, forKey: .harness)
+            try args.encode(session, forKey: .id)
         }
     }
 }
+
+/// `sessions/seen`'s answer. Pocket reads only that it was ok.
+package struct BenchSessionSeen: Decodable, Equatable, Sendable {}
 
 /// `sessions/all`'s answer, reduced to what the drawer shows. Running rows first, then newest
 /// first — benchd's order, which the drawer keeps.

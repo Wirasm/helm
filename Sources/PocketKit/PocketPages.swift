@@ -33,7 +33,8 @@ package enum PocketPages {
 package enum PocketReply {
     /// The live file with `text` appended to its `replies`, every other key kept, written as a
     /// page writes it (`CanvasDataWrite`: sorted, pretty, a trailing newline). nil when the file
-    /// is there and is not a JSON object: it is the page's, and Pocket does not write over it.
+    /// is there and is not a JSON object, or keeps `replies` as something other than a list: it
+    /// is the page's, and Pocket does not write over it.
     package static func adding(_ text: String, at date: Date, to existing: Data?) -> String? {
         var object: [String: Any] = [:]
         if let existing {
@@ -41,6 +42,7 @@ package enum PocketReply {
             else { return nil }
             object = parsed
         }
+        if object["replies"] != nil, !(object["replies"] is [Any]) { return nil }
         var replies = object["replies"] as? [Any] ?? []
         let at = ISO8601DateFormatter().string(from: date)
         replies.append(["from": "pocket", "text": text, "at": at])

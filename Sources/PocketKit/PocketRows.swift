@@ -20,7 +20,8 @@ package enum Attention: Comparable, Sendable {
         if ["waiting", "blocked"].contains(activity) || (row.operatorMail?.unread ?? 0) > 0 {
             self = .asking
         } else if let done = row.done {
-            self = done.seen ? .seen : .finished
+            // A turn addressed to the agent that spawned it is that agent's to read.
+            self = done.seen || done.to != "operator" ? .seen : .finished
         } else {
             // A harness whose hooks do not report a turn's end still says idle.
             self = activity == "idle" ? .seen : .working

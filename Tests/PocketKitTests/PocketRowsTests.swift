@@ -29,6 +29,8 @@ final class PocketRowsTests: XCTestCase {
     func testEveryStateHasItsAttention() {
         let done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
         let seen = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: true)
+        // A worker's turn is its orchestrator's to read, not the operator's.
+        let toAgent = BenchDone(since: Date(timeIntervalSince1970: 1), to: "lead", seen: false)
         let mail = BenchOperatorMail(unread: 1, since: Date(timeIntervalSince1970: 1))
         let cases: [(BenchSessionRow, Attention)] = [
             (row("x", running("waiting", "permission prompt")), .asking),
@@ -37,6 +39,7 @@ final class PocketRowsTests: XCTestCase {
             (row("x", running("idle"), mail: mail), .asking),
             (row("x", running("idle"), done: done), .finished),
             (row("x", running("idle"), done: seen), .seen),
+            (row("x", running("idle"), done: toAgent), .seen),
             (row("x", running("idle")), .seen),
             (row("x", .finished(atMs: 1)), .ended),
             (row("x", running("busy")), .working),

@@ -16,7 +16,7 @@ struct PagesView: View {
                     NavigationLink {
                         PageView(page: page)
                     } label: {
-                        PageRow(page: page, opened: model.opened.contains(page.path))
+                        PageRow(page: page, opened: model.isOpened(page))
                     }
                 }
                 if let refused {
@@ -61,6 +61,7 @@ struct PageView: View {
     @State private var reply = ""
     @State private var sending = false
     @State private var said: String?
+    @State private var failed: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -70,10 +71,13 @@ struct PageView: View {
             }
             .font(Mono.body)
             if let files = model.files {
-                CanvasWebView(path: page.path, files: files)
+                // A new connection is a new page: the old benchd's files are not this one's.
+                CanvasWebView(path: page.path, files: files, failed: $failed)
+                    .id(model.endpoint?.description)
             }
+            if let failed { Text(failed).font(Mono.small).foregroundStyle(Palette.asking) }
             if let said { Text(said).font(Mono.small).foregroundStyle(Palette.dim) }
-            if model.opened.contains(page.path) {
+            if model.isOpened(page) {
                 replyBox
             } else {
                 Text("no agent opened this page on the bench: a reply would reach nobody")
@@ -125,6 +129,29 @@ struct PageView: View {
 struct CanvasWebView: UIViewRepresentable {
     let path: String
     let files: any CanvasFiles
+    /// Why the page did not load, for the view to say: a page benchd could not read is a failed
+    /// navigation and an empty web view otherwise.
+    @Binding var failed: String?
+
+    func makeCoordinator() -> Coordinator { Coordinator(failed: $failed) }
+
+    /// Says why a navigation failed, and clears it when one finishes.
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        @Binding var failed: String?
+
+        init(failed: Binding<String?>) { _failed = failed }
+
+        func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) { failed = nil }
+
+        func webView(
+            _ view: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: any Error
+        ) { failed = "could not read the page: \(error.localizedDescription)" }
+
+        func webView(
+            _ view: WKWebView, didFail navigation: WKNavigation!, withError error: any Error
+        ) { failed = "could not read the page: \(error.localizedDescription)" }
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let artifact = URL(fileURLWithPath: path)
@@ -150,6 +177,7 @@ struct CanvasWebView: UIViewRepresentable {
         }
         let web = WKWebView(frame: .zero, configuration: configuration)
         web.isOpaque = false
+        web.navigationDelegate = context.coordinator
         if let url = CanvasAddress.url(for: standardized) { web.load(URLRequest(url: url)) }
         return web
     }

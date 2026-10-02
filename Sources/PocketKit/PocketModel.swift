@@ -22,8 +22,8 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var failure: String?
     /// The plan and review pages in the workspaces' stores, newest first (`loadPages`).
     @Published package private(set) var pages: [PocketPage] = []
-    /// The canvases on the bench an agent opened: a reply to one of these is mailed to it.
-    @Published package private(set) var opened: Set<String> = []
+    /// The canvases on the bench an agent opened, standardized: a reply to one is mailed to it.
+    @Published private var opened: Set<String> = []
 
     private var client: BenchClient?
     private var following: AnyCancellable?
@@ -53,7 +53,7 @@ package final class PocketModel: ObservableObject {
                     guard case let .canvas(path) = pane.surface, pane.opener != nil else {
                         return nil
                     }
-                    return path
+                    return StandardizedPath(path).value
                 })
         }
         client.start()
@@ -61,6 +61,23 @@ package final class PocketModel: ObservableObject {
     }
 
     package var endpoint: BenchEndpoint? { client?.endpoint }
+
+    /// Whether an agent opened `page` on the bench, so a reply to it reaches that agent.
+    package func isOpened(_ page: PocketPage) -> Bool {
+        opened.contains(StandardizedPath(page.path).value)
+    }
+
+    /// The operator saw the session's last turn: `sessions/seen`, as when he focuses its pane on
+    /// the Mac. nil once benchd took it.
+    package func markSeen(harness: String, session: String) async -> Refusal? {
+        guard let endpoint else { return Refusal(Self.notConnected) }
+        let request = BenchSessionsRequest.seen(
+            id: Self.id("seen"), harness: harness, session: session)
+        if case let .failure(why) = await Self.ask(request, at: endpoint, BenchSessionSeen.self) {
+            return why
+        }
+        return nil
+    }
 
     /// A page's files through benchd, for `CanvasSchemeHandler` and the page's live file.
     package var files: (any CanvasFiles)? { client.map(BenchCanvasFiles.init(client:)) }

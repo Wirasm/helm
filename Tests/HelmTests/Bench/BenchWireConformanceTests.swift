@@ -198,6 +198,12 @@ final class BenchWireConformanceTests: XCTestCase {
                 .dismiss(
                     id: "x", harness: "claude", session: "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918")),
             try sample("dismiss_args"))
+        // `sessions/seen` reads the same session key as `sessions/dismiss` (`SessionKey`).
+        XCTAssertEqual(
+            try args(
+                .seen(
+                    id: "x", harness: "claude", session: "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918")),
+            try sample("dismiss_args"))
 
         let list = try JSONDecoder().decode(
             BenchSessionList.self,
