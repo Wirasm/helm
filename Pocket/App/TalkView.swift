@@ -10,6 +10,8 @@ struct TalkView: View {
     @State var target: String
     @State private var screen: BenchScreen?
     @State private var unreachable: String?
+    /// Why the last key or message was not taken, until one is.
+    @State private var refused: String?
     @State private var message = ""
 
     var body: some View {
@@ -28,7 +30,7 @@ struct TalkView: View {
                 }
                 .defaultScrollAnchor(.bottomLeading)
             }
-            if let why = unreachable ?? model.failure {
+            if let why = refused ?? unreachable {
                 Text(why).font(Mono.small).foregroundStyle(Palette.asking).lineLimit(2)
             }
             keys
@@ -89,15 +91,19 @@ struct TalkView: View {
         .overlay(alignment: .top) { Palette.line.frame(height: 1) }
     }
 
+    /// The message stays in the box until benchd has taken it, so a refused one can be sent again.
     private func sendMessage() {
-        guard !message.isEmpty else { return }
-        send(.message(message))
-        message = ""
+        let sent = message
+        guard !sent.isEmpty else { return }
+        send(.message(sent)) { if message == sent { message = "" } }
     }
 
-    private func send(_ input: BenchScreenInput) {
+    private func send(_ input: BenchScreenInput, then delivered: @escaping () -> Void = {}) {
         let target = target
-        Task { await model.send(input, to: target) }
+        Task {
+            refused = await model.send(input, to: target)?.description
+            if refused == nil { delivered() }
+        }
     }
 
     /// The screen ten times a second while this view is up, as `bench watch screen` reads it.

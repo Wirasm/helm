@@ -31,7 +31,8 @@ final class PocketModelTests: XCTestCase {
             let id = request["id"] ?? ""
             switch request["verb"] as? String {
             case "sessions/all": return ["id": id, "status": "ok", "data": ["rows": [Self.row()]]]
-            case "screen/send":
+            case "screen/send"
+            where (request["args"] as? [String: Any])?["target"] as? String == "s7":
                 return ["id": id, "status": "ok", "data": ["session": "s7", "bracketed": false]]
             default: return ["id": id, "status": "refused", "reason": "no session s9"]
             }
@@ -48,13 +49,28 @@ final class PocketModelTests: XCTestCase {
         await model.refreshSessions()
         XCTAssertEqual(model.sessions["/w/helm"]?.map(\.title), ["daemon-7915"])
 
-        await model.send(PocketKey.escape.input, to: "s7")
+        let refusal = await model.send(PocketKey.escape.input, to: "s7")
+        XCTAssertNil(refusal)
         let sent = try XCTUnwrap(server.requests.last { $0["verb"] as? String == "screen/send" })
         let args = try XCTUnwrap(sent["args"] as? [String: Any])
         XCTAssertEqual(args["text"] as? String, "\u{1b}")
         XCTAssertEqual(args["keys"] as? Bool, true)
         XCTAssertNil(args["enter"], "a key is not followed by Return")
-        XCTAssertNil(model.failure)
+
+        // A refused send comes back to the caller in benchd's words.
+        let refused = await model.send(.message("status?"), to: "s9")
+        XCTAssertEqual(refused?.description, "no session s9")
+
+        // A workspace benchd does not answer for keeps the rows it had, and says why.
+        let answer = server.answer
+        server.answer = { request in
+            guard request["verb"] as? String == "sessions/all" else { return answer(request) }
+            return ["id": request["id"] ?? "", "status": "refused", "reason": "busy"]
+        }
+        await model.refreshSessions()
+        XCTAssertEqual(model.sessions["/w/helm"]?.map(\.title), ["daemon-7915"])
+        XCTAssertEqual(model.failure, "busy")
+        server.answer = answer
 
         // benchd's refusal reaches the screen in its own words.
         switch await model.screen("s9") {

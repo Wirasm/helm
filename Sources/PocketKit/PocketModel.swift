@@ -17,7 +17,7 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var sessions: [String: [BenchSessionRow]] = [:]
     /// The follower's state, or why there is nothing to follow.
     @Published package private(set) var state: BenchClient.State = .disconnected("not connected")
-    /// Why the last verb failed, until one succeeds.
+    /// Why the last sessions poll failed for a workspace, until one succeeds for all of them.
     @Published package private(set) var failure: String?
 
     private var client: BenchClient?
@@ -56,20 +56,23 @@ package final class PocketModel: ObservableObject {
         }
     }
 
+    /// Every workspace's sessions, asked one by one. A workspace benchd does not answer for keeps
+    /// the rows it had, and `failure` says why; the others still update.
     package func refreshSessions() async {
         guard let endpoint else { return }
         var answered: [String: [BenchSessionRow]] = [:]
+        var refused: String?
         for workspace in workspaces {
             let request = BenchSessionsRequest.all(id: Self.id("sessions"), workspace: workspace)
             switch await Self.ask(request, at: endpoint, BenchSessionList.self) {
             case let .success(list): answered[workspace] = list.rows
             case let .failure(why):
-                failure = why.description
-                return
+                answered[workspace] = sessions[workspace]
+                refused = refused ?? why.description
             }
         }
         sessions = answered
-        failure = nil
+        failure = refused
     }
 
     package func screen(_ target: String) async -> Result<BenchScreen, Refusal> {
@@ -79,14 +82,15 @@ package final class PocketModel: ObservableObject {
             BenchScreen.self)
     }
 
-    /// Type `input` into the session `target` names. A failure is kept for the screen to say.
-    package func send(_ input: BenchScreenInput, to target: String) async {
-        guard let endpoint else { return failure = Self.notConnected }
+    /// Type `input` into the session `target` names: nil once benchd took it, else why not. The
+    /// caller keeps the refusal beside what was typed; `failure` is the sessions poll's.
+    package func send(_ input: BenchScreenInput, to target: String) async -> Refusal? {
+        guard let endpoint else { return Refusal(Self.notConnected) }
         let request = BenchScreenRequest.send(id: Self.id("send"), target: target, input: input)
-        switch await Self.ask(request, at: endpoint, BenchScreenSent.self) {
-        case .success: failure = nil
-        case let .failure(why): failure = why.description
+        if case let .failure(why) = await Self.ask(request, at: endpoint, BenchScreenSent.self) {
+            return why
         }
+        return nil
     }
 
     private static let notConnected = "not connected to a benchd"

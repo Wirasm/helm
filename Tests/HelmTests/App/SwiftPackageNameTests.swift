@@ -9,16 +9,16 @@ import XCTest
 /// `Package.swift`'s own `name: "helm"` automatically, so `swift build` and `swift test` stay
 /// green no matter what `project.yml` says. `xcodegen generate` stays green too — it only
 /// regenerates the Xcode project, it does not build it. A hand-authored xcodegen project has no
-/// such wiring, so `HelmWire` and `Helm` each need `SWIFT_PACKAGE_NAME` spelled out by hand in
-/// `project.yml`, held together only by two comments cross-referencing each other — the same
+/// such wiring, so `HelmWire`, `BenchKit` and `Helm` each need `SWIFT_PACKAGE_NAME` spelled out by
+/// hand in `project.yml`, held together only by comments cross-referencing each other — the same
 /// hand-maintained-set shape #221 exists to remove, one level down in the build config. Nothing
 /// in the whole Swift gate would notice a drift: it only surfaces at `make app`, as "the package
 /// access level used on 'X' requires a package name", a message that names no file to fix. This
 /// is `DefaultsDomainTests.testEveryBuildPathNamesTheOneDomain` one level down — in the build
 /// config that makes `package` access resolve, rather than in the bundle identity it protects.
 final class SwiftPackageNameTests: XCTestCase {
-    /// The drift guard. If `Package.swift`'s name and either target's `SWIFT_PACKAGE_NAME`
-    /// disagree, `HelmWire`'s `package` declarations stop being visible from that target under
+    /// The drift guard. If `Package.swift`'s name and any target's `SWIFT_PACKAGE_NAME`
+    /// disagree, `HelmWire`'s and `BenchKit`'s `package` declarations stop being visible from that target under
     /// `make app` while every other gate stage stays green — the exact silent failure #221's PR
     /// review found by hand.
     func testPackageSwiftAndProjectYmlAgreeOnThePackageName() throws {
@@ -33,10 +33,11 @@ final class SwiftPackageNameTests: XCTestCase {
         let spec = try String(
             contentsOf: repositoryRoot.appendingPathComponent("project.yml"), encoding: .utf8)
 
-        // Both targets that compile against HelmWire's `package`-level API. A target added to
+        // Every target that declares or uses `package`-level API (Pocket's own project.yml is
+        // held by the `ios` part, which builds it). A target added to
         // that list without a matching entry here would pass silently — the same asymmetry
         // `DefaultsDomainTests` calls out for the resources build phase, one door over.
-        for target in ["HelmWire", "Helm"] {
+        for target in ["HelmWire", "BenchKit", "Helm"] {
             let block = try XCTUnwrap(
                 targetBlock(named: target, in: spec),
                 "project.yml must declare a `\(target):` target under `targets:`")
