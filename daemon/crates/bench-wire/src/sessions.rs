@@ -158,7 +158,8 @@ pub enum OpenAction {
     ClaudeAttach {
         job: String,
     },
-    /// Start `argv` in a new pane at `cwd`.
+    /// A finished conversation, resumed at `cwd`: helm sends `spawn --resume` (#621); `argv` is
+    /// the harness's own command, for a reader of `bench sessions --all`.
     Resume {
         argv: Vec<String>,
         cwd: String,

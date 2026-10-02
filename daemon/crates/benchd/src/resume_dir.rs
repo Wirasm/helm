@@ -5,14 +5,19 @@
 //! `restore`, `resume`) asks [`start`] first, outside the core lock since it may run git:
 //!
 //! - **The folder is there**: it, as before.
-//! - **It is gone, its parent is not, and the agent's branch still exists**: benchd recreates the
-//!   folder as a worktree of its repository on that branch. Only the folder itself: a parent that
-//!   is gone too (all of `.worktrees/`, or a worktree the cwd was a subfolder of) is not invented.
+//! - **It is gone, its parent is not, git ignores it, and the agent's branch still exists**:
+//!   benchd recreates the folder as a worktree of its repository on that local branch. Only a
+//!   folder that can have been a worktree's root: its parent is there (a parent that is gone too,
+//!   all of `.worktrees/` or a worktree the cwd was a subfolder of, is not invented), and git
+//!   ignores it, so a gone tracked or scratch folder of a live checkout never becomes a worktree
+//!   nested in that checkout's tree.
 //! - **Otherwise**, an agent that can re-enter its conversation from anywhere starts in the
 //!   repository's root; pi cannot ([`resumes_anywhere`]), so its resume is refused, naming the
 //!   command that would bring the folder back.
 //!
-//! The agent learns which through the resume notice (`spawn::wire`).
+//! The agent learns which through the resume notice (`spawn::wire`). A worktree is recreated before
+//! the spawn has its pane, so a spawn refused after that (a taken `--name`, a placement refusal)
+//! leaves it in place: the folder the next resume of that conversation would recreate anyway.
 
 use bench_session::AgentKind;
 use std::io::Read;
@@ -68,6 +73,7 @@ fn place(agent: AgentKind, cwd: &str, branch: Option<&str>) -> Result<Start, Str
     let parent_there = path.parent().is_some_and(Path::is_dir);
     let why = match branch {
         _ if !parent_there => "the folder it was in is gone too".to_string(),
+        _ if !ignored(&repo, cwd) => format!("it is not a folder {repo} ignores, so no worktree"),
         None => "benchd cannot tell which branch it was on".to_string(),
         Some(b) => match add_worktree(&repo, cwd, b) {
             Ok(()) => {
@@ -115,11 +121,30 @@ fn repo_root(dir: &Path) -> Option<String> {
     Some(top.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-/// `git worktree add <cwd> <branch>` in `repo`. A name git would read as a flag is no branch.
+/// Whether the checkout at `repo` ignores `cwd`, as it does a worktree under `.worktrees/`.
+fn ignored(repo: &str, cwd: &str) -> bool {
+    git(
+        Path::new(repo),
+        &["check-ignore", "-q", cwd],
+        Duration::from_secs(5),
+    )
+    .is_ok()
+}
+
+/// `git worktree add <cwd> <branch>` in `repo`, for a local branch only: given a name that is only
+/// `origin/<branch>`, git would make a new branch from it. A name git would read as a flag is no
+/// branch.
 fn add_worktree(repo: &str, cwd: &str, branch: &str) -> Result<(), String> {
     if branch.starts_with('-') {
         return Err(format!("{branch:?} is not a branch name"));
     }
+    let local = format!("refs/heads/{branch}");
+    git(
+        Path::new(repo),
+        &["rev-parse", "--verify", "--quiet", &local],
+        Duration::from_secs(5),
+    )
+    .map_err(|_| "it is not a local branch any more".to_string())?;
     git(
         Path::new(repo),
         &["worktree", "add", "--quiet", cwd, branch],
@@ -128,7 +153,8 @@ fn add_worktree(repo: &str, cwd: &str, branch: &str) -> Result<(), String> {
     .map(drop)
 }
 
-/// `git <args>` in `dir`: its stdout, or why not (git's own last line), killed at `wait`.
+/// `git <args>` in `dir`: its stdout, or why not (git's own last line), killed at `wait`. Both
+/// pipes are read as git writes, so a chatty hook cannot fill one and stall git until the kill.
 fn git(dir: &Path, args: &[&str], wait: Duration) -> Result<String, String> {
     let mut child = Command::new("git")
         .args(args)
@@ -138,11 +164,33 @@ fn git(dir: &Path, args: &[&str], wait: Duration) -> Result<String, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git: {e}"))?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
     let deadline = Instant::now() + wait;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            // The readers are left to finish on their own: a hook's child can hold a pipe open.
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -150,18 +198,10 @@ fn git(dir: &Path, args: &[&str], wait: Duration) -> Result<String, String> {
             }
         }
     };
-    let read = |pipe: Option<&mut dyn Read>| {
-        let mut text = String::new();
-        if let Some(pipe) = pipe {
-            let _ = pipe.read_to_string(&mut text);
-        }
-        text
-    };
-    let out = read(child.stdout.as_mut().map(|p| p as &mut dyn Read));
     if status.success() {
-        return Ok(out);
+        return Ok(out.join().unwrap_or_default());
     }
-    let err = read(child.stderr.as_mut().map(|p| p as &mut dyn Read));
+    let err = err.join().unwrap_or_default();
     Err(err
         .lines()
         .rfind(|l| !l.trim().is_empty())
@@ -174,17 +214,19 @@ fn git(dir: &Path, args: &[&str], wait: Duration) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A temp dir holding `repo`, a git repository with one commit and the worktree
-    /// `repo/.worktrees/w` on branch `feat/x`, made and then removed by git itself.
+    /// A temp dir holding `repo`, a git repository that ignores `.worktrees/` (as helm's does),
+    /// and its worktree `repo/.worktrees/w` on branch `feat/x`, made and then removed by git.
     fn removed_worktree(name: &str) -> (PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("resume-dir-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let dir = dir.canonicalize().unwrap();
         let repo = dir.join("repo");
+        std::fs::write(repo.join(".gitignore"), "/.worktrees/\n").unwrap();
         for args in [
             &["init", "-q", "-b", "main"][..],
-            &["commit", "-q", "--allow-empty", "-m", "x"],
+            &["add", ".gitignore"],
+            &["commit", "-q", "-m", "x"],
             &["worktree", "add", "-q", "-b", "feat/x", ".worktrees/w"],
             &["worktree", "remove", ".worktrees/w"],
         ] {
@@ -255,6 +297,42 @@ mod tests {
             assert!(refused.contains("worktree add"), "{refused}");
         }
         assert!(!Path::new(&cwd).exists(), "nothing was recreated");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_gone_folder_of_a_live_checkout_never_becomes_a_nested_worktree() {
+        // A tracked subfolder a branch switch removed: its parent is there, git does not ignore
+        // it, and a worktree there would sit inside the checkout's own tree.
+        let (dir, _) = removed_worktree("nested");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("daemon/crates")).unwrap();
+        std::fs::write(repo.join("daemon/crates/f"), "").unwrap();
+        run_git(&repo, &["add", "daemon"]);
+        run_git(&repo, &["commit", "-q", "-m", "tracked"]);
+        std::fs::remove_dir_all(repo.join("daemon/crates")).unwrap();
+        let gone = repo.join("daemon/crates").display().to_string();
+        let start = place(AgentKind::Claude, &gone, Some("feat/x")).unwrap();
+        assert_eq!(start.cwd, repo.display().to_string());
+        assert!(
+            !Path::new(&gone).exists(),
+            "no worktree in the tracked tree"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_branch_left_only_on_the_remote_is_not_recreated() {
+        // `git worktree add <path> <b>` would make a new local branch from `origin/<b>`.
+        let (dir, cwd) = removed_worktree("remote");
+        let repo = dir.join("repo");
+        run_git(
+            &repo,
+            &["update-ref", "refs/remotes/origin/feat/gone", "HEAD"],
+        );
+        let refused = place(AgentKind::Pi, &cwd, Some("feat/gone")).unwrap_err();
+        assert!(refused.contains("not a local branch"), "{refused}");
+        assert!(!Path::new(&cwd).exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

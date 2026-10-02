@@ -199,8 +199,9 @@ pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `s
 no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
 interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt.
 Each of them asks `resume_dir::start` where the conversation runs first (#621): a folder that is
-gone (the merge queue prunes a worktree after its merge) comes back as a worktree on the branch
-the harness last recorded, else a claude or codex starts in the repository root, and the notice
+gone (the merge queue prunes a worktree after its merge) comes back as a worktree on the local
+branch the harness last recorded, when git ignores that folder (`.worktrees/`) and its parent is
+still there; else a claude or codex starts in the repository root, and the notice
 says which; pi re-enters a conversation only where it ran, so its resume is refused instead. The
 sessions drawer resumes a finished row through `spawn --resume` for the same reason. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),

@@ -8488,13 +8488,16 @@ fn spawn_resume_sends_the_notice_unless_the_caller_sent_a_prompt() {
     );
 }
 
-/// A repository under `home` with the worktree `.worktrees/w` on branch `feat/x`, and a Claude
-/// transcript of conversation `c-wt` there that names the branch, as Claude Code writes one.
+/// A repository under `home` that ignores `.worktrees/`, as helm's does, with the worktree
+/// `.worktrees/w` on branch `feat/x`, and a Claude transcript of conversation `c-wt` there that
+/// names the branch, as Claude Code writes one.
 fn claude_in_a_worktree(home: &Path) -> (PathBuf, String) {
     let repo = home.join("repo");
     fs::create_dir_all(&repo).unwrap();
     let repo = repo.canonicalize().unwrap();
+    fs::write(repo.join(".gitignore"), "/.worktrees/\n").unwrap();
     git_in(&repo, &["init", "-q", "-b", "main"]);
+    git_in(&repo, &["add", ".gitignore"]);
     git_in(
         &repo,
         &[
@@ -8504,7 +8507,6 @@ fn claude_in_a_worktree(home: &Path) -> (PathBuf, String) {
             "user.email=t@t",
             "commit",
             "-q",
-            "--allow-empty",
             "-m",
             "x",
         ],
