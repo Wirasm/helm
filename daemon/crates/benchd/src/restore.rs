@@ -42,6 +42,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         None => None,
     };
     let mut codex = prepare_codex(core, only);
+    let mut abandoned: Vec<SpawnSpec> = Vec::new();
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
     let waiting = waiting(&c, &next, only);
@@ -80,7 +81,10 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
             ))),
             Some(a) => match codex.remove(&pane) {
                 Some(prepared) => prepared
-                    .and_then(|r| start(&mut c, pane, &a, r))
+                    .and_then(|r| {
+                        let spec = r.spec.clone();
+                        start(&mut c, pane, &a, r).inspect_err(|_| abandoned.push(spec))
+                    })
                     .map_err(Some),
                 None => reserve(&mut c, &a)
                     .and_then(|r| start(&mut c, pane, &a, r))
@@ -115,7 +119,15 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         created: None,
         pane: None,
     };
-    match crate::layout::commit(&mut c, change) {
+    let committed = crate::layout::commit(&mut c, change);
+    drop(c);
+    // A thread re-entered for a pane that did not get it (its session failed to start, or the
+    // pane turned out held): its first turn is stopped, so nothing runs that no pane shows.
+    let unused = codex.into_values().filter_map(Result::ok).map(|r| r.spec);
+    for spec in abandoned.into_iter().chain(unused) {
+        crate::codex::abandon(core, &spec);
+    }
+    match committed {
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
     }

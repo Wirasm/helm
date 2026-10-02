@@ -1066,7 +1066,10 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
         &spawn::agent_env(&root, &id, &old.handle),
         notices,
     )
-    .map_err(refused)?;
+    .map_err(|why| {
+        codex::abandon(core, &spec);
+        refused(why)
+    })?;
     let mut c = core.lock().unwrap();
     c.sessions.remove(sid);
     c.sessions.insert(id.clone(), Arc::clone(&session));

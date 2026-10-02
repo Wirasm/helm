@@ -37,10 +37,6 @@ const ANSWER_WAIT: Duration = Duration::from_secs(10);
 /// How long a starting server has to listen.
 const LISTEN_WAIT: Duration = Duration::from_secs(10);
 
-/// How long a thread this connection just subscribed to is kept before [`Server::release`] may
-/// let it go: the gap between creating a thread and registering the session that owns it.
-const CLAIM_GRACE: Duration = Duration::from_secs(30);
-
 /// How long a stopping server has to go once its leash is dropped.
 const STOP_WAIT: Duration = Duration::from_secs(3);
 
@@ -69,8 +65,15 @@ pub struct Server {
     waiting: Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
     /// The threads this connection is subscribed to, so the ones no session owns any more can be
-    /// let go ([`Server::release`]): when it subscribed, until a session is seen owning it.
-    subscribed: Mutex<HashMap<String, Option<Instant>>>,
+    /// let go ([`Server::release`]).
+    subscribed: Mutex<HashSet<String>>,
+    /// Threads benchd made or re-entered whose session is not registered yet, each with the
+    /// first turn benchd started on it: never let go, and stopped if the spawn fails
+    /// ([`Server::abandon`]) so no agent runs that no pane shows.
+    pending: Mutex<HashMap<String, Option<String>>>,
+    /// Each thread's status as codex last said, so one that changed before its session was
+    /// registered is not lost ([`Server::claim`]).
+    statuses: Mutex<HashMap<String, String>>,
     gone: Mutex<bool>,
 }
 
@@ -141,6 +144,18 @@ pub fn server(core: &Arc<Mutex<crate::Core>>) -> Result<Arc<Server>, String> {
     Ok(server)
 }
 
+/// A codex spawn that failed after its thread was made ([`crate::spawn::codex_thread`]): its
+/// first turn stopped and its thread let go. Not under the core lock.
+pub fn abandon(core: &Arc<Mutex<crate::Core>>, spec: &bench_session::SpawnSpec) {
+    let (Some(_), Some(thread)) = (&spec.codex, spec.conversation.id()) else {
+        return;
+    };
+    let host = Arc::clone(&core.lock().unwrap().codex);
+    if let Some(server) = running(&host) {
+        server.abandon(thread);
+    }
+}
+
 /// Stop the running server, if one is: `bench stop`.
 pub fn stop(host: &Host) {
     if let Some(server) = host.0.lock().unwrap().take() {
@@ -187,9 +202,10 @@ impl Server {
         for name in crate::shell_env::agent_variables() {
             command.env_remove(name);
         }
-        for name in ["HELM_PANE", "CODEX_HOME"] {
+        for (name, _) in std::env::vars().filter(|(k, _)| k.starts_with("HELM_")) {
             command.env_remove(name);
         }
+        command.env_remove("CODEX_HOME");
         let mut wrapper = command
             .spawn()
             .map_err(|e| format!("cannot start codex app-server: {e}"))?;
@@ -213,7 +229,9 @@ impl Server {
             writer: Mutex::new(stream),
             waiting: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            subscribed: Mutex::new(HashMap::new()),
+            subscribed: Mutex::new(HashSet::new()),
+            pending: Mutex::new(HashMap::new()),
+            statuses: Mutex::new(HashMap::new()),
             gone: Mutex::new(false),
         });
         Ok((server, frames))
@@ -243,10 +261,7 @@ impl Server {
     /// A new thread for an agent: its id.
     pub fn start_thread(&self, params: Value) -> Result<String, String> {
         let id = thread_id(self.call("thread/start", params)?)?;
-        self.subscribed
-            .lock()
-            .unwrap()
-            .insert(id.clone(), Some(Instant::now()));
+        self.hold(&id);
         Ok(id)
     }
 
@@ -254,10 +269,7 @@ impl Server {
     pub fn fork_thread(&self, from: &str, mut params: Value) -> Result<String, String> {
         params["threadId"] = json!(from);
         let id = thread_id(self.call("thread/fork", params)?)?;
-        self.subscribed
-            .lock()
-            .unwrap()
-            .insert(id.clone(), Some(Instant::now()));
+        self.hold(&id);
         Ok(id)
     }
 
@@ -269,11 +281,14 @@ impl Server {
         params["threadId"] = json!(id);
         params["excludeTurns"] = json!(true);
         self.call("thread/resume", params)?;
-        self.subscribed
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), Some(Instant::now()));
+        self.hold(id);
         Ok(())
+    }
+
+    /// A thread this connection now watches for a session not registered yet.
+    fn hold(&self, id: &str) {
+        self.subscribed.lock().unwrap().insert(id.to_string());
+        self.pending.lock().unwrap().insert(id.to_string(), None);
     }
 
     /// The model and reasoning effort thread `id` last ran with, as its record says.
@@ -289,37 +304,63 @@ impl Server {
     /// Start a turn on thread `id` with `text` as the user's message. `Ok` once codex answered
     /// with the turn it started; the TUI renders it as if typed.
     pub fn start_turn(&self, id: &str, text: &str) -> Result<(), String> {
-        self.call(
+        self.turn(id, text).map(|_| ())
+    }
+
+    /// The first turn on a thread benchd made or re-entered for a session not registered yet.
+    pub fn first_turn(&self, id: &str, text: &str) -> Result<(), String> {
+        let turn = self.turn(id, text)?;
+        if let Some(first) = self.pending.lock().unwrap().get_mut(id) {
+            *first = Some(turn);
+        }
+        Ok(())
+    }
+
+    fn turn(&self, id: &str, text: &str) -> Result<String, String> {
+        let answer = self.call(
             "turn/start",
             json!({ "threadId": id, "input": [{ "type": "text", "text": text }] }),
-        )
-        .map(|_| ())
+        )?;
+        Ok(answer["turn"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    /// The session for thread `id` is registered: it is no longer pending, and this is what
+    /// codex last said its status was, if anything.
+    pub fn claim(&self, id: &str) -> Option<String> {
+        self.pending.lock().unwrap().remove(id);
+        self.statuses.lock().unwrap().get(id).cloned()
+    }
+
+    /// The spawn of thread `id` failed after the thread was made: stop the turn benchd started
+    /// on it and let it go, so nothing runs that no pane shows.
+    pub fn abandon(&self, id: &str) {
+        if let Some(Some(turn)) = self.pending.lock().unwrap().remove(id) {
+            let _ = self.call("turn/interrupt", json!({ "threadId": id, "turnId": turn }));
+        }
+        self.unsubscribe(id);
     }
 
     fn unsubscribe(&self, id: &str) {
-        if self.subscribed.lock().unwrap().remove(id).is_some() {
+        if self.subscribed.lock().unwrap().remove(id) {
             let _ = self.call("thread/unsubscribe", json!({ "threadId": id }));
         }
     }
 
     /// Let go of every thread no session in `owned` holds any more, so codex unloads it once it
     /// is idle (`thread_unload_delay_secs`, 60 s by default) rather than keeping its MCP servers
-    /// for the life of the server. A thread no session has owned yet is kept for [`CLAIM_GRACE`]:
-    /// its session may not be registered yet.
+    /// for the life of the server. A pending thread is kept: its session is on its way.
     pub fn release(&self, owned: &HashSet<String>) {
         let loose: Vec<String> = {
-            let mut subscribed = self.subscribed.lock().unwrap();
-            for (id, since) in subscribed.iter_mut() {
-                if owned.contains(id) {
-                    *since = None;
-                }
-            }
-            subscribed
+            let pending = self.pending.lock().unwrap();
+            self.subscribed
+                .lock()
+                .unwrap()
                 .iter()
-                .filter(|(id, since)| {
-                    !owned.contains(*id) && since.is_none_or(|t| t.elapsed() > CLAIM_GRACE)
-                })
-                .map(|(id, _)| id.clone())
+                .filter(|id| !owned.contains(*id) && !pending.contains_key(*id))
+                .cloned()
                 .collect()
         };
         for id in loose {
@@ -420,7 +461,22 @@ fn read_loop(
             message.get("method").and_then(Value::as_str),
             message.get("id"),
         ) {
-            (Some(method), None) => on_note(method, &message["params"]),
+            (Some(method), None) => {
+                let params = &message["params"];
+                if method == "thread/status/changed"
+                    && let (Some(thread), Some(status)) = (
+                        params["threadId"].as_str(),
+                        params["status"]["type"].as_str(),
+                    )
+                {
+                    server
+                        .statuses
+                        .lock()
+                        .unwrap()
+                        .insert(thread.to_string(), status.to_string());
+                }
+                on_note(method, params);
+            }
             // A request from the server (an approval): the TUI answers those.
             (Some(_), Some(_)) => {}
             (None, Some(id)) => {

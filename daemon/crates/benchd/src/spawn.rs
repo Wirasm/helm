@@ -85,6 +85,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
             // The bench changed under the spawn. Nothing shows the session, so it goes.
             drop(c);
             session.close(Duration::ZERO);
+            crate::codex::abandon(core, &session.spec);
             return Err((Status::Refused, refusal.to_string()));
         }
     };
@@ -165,7 +166,10 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
         &agent_env(&root, id, handle),
         notices,
     )
-    .map_err(|why| (Status::Error, why))
+    .map_err(|why| {
+        crate::codex::abandon(core, &spec);
+        (Status::Error, why)
+    })
 }
 
 /// What an agent's session `id` needs from this root to report to benchd and be woken by it:
@@ -276,7 +280,10 @@ pub fn codex_thread(
         Some(path) => bench_session::prompt_pointer(path),
         None => "benchd started this conversation. Wait for instructions.".to_string(),
     };
-    server.start_turn(&thread, &first)?;
+    if let Err(why) = server.first_turn(&thread, &first) {
+        server.abandon(&thread);
+        return Err(why);
+    }
     spec.codex = Some(CodexAttach {
         program: server.program.display().to_string(),
         socket: server.socket.display().to_string(),

@@ -147,7 +147,13 @@ pub fn serve_codex(c: &mut Core, session: &bench_session::Session) {
         session.pid,
         None,
     );
-    agent.set_activity(Activity::Busy);
+    // What codex said about the thread before its session was here, if anything: a first turn
+    // that failed at once (a usage limit) fires no `Stop`, only a status.
+    let earlier = crate::codex::running(&c.codex).and_then(|server| server.claim(thread));
+    agent.set_activity(match earlier.as_deref() {
+        Some("idle" | "systemError") => Activity::Idle,
+        _ => Activity::Busy,
+    });
     c.agents.insert(key, Some(agent));
 }
 
@@ -300,11 +306,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
 /// for it as for any other agent. A codex the operator started is owned by no session and is
 /// read as it came.
 fn own_codex_thread(c: &Core, args: &mut HookArgs) {
-    if let Some(session) = c
-        .sessions
-        .values()
-        .find(|s| s.runtime_session.as_deref() == Some(args.session.as_str()))
-    {
+    // The live one: a thread re-entered by a new session after its old one exited is held by
+    // both until the old pane goes.
+    let owners = || {
+        c.sessions
+            .values()
+            .filter(|s| s.runtime_session.as_deref() == Some(args.session.as_str()))
+    };
+    if let Some(session) = owners().find(|s| s.is_live()).or_else(|| owners().next()) {
         args.bench_session = Some(session.id.clone());
         args.pid = session.pid;
     }

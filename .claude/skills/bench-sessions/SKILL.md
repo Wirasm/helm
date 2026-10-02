@@ -32,7 +32,7 @@ for r in json.load(sys.stdin)["rows"]:
 - It needs benchd running (exit 2 when it is not). The `bench-mail` skill covers each row's
   `mail` field.
 - **`name` is the harness's own**: Claude's session name, codex's thread name, pi's `/name`.
-  A codex row's `id` is the thread it runs now: after `/new` it is the new thread.
+  A codex row's `id` is its thread, known from the moment benchd spawned it.
   `bench sessions` (without `--all`) and `bench mail who` give the same id as
   `runtime_session` and `session`.
 - **A running row whose agent waits on the operator** says `"activity": {"kind": "waiting",

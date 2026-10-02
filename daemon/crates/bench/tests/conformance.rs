@@ -4485,6 +4485,9 @@ struct FakeCodex {
     /// The answers to the next `turn/start`s: `true` starts a turn, `false` refuses. Empty
     /// starts one.
     turns: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<bool>>>,
+    /// A thread status to send before answering the next `turn/start`, as codex does when a
+    /// turn fails at once (a usage limit).
+    early: std::sync::Arc<std::sync::Mutex<Option<&'static str>>>,
     clients: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<std::sync::Mutex<UnixStream>>>>>,
 }
 
@@ -4495,11 +4498,13 @@ impl FakeCodex {
         let fake = FakeCodex {
             seen: Default::default(),
             turns: Default::default(),
+            early: Default::default(),
             clients: Default::default(),
         };
-        let (seen, turns, clients) = (
+        let (seen, turns, early, clients) = (
             std::sync::Arc::clone(&fake.seen),
             std::sync::Arc::clone(&fake.turns),
+            std::sync::Arc::clone(&fake.early),
             std::sync::Arc::clone(&fake.clients),
         );
         std::thread::spawn(move || {
@@ -4515,9 +4520,10 @@ impl FakeCodex {
                 let writer =
                     std::sync::Arc::new(std::sync::Mutex::new(stream.try_clone().unwrap()));
                 clients.lock().unwrap().push(std::sync::Arc::clone(&writer));
-                let (seen, turns, next) = (
+                let (seen, turns, early, next) = (
                     std::sync::Arc::clone(&seen),
                     std::sync::Arc::clone(&turns),
+                    std::sync::Arc::clone(&early),
                     std::sync::Arc::clone(&next),
                 );
                 std::thread::spawn(move || {
@@ -4533,6 +4539,15 @@ impl FakeCodex {
                             seen.lock()
                                 .unwrap()
                                 .push(serde_json::json!({"method": method, "params": params}));
+                        }
+                        if method == "turn/start"
+                            && let Some(status) = early.lock().unwrap().take()
+                        {
+                            server_frame(
+                                &mut writer.lock().unwrap(),
+                                &serde_json::json!({"method": "thread/status/changed",
+                                    "params": {"threadId": params["threadId"], "status": {"type": status}}}),
+                            );
                         }
                         let reply = match answer {
                             Ok(result) => serde_json::json!({"id": id, "result": result}),
@@ -4607,6 +4622,7 @@ fn codex_answer(
             }
         }
         "thread/unsubscribe" => Ok(serde_json::json!({"status": "unsubscribed"})),
+        "turn/interrupt" => Ok(serde_json::json!({})),
         other => Err(format!("the fake codex does not know {other}")),
     }
 }
@@ -4876,6 +4892,19 @@ fn a_codex_hook_names_only_its_thread_and_reaches_the_session_benchd_made_it_for
         ],
     );
     assert_eq!(again.code, 0, "not held by a dead pane: {}", again.stderr);
+    // Two sessions now hold the thread, the exited one and its resume: a hook is the live one's.
+    let resumed = json_of(&again)["session"].clone();
+    for _ in 0..5 {
+        codex_hook(&daemon, "UserPromptSubmit", thread, &cwd);
+        let row = json_of(&bench(h, &["sessions"]))["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session"] == resumed)
+            .unwrap()
+            .clone();
+        assert_eq!(row["report"]["activity"]["kind"], "busy", "{row}");
+    }
 }
 
 #[test]
@@ -5079,6 +5108,54 @@ fn a_codex_thread_no_session_holds_any_more_is_let_go() {
     let closed = bench(h, &["close", pane, "--force"]);
     assert_eq!(closed.code, 0, "{}", closed.stderr);
     assert_eq!(fake.asked("thread/unsubscribe", 1)[0]["threadId"], thread);
+}
+
+#[test]
+fn a_codex_spawn_whose_first_turn_is_refused_fails_and_lets_its_thread_go() {
+    // Nothing may run that no pane shows: a thread whose spawn failed is let go, its turn
+    // stopped if one started.
+    let home = TestHome::claim("cxabandon");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    fake.turns.lock().unwrap().push_back(false);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let run = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_ne!(run.code, 0, "the spawn reports its failure");
+    let thread = fake.asked("thread/start", 1);
+    assert_eq!(thread.len(), 1);
+    assert_eq!(fake.asked("thread/unsubscribe", 1).len(), 1);
+    let sessions = json_of(&bench(h, &["sessions"]));
+    assert_eq!(sessions["sessions"], serde_json::json!([]), "{sessions}");
+}
+
+#[test]
+fn a_codex_status_sent_before_its_session_is_registered_is_not_lost() {
+    // A first turn that fails at once fires no Stop; codex says so in a status that can arrive
+    // before benchd has registered the session. The agent starts idle, and its mail goes out.
+    let home = TestHome::claim("cxearly");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    *fake.early.lock().unwrap() = Some("systemError");
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
+    let turns = fake.asked("turn/start", 2);
+    assert_eq!(turns[1]["threadId"], spawned["runtime_session"]);
 }
 
 /// A benchd-spawned codex is listed by its thread, and once it ends by its rollout; `bench log`
