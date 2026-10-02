@@ -241,6 +241,12 @@ impl Server {
 
     /// Ask, and wait for the answer.
     fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.ask(method, params).map_err(String::from)
+    }
+
+    /// Ask, and wait for the answer, telling a request codex refused (or that never left) from
+    /// one it may be acting on without having answered.
+    fn ask(&self, method: &str, params: Value) -> Result<Value, Failure> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         self.waiting.lock().unwrap().insert(id, tx);
@@ -248,16 +254,18 @@ impl Server {
             &mut self.writer.lock().unwrap(),
             &json!({ "id": id, "method": method, "params": params }),
         );
-        let answer = sent.and_then(|()| {
-            rx.recv_timeout(ANSWER_WAIT).map_err(|_| {
-                format!(
+        let answer = match sent {
+            Err(why) => Err(Failure::Refused(format!("{method}: {why}"))),
+            Ok(()) => match rx.recv_timeout(ANSWER_WAIT) {
+                Ok(answer) => answer.map_err(|why| Failure::Refused(format!("{method}: {why}"))),
+                Err(_) => Err(Failure::Unanswered(format!(
                     "{method}: no answer from codex within {}s",
                     ANSWER_WAIT.as_secs()
-                )
-            })?
-        });
+                ))),
+            },
+        };
         self.waiting.lock().unwrap().remove(&id);
-        answer.map_err(|why| format!("{method}: {why}"))
+        answer
     }
 
     /// A new thread for an agent: its id.
@@ -306,7 +314,7 @@ impl Server {
     /// Start a turn on thread `id` with `text` as the user's message. `Ok` once codex answered
     /// with the turn it started; the TUI renders it as if typed.
     pub fn start_turn(&self, id: &str, text: &str) -> Result<(), String> {
-        self.turn(id, text).map(|_| ())
+        self.turn(id, text).map(|_| ()).map_err(String::from)
     }
 
     /// The first turn on a thread benchd made or re-entered for a session not registered yet.
@@ -315,24 +323,27 @@ impl Server {
         if let Some(first) = self.pending.lock().unwrap().get_mut(id) {
             *first = match &answer {
                 Ok(turn) => Some(turn.clone()),
-                // No answer in time: a turn may be running whose id benchd never got.
-                Err(why) if why.contains("no answer") => Some(String::new()),
-                // Refused: no turn started.
-                Err(_) => None,
+                // A turn may be running whose id benchd never got.
+                Err(Failure::Unanswered(_)) => Some(String::new()),
+                // No turn started.
+                Err(Failure::Refused(_)) => None,
             };
         }
-        answer.map(|_| ())
+        answer.map(|_| ()).map_err(String::from)
     }
 
-    fn turn(&self, id: &str, text: &str) -> Result<String, String> {
-        let answer = self.call(
+    /// Start a turn: its id. An answer without one is a turn benchd cannot name, so it counts
+    /// as one codex may be running unanswered.
+    fn turn(&self, id: &str, text: &str) -> Result<String, Failure> {
+        let answer = self.ask(
             "turn/start",
             json!({ "threadId": id, "input": [{ "type": "text", "text": text }] }),
         )?;
-        Ok(answer["turn"]["id"]
+        answer["turn"]["id"]
             .as_str()
-            .unwrap_or_default()
-            .to_string())
+            .filter(|turn| !turn.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| Failure::Unanswered("turn/start: codex named no turn".into()))
     }
 
     /// The session for thread `id` is registered: it is no longer pending, and this is what
@@ -403,6 +414,22 @@ impl Server {
         }
         let _ = wrapper.kill();
         let _ = wrapper.wait();
+    }
+}
+
+/// Why a request got no result.
+enum Failure {
+    /// codex answered with an error, or the request never reached it: nothing was started.
+    Refused(String),
+    /// No answer in time, or one that named nothing: codex may be acting on it.
+    Unanswered(String),
+}
+
+impl From<Failure> for String {
+    fn from(failure: Failure) -> String {
+        match failure {
+            Failure::Refused(why) | Failure::Unanswered(why) => why,
+        }
     }
 }
 
