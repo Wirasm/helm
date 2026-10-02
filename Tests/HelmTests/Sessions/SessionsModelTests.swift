@@ -5,7 +5,8 @@ import XCTest
 @testable import Helm
 
 /// The sessions drawer's list (#384): it shows what benchd answers, and each row's action is
-/// carried out as benchd decided it — a verb as the operator, or a line in a new terminal.
+/// carried out as benchd decided it — a verb as the operator, a resume through benchd, or a line in
+/// a new terminal.
 @MainActor
 final class SessionsModelTests: XCTestCase {
     /// What the model asked of the bench, in order.
@@ -30,6 +31,7 @@ final class SessionsModelTests: XCTestCase {
 
     private func model(
         _ bench: Bench,
+        resumed: Recorder = Recorder(),
         list: @escaping @Sendable (String) throws -> BenchSessionList = { _ in
             fixtureRows
         }
@@ -38,6 +40,10 @@ final class SessionsModelTests: XCTestCase {
             actions: SessionsActions(
                 list: list,
                 dismiss: { _, _ in },
+                resume: { harness, id, cwd in
+                    resumed.append("\(harness) \(id) in \(cwd)")
+                    if id == "refused" { throw SessionsActions.Refused("pi re-enters …") }
+                },
                 workspace: { bench.workspace },
                 send: { bench.verbs.append($0) },
                 hideDrawer: { bench.hidden += 1 },
@@ -66,7 +72,8 @@ final class SessionsModelTests: XCTestCase {
 
     func testEachOpenActionIsCarriedOutAsBenchdDecided() async {
         let bench = Bench()
-        let model = model(bench)
+        let resumed = Recorder()
+        let model = model(bench, resumed: resumed)
         let pane = UUID()
 
         await model.open(row(.focusPane(pane)))
@@ -82,13 +89,21 @@ final class SessionsModelTests: XCTestCase {
                 .paneShow(pane), .paneOpen(surface: .canvas(path: "/t/agent-1.jsonl")),
                 .paneOpen(surface: .terminal(agent: nil, session: "s2")),
             ])
-        XCTAssertEqual(
-            bench.lines,
-            [
-                "'claude' 'attach' 'j 1'",
-                "cd '/w/it'\\''s' && 'claude' '--resume' 'abc'",
-            ])
+        XCTAssertEqual(bench.lines, ["'claude' 'attach' 'j 1'"])
+        // A finished row is resumed by benchd (`spawn --resume`), never by typing its argv into
+        // a shell, so the agent gets benchd's notice and a removed worktree comes back (#621).
+        XCTAssertEqual(resumed.values, ["claude s1 in /w/it's"])
+        XCTAssertNil(model.problem)
         XCTAssertEqual(bench.hidden, 5, "the drawer gets out of the way of whatever it opened")
+    }
+
+    func testAResumeBenchdRefusesIsSaid() async {
+        let model = model(Bench())
+        let refused = BenchSessionRow(
+            harness: "pi", id: "refused", cwd: "/w/gone", state: .finished(atMs: 0),
+            open: .resume(argv: ["pi"], cwd: "/w/gone"), updatedAtMs: 0)
+        await model.open(refused)
+        XCTAssertEqual(model.problem, "Could not resume refused: pi re-enters …")
     }
 
     /// Only a finished session can be dismissed; a running one is still work.
@@ -99,6 +114,7 @@ final class SessionsModelTests: XCTestCase {
             actions: SessionsActions(
                 list: { _ in BenchSessionList(rows: []) },
                 dismiss: { harness, id in dismissed.append("\(harness)/\(id)") },
+                resume: { _, _, _ in },
                 workspace: { bench.workspace }, send: { _ in }, hideDrawer: {},
                 runInNewTerminal: { _ in nil }))
 

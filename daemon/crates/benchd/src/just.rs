@@ -34,9 +34,10 @@ pub enum NotStarted {
 /// and Homebrew's prefixes are where `just` lives on the operator's machines.
 const FALLBACK_BINS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
-/// The leash. `"$@"` is the `just` command. fd 0 is benchd's pipe: it moves to fd 3 for the
-/// watcher, and the run gets /dev/null. EOF on the pipe — benchd gone — TERMs the run.
-const WRAPPER: &str = r#"exec 3<&0 </dev/null
+/// The leash. `"$@"` is the command: a `just` run, or the codex app-server (`codex.rs`). fd 0 is
+/// benchd's pipe: it moves to fd 3 for the watcher, and the command gets /dev/null. EOF on the
+/// pipe — benchd gone, however it went — TERMs the command.
+pub(crate) const LEASH: &str = r#"exec 3<&0 </dev/null
 "$@" &
 c=$!
 ( read -r _ <&3; kill -TERM "$c" 2>/dev/null ) &
@@ -82,7 +83,7 @@ pub fn run(core: &Arc<Mutex<Core>>, req: &Request) -> Result<JustStarted, NotSta
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
-        .arg(WRAPPER)
+        .arg(LEASH)
         .arg("sh")
         .arg(&just)
         .arg("--justfile")

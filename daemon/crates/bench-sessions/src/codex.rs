@@ -79,6 +79,20 @@ pub const MODEL: Field = Field {
     },
 };
 
+/// The branch a thread started on: `session_meta`'s `git.branch` (0.160.0).
+pub const BRANCH: Field = Field {
+    needle: b"\"session_meta\"",
+    pick: |record| {
+        (record["type"] == "session_meta")
+            .then(|| {
+                record["payload"]["git"]["branch"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .flatten()
+    },
+};
+
 /// Thread names by thread id, the last rename winning. A line that does not parse is left out:
 /// a name is a label on a row, never a row.
 pub fn names(home: &Path) -> HashMap<String, String> {

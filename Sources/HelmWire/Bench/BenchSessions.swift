@@ -90,7 +90,9 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         case focusPane(UUID)
         case benchAttach(session: String)
         case claudeAttach(job: String)
-        /// Start `argv` in a new pane at `cwd`.
+        /// A finished conversation, resumed at `cwd`. helm resumes it through benchd's
+        /// `spawn --resume`, which sends the resume notice and brings back a removed worktree
+        /// (#621); `argv` is the harness's own command, for a reader of `bench sessions --all`.
         case resume(argv: [String], cwd: String)
         /// Read-only: the subagent's transcript.
         case transcript(path: String, parent: String)

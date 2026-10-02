@@ -33,18 +33,17 @@ or a mail), not replaced.
 | models (2026-10-01) | `opus` → claude-opus-5-5, `sonnet` → claude-sonnet-5-5, `haiku` → claude-haiku-4-5, `fable` → claude-fable-5-1 | `gpt-6-astra` (frontier), `gpt-6-sol` (workhorse), `gpt-6-luna` (fast); not `gpt-6.1-sol` on this account | `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `minimax/MiniMax-M3`, `pi --list-models` for the rest |
 | default with no `--model` | the operator's Claude Code setting | `~/.codex/config.toml` (`gpt-6-astra`, medium) | `~/.pi/agent/settings.json` (`openai-codex/gpt-5.6-sol`) |
 | `--effort` | `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh`, plus `max` and `ultra` on some models; sent as `-c model_reasoning_effort=` | `off` `minimal` `low` `medium` `high` `xhigh` `max`; appended to the model as `:<level>` |
-| `--resume <id>` | yes | yes, by its thread id, which its hook records | yes |
-| `--fork <id>` | yes, read-only (plan mode), its own new id | yes, read-only (read-only sandbox on its app-server), its own thread, which its hook records | yes, read-only (`--tools read,grep,find,ls`), its own new id |
+| `--resume <id>` | yes | yes, by its thread id | yes |
+| `--fork <id>` | yes, read-only (plan mode), its own new id | yes, read-only (read-only sandbox), its own new thread | yes, read-only (`--tools read,grep,find,ls`), its own new id |
 | posture | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approve` |
-| mail wake when idle | yes (inbox socket) | yes when benchd spawned it (its app-server) | yes (`bench` extension) |
+| mail wake when idle | yes (inbox socket) | yes when benchd spawned it (benchd's codex app-server) | yes (`bench` extension) |
 | activity in `bench sessions` | busy, shell, idle, waiting with its own words | busy, idle, waiting, from its hooks | busy, idle, waiting, from its hooks |
 | `bench log` | yes | yes | yes |
 
-`runtime_session` in the spawn answer is the id `--resume` and `--fork` take. It is null for a new
-codex, which names its thread after the fact: its hook records the id, and from then on `bench
-sessions` and `bench mail who` name the session by it, and after `/new` by the new thread. The
-thread a benchd codex left with `/new` cannot be resumed until that session ends: its app-server
-keeps it open, so `--resume` refuses it as already live.
+`runtime_session` in the spawn answer is the id `--resume` and `--fork` take, for codex too:
+benchd makes every codex thread on its own codex app-server before the pane starts (#466).
+codex is spawned only into a folder the operator trusts. Do not use `/new` in a benchd codex: the
+new conversation runs in the wrong folder and benchd does not own it; spawn a new agent instead.
 
 Effort is a judgment, not a table: `high` for delivery, `xhigh` or `max` for a hard design or a
 diagnosis that has already failed once, `medium` or `low` for mechanical work.

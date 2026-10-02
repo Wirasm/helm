@@ -204,9 +204,7 @@ pub fn open_action(
                 prompt_file: None,
                 settings: None,
                 extra_args: Vec::new(),
-                codex_server: None,
-                codex_hook_trust: None,
-                codex_trust_folder: false,
+                codex: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),
@@ -218,6 +216,18 @@ pub fn open_action(
             if running { "running" } else { "finished" }
         )),
     }
+}
+
+/// The branch conversation `id` is on as its harness last recorded it (#621): Claude's latest
+/// `gitBranch`, the branch a codex thread started on. What a resume recreates a removed worktree
+/// on. pi writes no branch.
+pub fn last_branch(home: &Path, harness: Harness, id: &str, cwd: &str) -> Option<String> {
+    let (path, field) = match harness {
+        Harness::Claude => (claude::transcript(home, cwd, id), &claude::BRANCH),
+        Harness::Codex => (codex::rollout(home, id)?, &codex::BRANCH),
+        Harness::Pi => return None,
+    };
+    latest::read(&path, field, &mut latest::Scan::default()).0
 }
 
 /// Assembles rows; every row goes through [`open_action`].
@@ -660,9 +670,8 @@ pub fn spawned_agent<'a>(
 }
 
 /// The conversation a benchd session runs now: the one its agent reported last, else the id
-/// the bench started it with. A codex names its thread after the spawn, and `/new` starts
-/// another in the same process, so the hook is the better witness. `None` for a codex no hook
-/// has reported yet.
+/// the bench started it with. A harness can start another conversation in the same process
+/// (claude's `/clear` fires `SessionStart` with a new id), so the hook is the better witness.
 pub fn conversation(
     hooked: &[HookedAgent],
     harness: Harness,
@@ -686,9 +695,7 @@ fn harness_file(
     Ok(match harness {
         Harness::Claude => Some(claude::transcript(home, cwd, id)).filter(|p| p.is_file()),
         Harness::Pi => pi::session(home, cwd, id)?,
-        // codex names its thread after the spawn: the id reaches the record with the first
-        // hook's claim (`mail/claimed`), and until then is the bench session's, which no rollout
-        // carries. Only its day directory: a gone rollout must not walk the tree on every build.
+        // Only its day directory: a gone rollout must not walk the tree on every build.
         Harness::Codex => codex::dated_rollout(home, id),
     })
 }

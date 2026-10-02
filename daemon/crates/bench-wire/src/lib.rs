@@ -880,14 +880,6 @@ pub fn browser_profile_dir(root: &Path) -> PathBuf {
     browser_dir(root).join("profile")
 }
 
-/// The app-server a benchd-spawned codex session runs its TUI against (#358): one per session,
-/// so the hooks it runs carry that session's own `BENCH_SESSION`, and benchd can start a turn
-/// on the session's thread when it is idle. codex puts the real socket in a short directory of
-/// its own and leaves a symlink here.
-pub fn codex_server_socket(root: &Path, session: &str) -> PathBuf {
-    root.join("codex").join(format!("{session}.sock"))
-}
-
 // ---------------------------------------------------------------------------
 // The envelope
 // ---------------------------------------------------------------------------
@@ -1279,9 +1271,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&reply).unwrap(), value["who_reply"]);
     }
 
-    /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535):
-    /// `SpawnArgs` reads it whole, and helm's `BenchWireConformanceTests` encodes the same request
-    /// and decodes the reply.
+    /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535) and the
+    /// resume the sessions drawer asks for (#621): `SpawnArgs` reads each whole, and helm's
+    /// `BenchWireConformanceTests` encodes the same requests and decodes the reply.
     #[test]
     fn the_spawn_fixture_is_what_the_daemon_reads() {
         let path =
@@ -1294,6 +1286,12 @@ mod tests {
         let args: SpawnArgs = serde_json::from_value(fork.args.clone()).unwrap();
         assert_eq!(serde_json::to_value(&args).unwrap(), fork.args);
         assert!(args.fork.is_some() && args.prompt.is_some());
+        // The sessions drawer's resume of a finished row (#621), as the operator.
+        let resume: Request = serde_json::from_value(value["resume"].clone()).unwrap();
+        assert_eq!(resume.by, Some(Actor::Operator));
+        let args: SpawnArgs = serde_json::from_value(resume.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), resume.args);
+        assert!(args.resume.is_some() && args.prompt.is_none());
     }
 
     /// `fixtures/session-list.json` holds a `sessions` answer as helm reads it (M5b).

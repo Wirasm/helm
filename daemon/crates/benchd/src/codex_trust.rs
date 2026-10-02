@@ -1,21 +1,33 @@
 //! Whether the operator trusts the folder a codex is spawned in, by codex's own rule for a
 //! plain `codex`: the folder's own `[projects."<path>"]` entry, else the entry of the git main
-//! repository it belongs to, a linked worktree followed back to its main checkout. A served
-//! codex (`--remote … -C <cwd>`, how benchd runs every codex) checks the exact folder only
-//! (codex `tui/src/config_update.rs`, rust-v0.159.3), so a worktree of a repo the operator
-//! trusts would ask. benchd answers the second lookup and hands codex the result
-//! ([`bench_session::codex_folder_trust`]); it never trusts what plain codex would not.
+//! repository it belongs to, a linked worktree followed back to its main checkout.
+//!
+//! benchd runs every codex as a thread on its own app-server (#466) and attaches the TUI without
+//! `-C`, so codex itself never asks "Trust this folder?" for a bench agent. Trust stays the
+//! operator's call: benchd refuses a codex in a folder plain codex would have asked about
+//! ([`may_run`]), and the operator answers by running `codex` there once.
 //!
 //! Read-only: the operator's `config.toml` is never written.
 
 use std::path::{Path, PathBuf};
 
-/// Whether the app-server should be told to trust `cwd`: it has no entry of its own in
-/// `<home>/.codex/config.toml`, and its git main repository is `trusted` there. A folder with
-/// its own entry gets nothing, since a served codex finds that exact key itself and an
-/// `untrusted` there must win. `home`, not `CODEX_HOME`: every session benchd starts runs
-/// without `CODEX_HOME` (`bench_session::pty`), so its codex reads the config under `HOME`.
-/// A missing or unparsable config trusts nothing.
+/// A codex may run in `cwd`: the operator trusts it as plain codex would see it, from the codex
+/// config under `HOME` (every session benchd starts runs without `CODEX_HOME`,
+/// `bench_session::pty`). The refusal names the folder and the one way to trust it.
+pub fn may_run(cwd: &str) -> Result<(), String> {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    if operator_trusts(Path::new(cwd), Path::new(&home)) {
+        return Ok(());
+    }
+    Err(format!(
+        "codex runs only in a folder you trust, and {cwd} is not one (no trusted entry for it or \
+         its git repository in ~/.codex/config.toml) — run `cd {cwd} && codex` once and choose \
+         to trust it"
+    ))
+}
+
+/// Whether plain codex would run in `cwd` without asking: its own entry is `trusted`, or it has
+/// none and its git main repository's is. A missing or unparsable config trusts nothing.
 pub fn operator_trusts(cwd: &Path, home: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(home.join(".codex/config.toml")) else {
         return false;
@@ -23,8 +35,12 @@ pub fn operator_trusts(cwd: &Path, home: &Path) -> bool {
     let Ok(config) = text.parse::<toml::Table>() else {
         return false;
     };
-    trust_level(&config, cwd).is_none()
-        && git_main_root(cwd).is_some_and(|root| trust_level(&config, &root) == Some("trusted"))
+    match trust_level(&config, cwd) {
+        Some(level) => level == "trusted",
+        None => {
+            git_main_root(cwd).is_some_and(|root| trust_level(&config, &root) == Some("trusted"))
+        }
+    }
 }
 
 /// `projects."<path>".trust_level`, by exact key, as codex looks it up.
@@ -157,6 +173,11 @@ mod tests {
         for cwd in [repo.join(".worktrees/wt"), repo.join("sub/deep")] {
             assert!(operator_trusts(&cwd, &home), "{}", cwd.display());
         }
+        // A folder trusted by its own entry, in no repository at all.
+        let own = dir.join("own");
+        std::fs::create_dir_all(&own).unwrap();
+        config(&home, &trusted(&own));
+        assert!(operator_trusts(&own, &home));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
