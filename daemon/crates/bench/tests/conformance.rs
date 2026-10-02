@@ -12508,3 +12508,46 @@ fn a_resume_by_another_agent_readdresses_its_done() {
         "the readdress is logged"
     );
 }
+
+/// A Claude's `sessions` report is its registry row when it has one, which can lag a hook (a turn
+/// it has not caught up with yet) and can change with no hook at all (Esc). The watch judges
+/// working and idle from that report alone.
+#[test]
+fn watch_reads_claude_s_registry_row_for_a_turn_no_hook_ends() {
+    let home = TestHome::claim("m1-watch-reg");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "clauded");
+    let conv = "7c5d8e9f-0a1b-4c2d-3e4f-6a7b8c9d0e1f";
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = |status: &str, at: u64| {
+        let path = h.join(format!(".claude/sessions/{pid}.json"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::json!({"pid": pid, "sessionId": conv, "cwd": "/tmp", "startedAt": started,
+                "status": status, "statusUpdatedAt": at})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    claude_turn(&daemon.socket, &sid, pid, conv, "SessionStart");
+    row("idle", started + 10);
+    // The hook says a turn began; the row has not caught up: not an answer.
+    let lagging = watch(h, &["clauded", "--timeout", "3"]);
+    std::thread::sleep(Duration::from_millis(800));
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let (code, out) = watched(lagging);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    // Esc: the row goes idle and no hook says so.
+    row("busy", started + 20);
+    let esc = watch(h, &["clauded", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(1500));
+    row("idle", started + 30);
+    let (code, out) = watched(esc);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
+}

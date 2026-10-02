@@ -12,8 +12,9 @@
 use crate::{Cli, exchange, fail, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
-    Activity, DocumentAt, EXIT_NO_DAEMON, HelmAsk, HelmAskArgs, LayoutVerb, LiveSessions, MoveTo,
-    OpenInto, PaneOpen, Response, ScreenGetArgs, ScreenSendArgs, SessionEntry, SpawnArgs, Status,
+    Activity, AgentReport, DocumentAt, EXIT_NO_DAEMON, HelmAsk, HelmAskArgs, LayoutVerb,
+    LiveSessions, MoveTo, OpenInto, PaneOpen, Response, ScreenGetArgs, ScreenSendArgs,
+    SessionEntry, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -494,9 +495,7 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
         root,
         asked: false,
     };
-    // Whether this watch has seen the agent at work: only then is idle without a done a turn that
-    // ended without finishing, rather than a session that has not started one.
-    let mut worked = false;
+    let mut turn = Turn::default();
     // A closed session leaves the list: one this watch saw and cannot find again has ended.
     let mut last: Option<SessionEntry> = None;
     loop {
@@ -506,8 +505,8 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
         };
         let (entry, outcome) = match (session_of(&live.sessions, handle), last.take()) {
             (Some(entry), _) => {
-                worked |= entry.report.as_ref().is_some_and(|r| working(&r.activity));
-                (entry.clone(), watched(entry, after, worked))
+                let quiet = turn.saw(entry.report.as_ref());
+                (entry.clone(), watched(entry, after, quiet))
             }
             (None, Some(gone)) => (gone, Some(Watched::Ended)),
             (None, None) => {
@@ -519,12 +518,14 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
         let outcome = match outcome {
             Some(outcome) => outcome,
             None => match feed.next_about(&entry, deadline) {
-                Ok(Some(busy)) => {
-                    worked |= busy;
+                Ok(Wake::Deadline) => Watched::Timeout,
+                Ok(wake) => {
+                    if wake == (Wake::Event { busy: true }) {
+                        turn.announced();
+                    }
                     last = Some(entry);
                     continue;
                 }
-                Ok(None) => Watched::Timeout,
                 Err(code) => return code,
             },
         };
@@ -555,6 +556,54 @@ fn working(activity: &Activity) -> bool {
     !matches!(activity, Activity::Idle | Activity::Unknown)
 }
 
+/// What `watch <handle>` knows of the agent's turn, judged from its `sessions` report alone: the
+/// report is Claude's registry row when it has one, which can say a thing no hook does (Esc) and
+/// can lag one (a turn the hook already announced). An event only says when to look again.
+#[derive(Default)]
+struct Turn {
+    /// A report showed the agent at work during this watch.
+    worked: bool,
+    /// An event announced work; the report's time then. A report newer than it has caught up
+    /// with that turn, even one that started and failed between two looks.
+    announced_after: Option<u64>,
+    /// The time of the last report seen.
+    last_since: u64,
+}
+
+impl Turn {
+    /// Take in a report; whether the agent is now idle after work it was seen or announced to do.
+    /// Idle with nothing before it is a session that has not started a turn.
+    fn saw(&mut self, report: Option<&AgentReport>) -> bool {
+        let Some(r) = report else {
+            return false;
+        };
+        let since = r.since_ms.unwrap_or(0);
+        self.worked |= working(&r.activity);
+        let caught_up = self.announced_after.is_some_and(|at| since > at);
+        self.last_since = since;
+        r.activity == Activity::Idle && (self.worked || caught_up)
+    }
+
+    fn announced(&mut self) {
+        self.announced_after.get_or_insert(self.last_since);
+    }
+}
+
+/// Why a watch looks again.
+#[derive(Debug, PartialEq, Eq)]
+enum Wake {
+    /// An event about the agent, and whether it said it was at work.
+    Event {
+        busy: bool,
+    },
+    /// A second passed: the report may have changed with no event (Claude's registry row).
+    Tick,
+    Deadline,
+}
+
+/// How often a watch reads `sessions` with no event to prompt it.
+const WATCH_TICK: Duration = Duration::from_secs(1);
+
 /// benchd's events as they happen (`events --follow`), for `watch <handle>`.
 struct Feed {
     lines: BufReader<UnixStream>,
@@ -584,21 +633,26 @@ impl Feed {
     }
 
     /// Block until an event about the agent in `entry`'s session (its handle or its session id),
-    /// and say whether it was at work; `None` at the deadline.
-    fn next_about(&mut self, entry: &SessionEntry, deadline: Instant) -> Result<Option<bool>, i32> {
+    /// a tick, or the deadline.
+    fn next_about(&mut self, entry: &SessionEntry, deadline: Instant) -> Result<Wake, i32> {
         let mut line = String::new();
+        let tick = Instant::now() + WATCH_TICK;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Ok(None);
+                return Ok(Wake::Deadline);
             }
-            let _ = self.lines.get_ref().set_read_timeout(Some(left));
+            let wait = left.min(tick.saturating_duration_since(Instant::now()));
+            if wait.is_zero() {
+                return Ok(Wake::Tick);
+            }
+            let _ = self.lines.get_ref().set_read_timeout(Some(wait));
             line.clear();
             match self.lines.read_line(&mut line) {
                 Ok(0) => return Err(fail("benchd ended the event stream")),
                 Ok(_) => {}
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                    return Ok(None);
+                    continue;
                 }
                 Err(e) => return Err(fail(&format!("the event stream broke: {e}"))),
             }
@@ -608,7 +662,7 @@ impl Feed {
             {
                 let busy = serde_json::from_value::<Activity>(data["activity"].clone())
                     .is_ok_and(|a| working(&a));
-                return Ok(Some(busy));
+                return Ok(Wake::Event { busy });
             }
         }
     }
@@ -646,11 +700,9 @@ impl Watched {
     }
 }
 
-/// What `watch <handle>` stops for, when anything: a done after `after`, else an agent idle
-/// without one after the watch saw it `worked`. A session that has only started (`SessionStart`)
-/// is idle with no turn, and is not an answer; a turn that starts and fails between two asks is
-/// missed, and the timeout answers for it.
-fn watched(s: &SessionEntry, after: Option<u64>, worked: bool) -> Option<Watched> {
+/// What `watch <handle>` stops for, when anything: a done after `after`, else an agent that went
+/// `quiet` without one ([`Turn::saw`]).
+fn watched(s: &SessionEntry, after: Option<u64>, quiet: bool) -> Option<Watched> {
     if !s.live {
         return Some(Watched::Ended);
     }
@@ -663,11 +715,7 @@ fn watched(s: &SessionEntry, after: Option<u64>, worked: bool) -> Option<Watched
     {
         return Some(Watched::Done);
     }
-    let idle = s
-        .report
-        .as_ref()
-        .is_some_and(|r| r.activity == Activity::Idle);
-    (worked && idle).then_some(Watched::Idle)
+    quiet.then_some(Watched::Idle)
 }
 
 /// `get screenshot`: helm draws its window and sends the PNG back; benchd writes it at `--out`
