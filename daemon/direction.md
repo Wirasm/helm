@@ -176,11 +176,12 @@ restarted benchd shows nothing until the next turn reports. helm greys a figure 
 minutes and drops a window whose reset time has passed.
 
 **And the wire front (M3, #355): `bench` is the agent's whole surface.** The CLI speaks the
-pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — as
-the socket's own layout verbs, carrying who asked (`HELM_PANE`, `BENCH_HANDLE`) and `asked` only
-from `--asked`. benchd adds the rules the spool kept at the verb boundary: an agent's close of a
-terminal where something runs needs `force` (the refusal names the live session, or the job a
-shell is running), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
+pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — and
+`workspace close <path>` as the socket's own layout verbs, carrying who asked (`HELM_PANE`,
+`BENCH_HANDLE`) and `asked` only from `--asked`. benchd adds the rules the spool kept at the verb
+boundary: an agent's close of a terminal where something runs needs `force` (the refusal names the
+live session, or the job a shell is running), and so does its close of a workspace holding such a
+pane (#608), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
 now puts the agent in a pane: the document's terminal surface names the session
 (`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
