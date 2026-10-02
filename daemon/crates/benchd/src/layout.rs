@@ -13,7 +13,7 @@
 //! are applied one at a time, in the order they arrive. A verb naming a pane or slot that is
 //! gone by the time it runs is refused with the reason — ids never go stale silently.
 
-use crate::{Core, shells};
+use crate::{Core, attention, shells};
 use bench_doc::{
     Caller, CanvasSource, Destination, Document, Focus, Pane, PaneId, Place, Placement, Rules,
     Surface, Target,
@@ -154,6 +154,14 @@ pub fn commit(core: &mut Core, mut change: Change) -> Committed {
     match &committed {
         Committed::Changed(report) | Committed::Unsaved(report, _) => {
             shells::end_lost(core, &shown_before, &shown_after, report.seq);
+            // The operator looked at the pane focus arrived at (M1, #357). A record that cannot
+            // be written is logged; the change itself stands.
+            if let Some(pane) = report.focused_pane_after
+                && report.focused_pane_before != Some(pane)
+                && let Err(why) = attention::looked(core, pane, report.seq)
+            {
+                let _ = core.append("sessions/unsaved", json!({ "pane": pane, "why": why }));
+            }
         }
         Committed::Unchanged(_) | Committed::Failed(_) => shells::abandon(core, started),
     }

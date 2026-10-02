@@ -342,6 +342,27 @@ own words. The one answer per session is
 to them (helm's ⌘⇧J): the pane waiting longest, then the one after the focused pane on each
 press, round again; it moves his focus, so an agent needs `asked`.
 
+**And what else needs someone: a finished turn, and mail to the operator (M1, #357).** Each session
+in `sessions` and each running row in `sessions/all` also carries `done` when its agent's turn
+ended (a typed signal: Claude's and codex's `Stop`, pi's `agent_settled`; never the last message
+read as prose) and it has not started another, and `operator_mail` when its mailbox sent the
+operator mail he has not read. `done.to` is whose it is: the agent that spawned it (benchd resolves
+the spawner from who asked: `BENCH_HANDLE`, else the mailbox in the asking pane; a `--resume` by
+another agent makes it that agent's), or `operator`; each `sessions/all` row also names its
+`spawner`, tagged `operator` or `agent`, `null` when unrecorded. Waiting is always his. `done.seen`
+turns true when focus arrives at its pane, when the turn ends in the focused pane, or on
+`sessions/seen` (his, or an agent's he asked); nothing else clears it, and nothing closes: a mark
+never closes a pane, ends a session or removes a worktree. The only state is three fields on the
+conversation's hosted-sessions entry (`spawner`, `turn_ended_ms`, `seen_ms`), so an unseen finish
+survives a restart; the rest is projected at answer time. `bench watch <handle>` is the agents'
+wait: it follows benchd's events client-side (`events --follow`) and reads `sessions` when one is
+about that agent and once a second besides (Claude's registry row can change with no hook, as on
+Esc), judging work and idle from that report alone, until the agent waits, finishes a turn (after
+`--after`), goes idle without finishing one after the watch saw it working (a failed or interrupted
+turn, which ends with no `Stop`), or its session ends, with no model turn spent; an idle report
+counts only when it is newer than the work it follows, so a report with no time waits for the
+timeout.
+
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
 gate that runs the real binaries. M5a is the pty core: `spawn` puts a real interactive

@@ -18,7 +18,8 @@ use crate::{Core, now_rfc3339};
 use bench_doc::{Focus, PaneId, ResumableAgent, Surface};
 use bench_wire::hook::{self, Transition};
 use bench_wire::{
-    Activity, Actor, Harness, HookArgs, HookReply, HostedSession, HostedVia, SessionKey,
+    Activity, Actor, AttentionRecord, Harness, HookArgs, HookReply, HostedSession, HostedVia,
+    SessionKey,
 };
 use serde_json::{Value, json};
 use std::io::Write;
@@ -95,7 +96,7 @@ impl Agent {
     }
 
     /// Take in one event. Returns the activity when it changed.
-    fn observe(&mut self, args: &HookArgs, transition: Option<Transition>) -> Option<Activity> {
+    fn observe(&mut self, args: &HookArgs, transition: Option<&Transition>) -> Option<Activity> {
         self.seen = Instant::now();
         self.pid = args.pid;
         if let Some(socket) = &args.messaging_socket {
@@ -111,9 +112,7 @@ impl Agent {
             "SessionStart" => self.push = Push::Ready,
             _ => {}
         }
-        let Some(Transition::To(now)) = transition else {
-            return None;
-        };
+        let now = transition?.activity()?;
         (self.activity.as_ref() != Some(&now)).then(|| {
             self.set_activity(now.clone());
             now
@@ -253,7 +252,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
             return Ok(json!(HookReply::default()));
         };
-        let changed = agent.observe(&args, transition);
+        let changed = agent.observe(&args, transition.as_ref());
         let handle = agent.handle.clone();
         let idle = agent.activity == Some(Activity::Idle);
         // The rule is owed once per session, decided here under the lock so two hooks firing
@@ -269,6 +268,8 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             )
             .map_err(Refusal::Failed)?;
         }
+        let pane = agent_pane(&c, &args, &key);
+        crate::attention::turn(&mut c, &key, transition.as_ref(), pane).map_err(Refusal::Failed)?;
         (handle, rule, idle, c.root.clone())
     };
     // pi's extension asks for its mail when it sees its inbox change while it is idle, and
@@ -528,6 +529,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
     {
         let (session, handle) = (spawned.id.clone(), spawned.handle.clone());
         let forked_from = spawned.spec.conversation.forked_from().map(str::to_string);
+        let spawner = c.spawners.get(&session).cloned();
         // A conversation the spawn did not record: the hook's id is the first the daemon hears of
         // it. A fork's record says so, which is what brings it back read-only (#531).
         sessions::record_claim(
@@ -542,6 +544,10 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
                 },
                 recorded_at: now_rfc3339(),
                 forked_from,
+                attention: AttentionRecord {
+                    spawner,
+                    ..AttentionRecord::default()
+                },
             },
             args.pid,
         )?;
@@ -589,6 +595,8 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         // `claims_a_mailbox` needs a declaration, so this is never reached.
         (None, None) => return Ok(None),
     };
+    // A pane's own agent is one the operator started there.
+    let spawner = matches!(via, HostedVia::Pane { .. }).then_some(bench_wire::Spawner::Operator);
     sessions::record_claim(
         c,
         HostedSession {
@@ -598,6 +606,10 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
             via,
             recorded_at: now_rfc3339(),
             forked_from: None,
+            attention: AttentionRecord {
+                spawner,
+                ..AttentionRecord::default()
+            },
         },
         args.pid,
     )?;

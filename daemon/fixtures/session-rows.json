@@ -35,6 +35,12 @@
         "harness": "pi",
         "id": "4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d",
         "recorded_at": "2026-09-25T12:00:00Z",
+        "seen_ms": 1790540700000,
+        "spawner": {
+          "handle": "orchestrator",
+          "kind": "agent"
+        },
+        "turn_ended_ms": 1790540812000,
         "via": {
           "handle": "drawer-pi",
           "kind": "bench",
@@ -59,6 +65,7 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": null,
         "harness": "claude",
         "host": {
           "kind": "pane",
@@ -72,7 +79,9 @@
           "kind": "focus_pane",
           "pane": "5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "shell"
@@ -84,6 +93,7 @@
       {
         "branch": null,
         "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+        "done": null,
         "harness": "claude",
         "host": {
           "kind": "pane",
@@ -96,7 +106,9 @@
           "kind": "focus_pane",
           "pane": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "waiting",
@@ -109,6 +121,11 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": {
+          "seen": false,
+          "since_ms": 1790540812000,
+          "to": "orchestrator"
+        },
         "harness": "claude",
         "host": {
           "kind": "bench",
@@ -125,7 +142,16 @@
           "kind": "bench_attach",
           "session": "s3"
         },
+        "operator_mail": {
+          "since_ms": 1790540790000,
+          "subject": "reviewer: blocked",
+          "unread": 2
+        },
         "root": "/Users/op/Projects/helm",
+        "spawner": {
+          "handle": "orchestrator",
+          "kind": "agent"
+        },
         "state": {
           "activity": {
             "kind": "idle"
@@ -137,6 +163,11 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": {
+          "seen": true,
+          "since_ms": 1790540600000,
+          "to": "operator"
+        },
         "harness": "codex",
         "host": {
           "kind": "bench",
@@ -153,7 +184,14 @@
           "kind": "bench_attach",
           "session": "s4"
         },
+        "operator_mail": {
+          "since_ms": 1790540500000,
+          "unread": 1
+        },
         "root": "/Users/op/Projects/helm",
+        "spawner": {
+          "kind": "operator"
+        },
         "state": {
           "activity": {
             "kind": "unknown"
@@ -165,6 +203,7 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": null,
         "harness": "claude",
         "host": {
           "job": "9d8c7b6a",
@@ -178,7 +217,9 @@
           "job": "9d8c7b6a",
           "kind": "claude_attach"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "detail": "which branch?",
@@ -192,6 +233,7 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": null,
         "harness": "claude",
         "host": {
           "job": "a1b2c3d4",
@@ -205,7 +247,9 @@
           "job": "a1b2c3d4",
           "kind": "claude_attach"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "busy"
@@ -217,6 +261,7 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": null,
         "harness": "claude",
         "host": {
           "kind": "in_session",
@@ -232,8 +277,10 @@
           "parent": "6b1f0c9e-3d2a-4f5b-9c8d-7e6a5b4c3d2e",
           "path": "/Users/op/.claude/projects/-Users-op-Projects-helm/6b1f0c9e-3d2a-4f5b-9c8d-7e6a5b4c3d2e/subagents/agent-a0f1e2d3c4b5a6978.jsonl"
         },
+        "operator_mail": null,
         "parent": "6b1f0c9e-3d2a-4f5b-9c8d-7e6a5b4c3d2e",
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "count": 3,
@@ -246,6 +293,7 @@
       {
         "branch": "feat/sessions",
         "cwd": "/Users/op/Projects/helm",
+        "done": null,
         "harness": "claude",
         "host": {
           "kind": "none"
@@ -263,7 +311,9 @@
           "cwd": "/Users/op/Projects/helm",
           "kind": "resume"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "at_ms": 1789990000000,
           "kind": "finished"
@@ -273,6 +323,7 @@
       {
         "branch": null,
         "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
+        "done": null,
         "harness": "pi",
         "host": {
           "kind": "none"
@@ -294,7 +345,9 @@
           "cwd": "/Users/op/Projects/helm/.worktrees/drawer",
           "kind": "resume"
         },
+        "operator_mail": null,
         "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "spawner": null,
         "state": {
           "at_ms": 1789980000000,
           "kind": "finished"

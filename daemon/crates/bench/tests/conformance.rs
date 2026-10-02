@@ -3756,8 +3756,8 @@ fn the_bench_sessions_skills_snippets_execute() {
     }
     assert_eq!(
         snippets.len(),
-        3,
-        "the skill's sessions and two log snippets"
+        4,
+        "the skill's sessions, watch and two log snippets"
     );
 
     let home = TestHome::claim("sskill");
@@ -3781,6 +3781,13 @@ fn the_bench_sessions_skills_snippets_execute() {
     )
     .unwrap();
     write_claude_transcript(&home.dir, "s-2");
+    // Something to watch that answers at once: a session whose process has exited.
+    let (gone, gone_pid) = terminal_process(&home.dir, "gone");
+    // SAFETY: the pid is this test's own spawn, still a child of benchd, not yet reaped.
+    unsafe { kill(gone_pid as i32, 9) };
+    wait_until("the session ends", Duration::from_secs(10), || {
+        live_entry(&home.dir, &gone)["live"] == false
+    });
     let mut outputs = Vec::new();
     for (i, snippet) in snippets.iter().enumerate() {
         let out = isolated("bash")
@@ -3789,6 +3796,7 @@ fn the_bench_sessions_skills_snippets_execute() {
             .env("HOME", &home.dir)
             .env("BENCH", bench_bin())
             .env("SESSION", "s-2")
+            .env("HANDLE", "gone")
             .output()
             .expect("run snippet");
         assert!(
@@ -3807,16 +3815,21 @@ fn the_bench_sessions_skills_snippets_execute() {
         outputs[0]
     );
     assert!(
-        outputs[1].contains("tool   Bash  cargo build"),
+        outputs[1].contains(r#""outcome":"ended""#),
         "{}",
         outputs[1]
     );
     assert!(
-        outputs[2].contains("claude") && outputs[2].contains("4 of 4"),
+        outputs[2].contains("tool   Bash  cargo build"),
         "{}",
         outputs[2]
     );
-    assert!(outputs[2].contains("user  fix the build"), "{}", outputs[2]);
+    assert!(
+        outputs[3].contains("claude") && outputs[3].contains("4 of 4"),
+        "{}",
+        outputs[3]
+    );
+    assert!(outputs[3].contains("user  fix the build"), "{}", outputs[3]);
 }
 
 // ---------------------------------------------------------------------------
@@ -11989,4 +12002,563 @@ fn path_resolve_expands_against_benchds_home() {
             .unwrap()
             .contains(&format!("{h}/proj/gone"))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Attention (M1, #357): done-not-seen, its addressee, mail to the operator, `bench watch`
+// ---------------------------------------------------------------------------
+
+/// A Claude hook event from the agent in benchd session `bench`, whose conversation is `id`.
+fn claude_turn(socket: &Path, bench: &str, pid: u32, id: &str, event: &str) {
+    claude_turn_in(socket, bench, pid, id, event, "/tmp");
+}
+
+fn claude_turn_in(socket: &Path, bench: &str, pid: u32, id: &str, event: &str, cwd: &str) {
+    hook_verb(
+        socket,
+        serde_json::json!({ "harness": "claude", "event": event, "session": id,
+            "cwd": cwd, "pid": pid, "bench_session": bench }),
+    );
+}
+
+/// The operator focuses a pane, the way a click in helm does.
+fn operator_shows(socket: &Path, pane: &str) {
+    ok_data(layout(
+        socket,
+        "pane/show",
+        serde_json::json!({ "pane": pane }),
+        operator(),
+        false,
+    ));
+}
+
+/// pi, whose own turn end is `agent_settled`: the case the drawer's row has to show too, since a
+/// pi reports nothing anywhere but its hook.
+#[test]
+fn a_finished_turn_is_done_until_the_operator_looks() {
+    let home = TestHome::claim("m1-done");
+    let h = &home.dir;
+    let daemon = scripted_pi_daemon(h, "#!/bin/sh\nexec sleep 60\n");
+    let ws = workspace(h).display().to_string();
+    let run = bench(
+        h,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--name", "worker"],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let spawned = json_of(&run);
+    let sid = spawned["session"].as_str().unwrap().to_string();
+    let pane = spawned["pane"].as_str().unwrap().to_string();
+    let conv = spawned["runtime_session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_u64().unwrap() as u32;
+    let other = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            &ws,
+            "--name",
+            "other",
+        ],
+    );
+    assert_eq!(other.code, 0, "{}", other.stderr);
+    let elsewhere = json_of(&other)["pane"].as_str().unwrap().to_string();
+    // An agent's spawn never takes focus: the operator opens the workspace himself.
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/activate",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    operator_shows(&daemon.socket, &elsewhere);
+    let turn = |event: &str| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({ "harness": "pi", "event": event, "session": conv,
+                "cwd": ws, "pid": pid, "bench_session": sid }),
+        );
+    };
+    turn("session_start");
+    turn("agent_start");
+    assert!(live_entry(h, &sid)["done"].is_null(), "working is not done");
+
+    turn("agent_settled");
+    let done = live_entry(h, &sid)["done"].clone();
+    assert_eq!(done["to"], "operator", "{done}");
+    assert_eq!(done["seen"], false, "{done}");
+    // The drawer's row says the same.
+    let all = json_of(&bench(h, &["sessions", "--all", "--workspace", &ws]));
+    let row = all["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == conv.as_str());
+    assert_eq!(row.map(|r| r["done"].clone()), Some(done.clone()), "{all}");
+
+    // Looking at it clears it; looking away again does not bring it back.
+    operator_shows(&daemon.socket, &pane);
+    let seen = live_entry(h, &sid)["done"].clone();
+    assert_eq!(seen["seen"], true, "{seen}");
+    assert_eq!(seen["since_ms"], done["since_ms"]);
+    operator_shows(&daemon.socket, &elsewhere);
+    assert_eq!(live_entry(h, &sid)["done"]["seen"], true);
+    let looked = event_kinds(h)
+        .into_iter()
+        .filter(|(k, _)| k == "sessions/seen")
+        .count();
+    assert_eq!(looked, 1, "seen once: the second focus cleared nothing");
+
+    // A new turn is no longer done; one that ends in front of him is seen at once.
+    turn("agent_start");
+    assert!(live_entry(h, &sid)["done"].is_null());
+    operator_shows(&daemon.socket, &pane);
+    turn("agent_settled");
+    assert_eq!(live_entry(h, &sid)["done"]["seen"], true);
+}
+
+#[test]
+fn done_goes_to_the_agent_that_spawned_it_and_survives_a_restart() {
+    let home = TestHome::claim("m1-spawner");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let run = bench_as(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "worker",
+        ],
+        &[("BENCH_HANDLE", "orch")],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let spawned = json_of(&run);
+    let (sid, pid) = (
+        spawned["session"].as_str().unwrap().to_string(),
+        spawned["pid"].as_u64().unwrap() as u32,
+    );
+    let conv = "2d0e3f4a-5b6c-4d7e-8f9a-1b2c3d4e5f6a";
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        claude_turn(&daemon.socket, &sid, pid, conv, event);
+    }
+    let done = live_entry(h, &sid)["done"].clone();
+    assert_eq!(
+        (done["to"].clone(), done["seen"].clone()),
+        ("orch".into(), false.into()),
+        "{done}"
+    );
+    let spawned_event = event_kinds(h)
+        .into_iter()
+        .find(|(k, _)| k == "session/spawned")
+        .unwrap();
+    assert_eq!(
+        spawned_event.1["spawner"],
+        serde_json::json!({ "kind": "agent", "handle": "orch" }),
+        "{:?}",
+        spawned_event.1
+    );
+    // The operator's own spawn is his.
+    let (mine, mine_pid) = terminal_process(h, "mine");
+    let conv2 = "3e1f4a5b-6c7d-4e8f-9a0b-2c3d4e5f6a7b";
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        claude_turn(&daemon.socket, &mine, mine_pid, conv2, event);
+    }
+    assert_eq!(live_entry(h, &mine)["done"]["to"], "operator");
+
+    // A restart ends every session; the conversation resumed in a new one is still done, still
+    // the orchestrator's, still not seen.
+    drop(daemon);
+    let daemon = DaemonGuard::start(h, None);
+    let (again, again_pid) = terminal_process(h, "worker");
+    claude_turn(&daemon.socket, &again, again_pid, conv, "SessionStart");
+    let resumed = live_entry(h, &again)["done"].clone();
+    assert_eq!(resumed, done, "the record kept it across the restart");
+}
+
+#[test]
+fn mail_to_the_operator_shows_on_its_senders_session_until_read() {
+    let home = TestHome::claim("m1-mail");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let (sid, _) = terminal_process(h, "reporter");
+    assert!(live_entry(h, &sid)["operator_mail"].is_null());
+    for subject in ["reporter: blocked", "reporter: still blocked"] {
+        let sent = bench(
+            h,
+            &[
+                "mail",
+                "send",
+                "--from",
+                "reporter",
+                "--to",
+                "operator",
+                "--subject",
+                subject,
+                "--body",
+                "x",
+            ],
+        );
+        assert_eq!(sent.code, 0, "{}", sent.stderr);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mail = live_entry(h, &sid)["operator_mail"].clone();
+    assert_eq!(mail["unread"], 2, "{mail}");
+    assert_eq!(mail["subject"], "reporter: blocked", "the oldest: {mail}");
+    // Mail between agents is not the operator's.
+    let other = bench(
+        h,
+        &[
+            "mail", "send", "--from", "reporter", "--to", "someone", "--body", "x",
+        ],
+    );
+    assert_eq!(other.code, 0);
+    assert_eq!(live_entry(h, &sid)["operator_mail"]["unread"], 2);
+    let listed = json_of(&bench(h, &["mail", "list", "--handle", "operator"]));
+    for m in listed["mail"].as_array().unwrap() {
+        let id = m["id"].as_str().unwrap();
+        assert_eq!(
+            bench(h, &["mail", "read", id, "--handle", "operator"]).code,
+            0
+        );
+    }
+    assert!(
+        live_entry(h, &sid)["operator_mail"].is_null(),
+        "read is not unread"
+    );
+}
+
+#[test]
+fn marking_seen_clears_done_and_closes_nothing() {
+    let home = TestHome::claim("m1-seen");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "worker");
+    let conv = "4f2a5b6c-7d8e-4f9a-0b1c-3d4e5f6a7b8c";
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        claude_turn(&daemon.socket, &sid, pid, conv, event);
+    }
+    let before = live_entry(h, &sid);
+    let unknown = bench(h, &["sessions", "seen", "nobody", "--harness", "claude"]);
+    assert_eq!(unknown.code, 3, "{}", unknown.stderr);
+    // Seen is the operator's: an agent marks it only when he asked.
+    let unasked = bench(h, &["sessions", "seen", conv, "--harness", "claude"]);
+    assert_eq!(unasked.code, 3, "{}", unasked.stderr);
+    assert_eq!(live_entry(h, &sid)["done"]["seen"], false);
+    let marked = bench(
+        h,
+        &["sessions", "seen", conv, "--harness", "claude", "--asked"],
+    );
+    assert_eq!(marked.code, 0, "{}", marked.stderr);
+    let after = live_entry(h, &sid);
+    assert_eq!(after["done"]["seen"], true, "{after}");
+    // The session, its pane and its record entry are all still there.
+    assert_eq!(
+        (after["live"].clone(), after["pane"].clone()),
+        (true.into(), before["pane"].clone())
+    );
+    let record = hosted_record(&h.join(".bench"));
+    assert!(
+        record["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == conv)
+    );
+    let kinds: Vec<String> = event_kinds(h).into_iter().map(|(k, _)| k).collect();
+    assert!(kinds.contains(&"sessions/seen".to_string()), "{kinds:?}");
+    // A turn the operator interrupts is not a finished one.
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    claude_turn(&daemon.socket, &sid, pid, conv, "Interrupt");
+    assert!(live_entry(h, &sid)["done"].is_null());
+    assert!(
+        !kinds
+            .iter()
+            .any(|k| k == "session/closed" || k == "sessions/dismissed"),
+        "{kinds:?}"
+    );
+}
+
+/// `bench watch <handle>` as an orchestrator runs it: a child process, read when it exits.
+fn watch(home: &Path, args: &[&str]) -> Child {
+    let mut cmd = isolated(bench_bin());
+    cmd.env("HOME", home)
+        .arg("watch")
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    cmd.spawn().expect("spawn bench watch")
+}
+
+fn watched(child: Child) -> (i32, serde_json::Value) {
+    let out = child.wait_with_output().unwrap();
+    let line = String::from_utf8_lossy(&out.stdout).to_string();
+    let value = serde_json::from_str(line.trim()).unwrap_or(serde_json::Value::Null);
+    (out.status.code().unwrap_or(-1), value)
+}
+
+#[test]
+fn watch_wakes_on_a_turn_end_and_a_wait_and_gives_up_at_its_timeout() {
+    let home = TestHome::claim("m1-watch");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "watched");
+    let conv = "5a3b6c7d-8e9f-4a0b-1c2d-4e5f6a7b8c9d";
+    // A session that has only started is idle with no turn: not an answer.
+    let fresh = watch(h, &["watched", "--timeout", "2"]);
+    std::thread::sleep(Duration::from_millis(300));
+    claude_turn(&daemon.socket, &sid, pid, conv, "SessionStart");
+    let (code, out) = watched(fresh);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let (code, out) = watched(watch(h, &["watched", "--timeout", "1"]));
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(300));
+    claude_turn(&daemon.socket, &sid, pid, conv, "Stop");
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "done".into()), "{out}");
+    let since = out["session"]["done"]["since_ms"].as_u64().unwrap();
+    // The turn it already answered does not answer again; a wait does.
+    let after = since.to_string();
+    let (code, out) = watched(watch(h, &["watched", "--timeout", "1", "--after", &after]));
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    let waiter = watch(h, &["watched", "--timeout", "20", "--after", &after]);
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({ "harness": "claude", "event": "PermissionRequest", "session": conv,
+            "cwd": "/tmp", "pid": pid, "bench_session": sid, "tool": "Bash" }),
+    );
+    let (code, out) = watched(waiter);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (0, "waiting".into()),
+        "{out}"
+    );
+    // A turn that fails ends with no `Stop`, and no done: the watch still wakes, as idle.
+    claude_turn(&daemon.socket, &sid, pid, conv, "PostToolUse");
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(1200));
+    claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
+    // However short: a turn that starts and fails back to back, with no pause for a poll.
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(500));
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
+    // A handle nobody has is refused, not waited on.
+    let (code, _) = watched(watch(h, &["nobody", "--timeout", "1"]));
+    assert_eq!(code, 3);
+    // A session closed under the watch has ended, though it has left the list.
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(1500));
+    let closed = bench(h, &["close", &sid]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "ended".into()), "{out}");
+}
+
+/// An agent the operator started in a pane has no `BENCH_HANDLE`: its spawn names only the pane,
+/// and the spawner is whoever holds that pane's mailbox. The operator typing in a shell there is
+/// nobody's agent.
+#[test]
+fn a_pane_agent_s_spawn_is_addressed_to_the_mailbox_in_that_pane() {
+    let home = TestHome::claim("m1-panespawn");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let spawn_from_pane = |name: &str| {
+        let run = bench_as(
+            h,
+            &[
+                "spawn",
+                "--agent",
+                "test-echo",
+                "--cwd",
+                "/tmp",
+                "--name",
+                name,
+            ],
+            &[("HELM_PANE", HOOK_PANE)],
+        );
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)
+    };
+    let before = spawn_from_pane("before");
+    let (_, tty_pid) = terminal_process(h, "holder");
+    let claimed = hook_verb(
+        &daemon.socket,
+        serde_json::json!({ "harness": "claude", "event": "SessionStart",
+            "session": "6b4c7d8e-9f0a-4b1c-2d3e-5f6a7b8c9d0e", "cwd": "/Users/op/Projects/helm",
+            "pid": tty_pid, "pane": HOOK_PANE }),
+    );
+    let orchestrator = claimed["handle"].as_str().unwrap().to_string();
+    let after = spawn_from_pane("after");
+    let spawners: Vec<(String, serde_json::Value)> = event_kinds(h)
+        .into_iter()
+        .filter(|(k, d)| k == "session/spawned" && d["handle"] != "holder")
+        .map(|(_, d)| {
+            (
+                d["session"].as_str().unwrap().to_string(),
+                d["spawner"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        spawners,
+        [
+            (
+                before["session"].as_str().unwrap().to_string(),
+                serde_json::json!({ "kind": "operator" })
+            ),
+            (
+                after["session"].as_str().unwrap().to_string(),
+                serde_json::json!({ "kind": "agent", "handle": orchestrator })
+            ),
+        ]
+    );
+}
+
+/// A conversation spawned again (`--resume`) by another agent is that agent's from then on.
+#[test]
+fn a_resume_by_another_agent_readdresses_its_done() {
+    let home = TestHome::claim("m1-respawn");
+    let h = &home.dir;
+    let daemon = scripted_pi_daemon(h, "#!/bin/sh\nexec sleep 60\n");
+    let ws = workspace(h).display().to_string();
+    let spawn_as = |who: &str, args: &[&str]| {
+        let mut all = vec!["spawn", "--agent", "pi", "--cwd", ws.as_str()];
+        all.extend_from_slice(args);
+        let run = bench_as(h, &all, &[("BENCH_HANDLE", who)]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)
+    };
+    let settle = |spawned: &serde_json::Value, conv: &str| {
+        for event in ["session_start", "agent_start", "agent_settled"] {
+            hook_verb(
+                &daemon.socket,
+                serde_json::json!({ "harness": "pi", "event": event, "session": conv, "cwd": ws,
+                    "pid": spawned["pid"], "bench_session": spawned["session"] }),
+            );
+        }
+        live_entry(h, spawned["session"].as_str().unwrap())["done"]["to"].clone()
+    };
+    let first = spawn_as("orch-a", &["--name", "first"]);
+    let conv = first["runtime_session"].as_str().unwrap().to_string();
+    assert_eq!(settle(&first, &conv), "orch-a");
+    // A closed pi says so on its way out.
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({ "harness": "pi", "event": "session_shutdown", "session": conv,
+            "cwd": ws, "pid": first["pid"], "bench_session": first["session"] }),
+    );
+    let closed = bench(h, &["close", first["session"].as_str().unwrap()]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    wait_until("the first session is gone", Duration::from_secs(10), || {
+        let list = json_of(&bench(h, &["sessions"]));
+        !list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == first["session"] && s["live"] == true)
+    });
+    let again = spawn_as("orch-b", &["--name", "again", "--resume", &conv]);
+    assert_eq!(settle(&again, &conv), "orch-b");
+    // The drawer's row names its spawner too, beside its own handle.
+    let all = json_of(&bench(h, &["sessions", "--all", "--workspace", &ws]));
+    let row = all["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == conv.as_str());
+    let row = row.unwrap_or_else(|| panic!("no row: {all}"));
+    assert_eq!(
+        (row["spawner"].clone(), row["mail"]["handle"].clone()),
+        (
+            serde_json::json!({ "kind": "agent", "handle": "orch-b" }),
+            "again".into()
+        ),
+        "{row}"
+    );
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "sessions/spawner" && d["spawner"]["handle"] == "orch-b"),
+        "the readdress is logged"
+    );
+}
+
+/// A Claude's `sessions` report is its registry row when it has one, which can lag a hook (a turn
+/// it has not caught up with yet) and can change with no hook at all (Esc). The watch judges
+/// working and idle from that report alone.
+#[test]
+fn watch_reads_claude_s_registry_row_for_a_turn_no_hook_ends() {
+    let home = TestHome::claim("m1-watch-reg");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let (sid, pid) = terminal_process(h, "clauded");
+    let conv = "7c5d8e9f-0a1b-4c2d-3e4f-6a7b8c9d0e1f";
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = |status: &str, at: u64| {
+        let path = h.join(format!(".claude/sessions/{pid}.json"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::json!({"pid": pid, "sessionId": conv, "cwd": "/tmp", "startedAt": started,
+                "status": status, "statusUpdatedAt": at})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    // A row that first appears after the hooks, idle and older than the work they announced,
+    // ends nothing.
+    claude_turn(&daemon.socket, &sid, pid, conv, "SessionStart");
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let late = watch(h, &["clauded", "--timeout", "3"]);
+    std::thread::sleep(Duration::from_millis(800));
+    row("idle", started + 10);
+    let (code, out) = watched(late);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    // The hook says a turn began; the row has not caught up: not an answer.
+    let lagging = watch(h, &["clauded", "--timeout", "3"]);
+    std::thread::sleep(Duration::from_millis(800));
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let (code, out) = watched(lagging);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
+    // Esc: the row goes idle and no hook says so.
+    row("busy", started + 20);
+    let esc = watch(h, &["clauded", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(1500));
+    row("idle", started + 30);
+    let (code, out) = watched(esc);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
 }

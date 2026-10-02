@@ -21,7 +21,7 @@ The `bench` CLI is on your PATH or named by `$BENCH`. The `bench-panes`, `bench-
 
 1. Find your own handle, so agents can mail you: `$BENCH_HANDLE` in a session benchd spawned,
    else `bench mail who --pane "$HELM_PANE"` in a helm pane. With neither, you have no mailbox and
-   nothing can wake you. Check the fleet on a bounded loop instead (step 5).
+   nothing can wake you. Wait on your agents with `bench watch` instead (step 5).
 2. Create the run file `$PRP_DIR/orchestration/<YYYY-MM-DD-slug>.md` from this skill's
    `templates/run.md`, not prp-orchestrate's: the spawn snippet appends launches to the end of the
    file, which is where this template keeps its Event log.
@@ -109,6 +109,8 @@ for r in json.load(sys.stdin)["rows"]:
     what = a.get("kind", s["kind"])
     if a.get("waiting_for"):
         what += " (" + a["waiting_for"] + ")"
+    if r["done"]:
+        what += " done" + ("" if r["done"]["seen"] else ", unseen")
     print(r["mail"]["handle"], r["harness"], what,
           "%dm" % ((now - r["updated_at_ms"]) / 60000),
           "unread=%d" % r["mail"]["unread"])
@@ -121,13 +123,19 @@ for r in json.load(sys.stdin)["rows"]:
 - codex and pi report their activity through their hooks. `bench log <runtime>` says what any of
   them did, and `bench get screen <pane>` what a pane shows now.
 - `unread` that keeps growing means the agent is not reading its mail.
-- With no mailbox of your own, run this every few minutes inside a bounded loop (`for i in
-  $(seq 20); do ...; sleep 180; done`), and end the loop on anything that needs you.
+- `done` means the agent's last turn ended and it has not started another. `unseen` means the
+  operator has not looked at its pane since; one you spawned is yours to act on, not his.
+- To wait on one agent, `bench watch <handle> --timeout <s>` blocks without a model turn until it
+  waits on the operator, finishes a turn, goes idle without finishing one after the watch saw it
+  working (`idle`: a failed or interrupted turn; read its `bench log`), or its session ends, and prints which (`outcome`) with
+  its `bench sessions` entry. After you mail it new work, pass the `done.since_ms` you last saw
+  as `--after <ms>`, or the turn before answers for the next one. With no mailbox of your own,
+  this is how you hear from the fleet; run it in the background, one per agent you wait on.
 - **Never end a turn waiting for a notification.** No CI result, review, merge-queue verdict or
   agent report arrives by itself, and a turn that ends to wait for one stalls the run until the
-  operator notices. Poll what you wait for with a bounded command (`timeout 1800 gh pr checks <n>
-  --required --watch`, `archon workflow wait <runId> --timeout <s>`, the loop above), and end a
-  turn only when the run is done or needs the operator.
+  operator notices. Wait with a bounded command (`bench watch <handle> --timeout <s>`, `timeout
+  1800 gh pr checks <n> --required --watch`, `archon workflow wait <runId> --timeout <s>`), and end
+  a turn only when the run is done or needs the operator.
 
 ## 6. Steer
 

@@ -9,14 +9,18 @@
 //! the background and benchd refuses one that would move the operator's focus; with it, it may
 //! bring something forward. Pass it only when the operator asked (bench-architecture.md).
 
-use crate::{Cli, exchange, print_response, record_root, refuse};
+use crate::{Cli, exchange, fail, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
-    DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, MoveTo, OpenInto, PaneOpen, ScreenGetArgs,
-    ScreenSendArgs, SpawnArgs, Status,
+    Activity, AgentReport, DocumentAt, EXIT_NO_DAEMON, HelmAsk, HelmAskArgs, LayoutVerb,
+    LiveSessions, MoveTo, OpenInto, PaneOpen, Response, ScreenGetArgs, ScreenSendArgs,
+    SessionEntry, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// The verbs this module answers, by their first word. `close` and `get` are shared with the
 /// session and document verbs; [`owns`] decides by the word after them.
@@ -56,6 +60,8 @@ const VALUED: &[&str] = &[
     "--before",
     "--beside",
     "--side",
+    "--timeout",
+    "--after",
 ];
 
 /// Whether `raw` (the arguments after `bench`) is one of these verbs. `close <pane uuid>` is,
@@ -425,7 +431,10 @@ fn send(p: &Parsed) -> Result<(String, Value), String> {
 fn watch(p: &Parsed, root: PathBuf) -> i32 {
     let target = match (p.words.get(1).map(String::as_str), p.words.get(2)) {
         (Some("screen"), Some(t)) => t.clone(),
-        _ => return refuse("watch needs `screen <pane|session>`"),
+        (Some("screen"), None) | (None, _) => {
+            return refuse("watch needs `screen <pane|session>` or `<handle>`");
+        }
+        (Some(handle), _) => return watch_agent(p, root, handle),
     };
     let cli = Cli {
         verb: "screen/get".into(),
@@ -453,6 +462,266 @@ fn watch(p: &Parsed, root: PathBuf) -> i32 {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+/// `watch <handle>` (M1, #357): wait until the agent in the benchd session with that handle waits
+/// on the operator, ends a turn, goes idle without ending one, or its session ends, then print
+/// one line saying which, with the session as `sessions` gives it. It follows benchd's events
+/// rather than polling, so it costs nothing while the agent works and misses no change, however
+/// short the turn. A turn that had already ended counts, unless it ended at or before `--after`
+/// (the `since_ms` of the done an earlier watch printed), so a watch right after mailing new work
+/// is not answered with the turn before it. Exit 3 at `--timeout` (1800 s).
+fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
+    let number = |flag: &str| p.value(flag).map(|v| v.parse::<u64>());
+    let timeout = match number("--timeout") {
+        None => 1800,
+        Some(Ok(secs)) => secs,
+        Some(Err(_)) => return refuse("--timeout needs a number of seconds"),
+    };
+    let after = match number("--after") {
+        None => None,
+        Some(Ok(ms)) => Some(ms),
+        Some(Err(_)) => return refuse("--after needs epoch ms: an earlier done's since_ms"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    // Subscribed before the first look, so no change falls between the two.
+    let mut feed = match Feed::open(root.clone()) {
+        Ok(feed) => feed,
+        Err(code) => return code,
+    };
+    let cli = Cli {
+        verb: "sessions".into(),
+        args: Value::Null,
+        root,
+        asked: false,
+    };
+    let mut turn = Turn::default();
+    // A closed session leaves the list: one this watch saw and cannot find again has ended.
+    let mut last: Option<SessionEntry> = None;
+    loop {
+        let live = match live_sessions(&cli) {
+            Ok(live) => live,
+            Err(code) => return code,
+        };
+        let (entry, outcome) = match (session_of(&live.sessions, handle), last.take()) {
+            (Some(entry), _) => {
+                let quiet = turn.saw(entry.report.as_ref());
+                (entry.clone(), watched(entry, after, quiet))
+            }
+            (None, Some(gone)) => (gone, Some(Watched::Ended)),
+            (None, None) => {
+                return refuse(&format!(
+                    "no bench session has the handle {handle:?} — `bench sessions` lists them"
+                ));
+            }
+        };
+        let outcome = match outcome {
+            Some(outcome) => outcome,
+            None => match feed.next_about(&entry, deadline) {
+                Ok(Wake::Deadline) => Watched::Timeout,
+                Ok(wake) => {
+                    if wake == (Wake::Event { busy: true }) {
+                        turn.announced();
+                    }
+                    last = Some(entry);
+                    continue;
+                }
+                Err(code) => return code,
+            },
+        };
+        println!(
+            "{}",
+            json!({ "handle": handle, "outcome": outcome.word(), "session": entry })
+        );
+        return match outcome {
+            Watched::Timeout => Status::Refused.exit_code(),
+            Watched::Waiting | Watched::Done | Watched::Idle | Watched::Ended => 0,
+        };
+    }
+}
+
+fn live_sessions(cli: &Cli) -> Result<LiveSessions, i32> {
+    let response = exchange(cli)?;
+    if response.status != Status::Ok {
+        return Err(print_response(&response));
+    }
+    serde_json::from_value(response.data.unwrap_or_default()).map_err(|e| {
+        fail(&format!(
+            "sessions answered a shape this bench cannot read: {e}"
+        ))
+    })
+}
+
+fn working(activity: &Activity) -> bool {
+    !matches!(activity, Activity::Idle | Activity::Unknown)
+}
+
+/// What `watch <handle>` knows of the agent's turn, judged from its `sessions` report alone: the
+/// report is Claude's registry row when it has one, which can say a thing no hook does (Esc) and
+/// can lag one (a turn the hook already announced). An event only says when to look again.
+#[derive(Default)]
+struct Turn {
+    /// Work began by then: the time of a report that showed the agent at work, or of the report
+    /// seen before an event announced work. Only an idle report newer than it ends that work, so
+    /// a turn that started and failed between two looks counts, and a row older than the work it
+    /// follows (one that lags, or first appears after the hooks) does not. A report with no time
+    /// cannot be ordered and ends nothing: the timeout answers for it.
+    work_from: Option<u64>,
+    /// The time of the last report seen.
+    last_since: u64,
+}
+
+impl Turn {
+    /// Take in a report; whether the agent is now idle after work it was seen or announced to do.
+    /// Idle with nothing before it is a session that has not started a turn.
+    fn saw(&mut self, report: Option<&AgentReport>) -> bool {
+        let Some(r) = report else {
+            return false;
+        };
+        let since = r.since_ms.unwrap_or(0);
+        self.last_since = since;
+        if working(&r.activity) {
+            self.work_from = Some(self.work_from.map_or(since, |from| from.max(since)));
+            return false;
+        }
+        r.activity == Activity::Idle && self.work_from.is_some_and(|from| since > from)
+    }
+
+    fn announced(&mut self) {
+        let before = self.last_since;
+        self.work_from = Some(self.work_from.map_or(before, |from| from.max(before)));
+    }
+}
+
+/// Why a watch looks again.
+#[derive(Debug, PartialEq, Eq)]
+enum Wake {
+    /// An event about the agent, and whether it said it was at work.
+    Event {
+        busy: bool,
+    },
+    /// A second passed: the report may have changed with no event (Claude's registry row).
+    Tick,
+    Deadline,
+}
+
+/// How often a watch reads `sessions` with no event to prompt it.
+const WATCH_TICK: Duration = Duration::from_secs(1);
+
+/// benchd's events as they happen (`events --follow`), for `watch <handle>`.
+struct Feed {
+    lines: BufReader<UnixStream>,
+    /// A line read in part when a tick cut the read short; the rest follows.
+    line: String,
+}
+
+impl Feed {
+    fn open(root: PathBuf) -> Result<Feed, i32> {
+        let cli = Cli {
+            verb: "events".into(),
+            args: json!({ "follow": true }),
+            root,
+            asked: false,
+        };
+        let (stream, request) = crate::open(&cli)?;
+        if (&stream).write_all(request.as_bytes()).is_err() {
+            return Err(EXIT_NO_DAEMON);
+        }
+        let reply = crate::read_response_line(&stream).ok_or(EXIT_NO_DAEMON)?;
+        let response: Response = serde_json::from_str(&reply)
+            .map_err(|e| fail(&format!("unreadable response ({e}): {}", reply.trim())))?;
+        if response.status != Status::Ok {
+            return Err(print_response(&response));
+        }
+        Ok(Feed {
+            lines: BufReader::new(stream),
+            line: String::new(),
+        })
+    }
+
+    /// Block until an event about the agent in `entry`'s session (its handle or its session id),
+    /// a tick, or the deadline.
+    fn next_about(&mut self, entry: &SessionEntry, deadline: Instant) -> Result<Wake, i32> {
+        let tick = Instant::now() + WATCH_TICK;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(Wake::Deadline);
+            }
+            let wait = left.min(tick.saturating_duration_since(Instant::now()));
+            if wait.is_zero() {
+                return Ok(Wake::Tick);
+            }
+            let _ = self.lines.get_ref().set_read_timeout(Some(wait));
+            match self.lines.read_line(&mut self.line) {
+                Ok(0) => return Err(fail("benchd ended the event stream")),
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    continue;
+                }
+                Err(e) => return Err(fail(&format!("the event stream broke: {e}"))),
+            }
+            let frame: Value = serde_json::from_str(&self.line).unwrap_or_default();
+            self.line.clear();
+            let data = &frame["event"]["data"];
+            if data["handle"] == entry.handle.as_str() || data["session"] == entry.session.as_str()
+            {
+                let busy = serde_json::from_value::<Activity>(data["activity"].clone())
+                    .is_ok_and(|a| working(&a));
+                return Ok(Wake::Event { busy });
+            }
+        }
+    }
+}
+
+/// The session a handle names: the live one, else the latest to have run under it.
+fn session_of<'a>(sessions: &'a [SessionEntry], handle: &str) -> Option<&'a SessionEntry> {
+    sessions
+        .iter()
+        .filter(|s| s.handle == handle)
+        .min_by_key(|s| (!s.live, s.uptime_secs))
+}
+
+/// Why `watch <handle>` stopped: its `outcome`, the word a caller reads.
+#[derive(Clone, Copy)]
+enum Watched {
+    Waiting,
+    Done,
+    /// Idle with no finished turn since the watch began: a turn that failed (`StopFailure`, a
+    /// codex turn refused by its usage limit), was interrupted, or went quiet without a `Stop`.
+    Idle,
+    Ended,
+    Timeout,
+}
+
+impl Watched {
+    fn word(self) -> &'static str {
+        match self {
+            Watched::Waiting => "waiting",
+            Watched::Done => "done",
+            Watched::Idle => "idle",
+            Watched::Ended => "ended",
+            Watched::Timeout => "timeout",
+        }
+    }
+}
+
+/// What `watch <handle>` stops for, when anything: a done after `after`, else an agent that went
+/// `quiet` without one ([`Turn::saw`]).
+fn watched(s: &SessionEntry, after: Option<u64>, quiet: bool) -> Option<Watched> {
+    if !s.live {
+        return Some(Watched::Ended);
+    }
+    if s.waiting.is_some() {
+        return Some(Watched::Waiting);
+    }
+    if s.done
+        .as_ref()
+        .is_some_and(|d| after.is_none_or(|after| d.since_ms > after))
+    {
+        return Some(Watched::Done);
+    }
+    quiet.then_some(Watched::Idle)
 }
 
 /// `get screenshot`: helm draws its window and sends the PNG back; benchd writes it at `--out`
