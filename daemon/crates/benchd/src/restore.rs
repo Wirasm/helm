@@ -93,6 +93,12 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
                         start(&mut c, pane, &a, r).inspect_err(|_| abandoned.push(spec))
                     })
                     .map_err(Some),
+                // A codex runs only on a thread `prepare` re-entered on benchd's server; one it
+                // did not prepare (held then, free now) waits for the next restore.
+                (None, Some(Ok(_))) if a.command == AgentKind::Codex.name() => Err(Some(format!(
+                    "codex conversation {} was held when this restore began",
+                    a.session
+                ))),
                 (None, Some(Ok(at))) => reserve(&mut c, &a, at)
                     .and_then(|r| start(&mut c, pane, &a, r))
                     .map_err(Some),

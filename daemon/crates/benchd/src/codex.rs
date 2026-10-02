@@ -70,7 +70,7 @@ pub struct Server {
     /// Threads benchd made or re-entered whose session is not registered yet, each with the
     /// first turn benchd started on it: never let go, and stopped if the spawn fails
     /// ([`Server::abandon`]) so no agent runs that no pane shows.
-    pending: Mutex<HashMap<String, Option<String>>>,
+    pending: Mutex<HashMap<String, FirstTurn>>,
     /// Each thread's status as codex last said, so one that changed before its session was
     /// registered is not lost ([`Server::claim`]).
     statuses: Mutex<HashMap<String, String>>,
@@ -298,7 +298,10 @@ impl Server {
     /// A thread this connection now watches for a session not registered yet.
     fn hold(&self, id: &str) {
         self.subscribed.lock().unwrap().insert(id.to_string());
-        self.pending.lock().unwrap().insert(id.to_string(), None);
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), FirstTurn::None);
     }
 
     /// The model and reasoning effort thread `id` last ran with, as its record says.
@@ -322,11 +325,9 @@ impl Server {
         let answer = self.turn(id, text);
         if let Some(first) = self.pending.lock().unwrap().get_mut(id) {
             *first = match &answer {
-                Ok(turn) => Some(turn.clone()),
-                // A turn may be running whose id benchd never got.
-                Err(Failure::Unanswered(_)) => Some(String::new()),
-                // No turn started.
-                Err(Failure::Refused(_)) => None,
+                Ok(turn) => FirstTurn::Started(turn.clone()),
+                Err(Failure::Unanswered(_)) => FirstTurn::Unnamed,
+                Err(Failure::Refused(_)) => FirstTurn::None,
             };
         }
         answer.map(|_| ()).map_err(String::from)
@@ -358,12 +359,13 @@ impl Server {
     pub fn abandon(&self, id: &str) {
         let first = self.pending.lock().unwrap().remove(id);
         let stopped = match first {
-            Some(Some(turn)) if !turn.is_empty() => self
+            Some(FirstTurn::Started(turn)) => self
                 .call("turn/interrupt", json!({ "threadId": id, "turnId": turn }))
                 .map(|_| ()),
-            // `turn/start` got no answer: codex may run a turn benchd has no id for.
-            Some(Some(_)) => Err("its first turn got no answer, so benchd has no id for it".into()),
-            Some(None) | None => Ok(()),
+            Some(FirstTurn::Unnamed) => {
+                Err("its first turn got no answer, so benchd has no id for it".into())
+            }
+            Some(FirstTurn::None) | None => Ok(()),
         };
         if let Err(why) = stopped {
             eprintln!(
@@ -415,6 +417,17 @@ impl Server {
         let _ = wrapper.kill();
         let _ = wrapper.wait();
     }
+}
+
+/// The first turn benchd started on a pending thread.
+enum FirstTurn {
+    /// None started yet, or codex refused it.
+    None,
+    /// Running, under this id.
+    Started(String),
+    /// Asked for with no answer, or an answer naming no turn: codex may be running one benchd
+    /// cannot name, so cannot stop.
+    Unnamed,
 }
 
 /// Why a request got no result.

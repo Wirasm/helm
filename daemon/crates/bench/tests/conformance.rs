@@ -4497,9 +4497,9 @@ fn an_idle_claude_is_started_through_its_socket_and_a_busy_one_is_not() {
 /// as real codex links it to a short socket of its own ([`write_fake_codex`]).
 struct FakeCodex {
     seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
-    /// The answers to the next `turn/start`s: `true` starts a turn, `false` refuses. Empty
-    /// starts one.
-    turns: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<bool>>>,
+    /// The answers to the next `turn/start`s: `Some(true)` starts a turn, `Some(false)` refuses,
+    /// `None` answers naming no turn. Empty starts one.
+    turns: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Option<bool>>>>,
     /// A thread status to send before answering the next `turn/start`, as codex does when a
     /// turn fails at once (a usage limit).
     early: std::sync::Arc<std::sync::Mutex<Option<&'static str>>>,
@@ -4613,7 +4613,7 @@ impl FakeCodex {
 fn codex_answer(
     method: &str,
     params: &serde_json::Value,
-    turns: &std::sync::Mutex<std::collections::VecDeque<bool>>,
+    turns: &std::sync::Mutex<std::collections::VecDeque<Option<bool>>>,
     next: &AtomicU32,
 ) -> Result<serde_json::Value, String> {
     let new_thread = || {
@@ -4626,16 +4626,14 @@ fn codex_answer(
         "thread/resume" => Ok(serde_json::json!({"thread": {"id": params["threadId"]}})),
         "thread/read" => Ok(serde_json::json!({"thread": {"id": params["threadId"],
             "model": "gpt-recorded", "reasoningEffort": "low"}})),
-        "turn/start" => {
-            if turns.lock().unwrap().pop_front().unwrap_or(true) {
-                // Long enough for a 16-bit length, as real answers are.
-                Ok(
-                    serde_json::json!({"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}),
-                )
-            } else {
-                Err("thread is busy".into())
-            }
-        }
+        "turn/start" => match turns.lock().unwrap().pop_front().unwrap_or(Some(true)) {
+            // Long enough for a 16-bit length, as real answers are.
+            Some(true) => Ok(
+                serde_json::json!({"turn": {"id": "t1", "status": "inProgress", "items": [], "note": "x".repeat(300)}}),
+            ),
+            Some(false) => Err("thread is busy".into()),
+            None => Ok(serde_json::json!({"turn": {"status": "inProgress"}})),
+        },
         "thread/unsubscribe" => Ok(serde_json::json!({"status": "unsubscribed"})),
         "turn/interrupt" => Ok(serde_json::json!({})),
         other => Err(format!("the fake codex does not know {other}")),
@@ -4941,7 +4939,7 @@ fn an_idle_codex_is_woken_through_benchds_app_server_and_a_busy_one_is_not() {
             .count()
     };
     assert_eq!(woken(), 1, "benchd sent the first message");
-    fake.turns.lock().unwrap().extend([true, false]);
+    fake.turns.lock().unwrap().extend([Some(true), Some(false)]);
     let send = |body: &str| json_of(&bench(h, &["mail", "send", "--to", "cx", "--body", body]));
     // Busy from spawn: benchd has just started its first turn.
     assert_eq!(send("while busy")["wake"], "queued");
@@ -5134,7 +5132,7 @@ fn a_codex_spawn_whose_first_turn_is_refused_fails_and_lets_its_thread_go() {
     let ws = workspace(h);
     trust_codex(h, &[&ws]);
     let fake = FakeCodex::bind(h);
-    fake.turns.lock().unwrap().push_back(false);
+    fake.turns.lock().unwrap().push_back(Some(false));
     let (bin, _) = write_fake_codex(h);
     let _daemon = codex_daemon(h, &bin);
     let run = bench(
@@ -5193,6 +5191,34 @@ fn a_codex_whose_session_fails_after_its_first_turn_has_that_turn_stopped() {
             .any(|u| u["threadId"] == turn["threadId"]),
         "and its thread let go"
     );
+}
+
+#[test]
+fn a_codex_first_turn_codex_names_no_id_for_fails_the_spawn_and_lets_the_thread_go() {
+    // An answer with no turn in it may be a turn benchd cannot stop: the spawn fails, and the
+    // thread is let go, with nothing interrupted because nothing can be named.
+    let home = TestHome::claim("cxnameless");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    fake.turns.lock().unwrap().push_back(None);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let run = bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "codex",
+            "--cwd",
+            &ws.display().to_string(),
+        ],
+    );
+    assert_ne!(run.code, 0, "{}", run.stdout);
+    assert!(run.stderr.contains("named no turn"), "{}", run.stderr);
+    assert_eq!(fake.asked("thread/unsubscribe", 1).len(), 1);
+    assert!(fake.asked_now("turn/interrupt").is_empty());
 }
 
 #[test]
