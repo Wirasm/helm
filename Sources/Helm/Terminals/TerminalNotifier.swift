@@ -46,7 +46,7 @@ final class TerminalNotifier: NSObject {
     /// `bundleURL`. Pulled out so the rule is reachable from `swift test` — the crash it
     /// prevents cannot be, since `current()` aborts rather than throwing.
     /// `nonisolated` because it genuinely is — it reads no actor state, which is what lets the
-    /// rule be tested without a main actor, exactly as `BoardModel.presence` is.
+    /// rule be tested without a main actor.
     nonisolated static func canDeliver(from bundleURL: URL) -> Bool {
         LaunchContext.isAppBundle(bundleURL)
     }

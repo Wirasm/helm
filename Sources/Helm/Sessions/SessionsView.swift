@@ -11,6 +11,7 @@ struct SessionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            NeedsYouSection(foregrounds: TerminalManager.shared.foregrounds) { model.goTo($0) }
             if let problem = model.problem {
                 Text(problem)
                     .font(.system(size: 11))

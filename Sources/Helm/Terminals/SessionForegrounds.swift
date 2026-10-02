@@ -19,10 +19,17 @@ import HelmWire
 @MainActor
 final class SessionForegrounds: ObservableObject {
     private var byPane: [UUID: pid_t] = [:]
-    private var reports: [UUID: BenchLiveSessions.Report] = [:]
-    /// The agents waiting on the operator, by the pane showing each. Published: the status
-    /// bar counts them.
+    /// What each pane's agent says it is doing. Published: the workspace tabs mark an agent at
+    /// work.
+    @Published private(set) var reports: [UUID: BenchLiveSessions.Report] = [:]
+    /// The agents waiting on the operator, by the pane showing each: the snapshot's `agent`.
     @Published private(set) var waiting: [UUID: BenchLiveSessions.Waiting] = [:]
+    /// Everything an agent needs from someone (M1, #357): asking, finished unseen, mail to the
+    /// operator. Published: the status bar, the Sessions drawer and the tabs draw it.
+    @Published private(set) var attention: [AttentionItem] = []
+    /// Called with the items that have just started asking: how a desktop notification is posted
+    /// for an agent he cannot see (`TerminalManager`).
+    var onAsking: (([AttentionItem]) -> Void)?
     /// Each harness's plan limits as benchd last heard them (#143). Published: the status bar
     /// shows them.
     @Published private(set) var usage: [BenchUsage] = []
@@ -43,19 +50,29 @@ final class SessionForegrounds: ObservableObject {
         }.value
         guard let live = answer?.data, answer?.status == .ok else { return }
         byPane = live.foregroundByPane.mapValues { pid_t($0) }
-        reports = live.reportByPane
+        let reports = live.reportByPane
+        if reports != self.reports { self.reports = reports }
         let waiting = live.waitingByPane
         if waiting != self.waiting { self.waiting = waiting }
         if live.usage != usage { usage = live.usage }
+        take(Attention.items(live.sessions))
+    }
+
+    /// Keep what needs someone now, and say which items have just started asking.
+    private func take(_ attention: [AttentionItem]) {
+        let asking = Attention.newlyAsking(before: self.attention, after: attention)
+        if attention != self.attention { self.attention = attention }
+        if !asking.isEmpty { onAsking?(asking) }
     }
 
     /// Set directly, for tests that say what benchd would answer.
     func set(
         _ pids: [UUID: pid_t], waiting: [UUID: BenchLiveSessions.Waiting] = [:],
-        reports: [UUID: BenchLiveSessions.Report] = [:]
+        reports: [UUID: BenchLiveSessions.Report] = [:], attention: [AttentionItem] = []
     ) {
         byPane = pids
         self.waiting = waiting
         self.reports = reports
+        take(attention)
     }
 }

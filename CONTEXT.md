@@ -125,7 +125,9 @@ _Avoid_: panel, sidebar, rail (retired with #382), scratchpad, overlay
 The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
 `sessions/all` answers it (#384): running first, then newest. A row opens with the one action
 benchd computed for it — show its pane, attach, resume or read its transcript — and a finished
-row can be dismissed. helm adds no rule of its own about which sessions belong.
+row can be dismissed. helm adds no rule of its own about which sessions belong. On top sits
+**needs you**: every agent asking the operator, finished and not seen, or with mail for him (#357),
+mine or all; a row goes to its pane.
 _Avoid_: agent list, sidebar, session browser
 
 **Archon drawer**:
@@ -147,14 +149,19 @@ _Avoid_: notification, unread count, dot (that is how helm will draw it, not wha
 
 ### What helm looks like
 
+**attention**:
+Who needs the operator and why (#357), as benchd projects it on each session: **asking** (●, a
+prompt only he can answer), **finished** (✓, a turn that ended and he has not looked at; looking
+at its pane clears it, nothing else does) and **message** (✉, mail to him). The status bar counts
+his own, the Sessions drawer lists them under needs you, pane and workspace tabs carry the glyph,
+and ⌘⇧J walks them in that order. helm keeps no attention state; nothing auto-closes.
+_Avoid_: notification, unread, inbox, alert
+
 **board**:
 The workspace bar's answer to *which workspace has an agent that needs you* — one mark per
-workspace tab, from what each pane's agent reports alone (benchd's `report`, read from Claude
-Code's registry or the agent's hooks on benchd's machine). Three renderings and not two: nothing
-where there is no agent, a quiet dot where every agent is working, an attention dot where one has
-stopped. helm holds **no state of its own** here — the report's lifecycle is the mark's lifecycle,
-so nothing acknowledges, decays or expires, and there is nothing to clear. It never hides,
-including on the workspace being looked at.
+workspace tab: the most urgent **attention** glyph among its panes, else a quiet ○ while an agent
+there works, else nothing. helm holds **no state of its own** here: it is read off benchd's answer
+every time. It never hides, including on the workspace being looked at.
 _Avoid_: **drawable board** (a different thing — see below), status bar, badge, notification
 centre, calling the attention dot an "unread"
 

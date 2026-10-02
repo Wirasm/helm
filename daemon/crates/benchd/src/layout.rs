@@ -47,7 +47,13 @@ pub struct Outcome {
 
 /// A layout verb's answer. A pane it closes takes its session with it, and a terminal pane it
 /// opens gets a shell (both in [`commit`]).
-pub fn answer(core: &mut Core, req: &Request) -> Response {
+/// `mail` is the operator's unread mail by sender, which only `focus/waiting` reads; the caller
+/// reads it before taking the core lock.
+pub fn answer(
+    core: &mut Core,
+    req: &Request,
+    mail: &std::collections::HashMap<String, bench_wire::OperatorMail>,
+) -> Response {
     let reply = |status: Status, reason: Option<String>, data: Option<Value>| Response {
         id: req.id.clone(),
         status,
@@ -78,7 +84,7 @@ pub fn answer(core: &mut Core, req: &Request) -> Response {
     };
     let focus = Actor::focus(&by, req.asked);
     let waiting = matches!(verb, LayoutVerb::FocusWaiting {})
-        .then(|| crate::waiting::next_pane(core))
+        .then(|| crate::waiting::next_pane(core, mail))
         .flatten();
     let mut next = core.bench.document.clone();
     let rules = core.placement.rules();

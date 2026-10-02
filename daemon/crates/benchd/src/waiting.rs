@@ -23,8 +23,11 @@ use crate::hook::Agent;
 use crate::{Core, prompts, sessions::now_ms};
 use bench_doc::PaneId;
 use bench_session::{AgentKind, Session};
-use bench_wire::{Activity, AgentReport, SessionKey, Waiting, WaitingSource};
+use bench_wire::{
+    Activity, AgentReport, OPERATOR_HANDLE, OperatorMail, SessionKey, Waiting, WaitingSource,
+};
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -134,27 +137,60 @@ fn decide(reported: Option<(&Activity, u64)>, seen: Option<&Seen>) -> Option<Wai
     Some(seen.clone())
 }
 
-/// Where `focus/waiting` goes: every pane showing a session whose agent waits on the operator,
-/// the longest wait first, and of those the one after the focused pane, so pressing again walks
-/// them and comes round. `None` when nothing waits.
-pub fn next_pane(c: &Core) -> Option<PaneId> {
+/// Where `focus/waiting` (⌘⇧J) goes: every pane whose agent needs the operator, in the order his
+/// list shows them (asking, then a finished turn of his he has not seen, then mail to him), the
+/// oldest first in each, and of those the one after the focused pane, so pressing again walks them
+/// and comes round. A finished turn is seen once focus arrives, so the walk empties as he goes.
+/// `mail` is his unread mail by sender, read before the core lock. `None` when nothing needs him.
+pub fn next_pane(c: &Core, mail: &HashMap<String, OperatorMail>) -> Option<PaneId> {
     let doc = &c.bench.document;
-    let waiting = c
-        .sessions
-        .keys()
-        .filter_map(|id| Some((of_session(c, id)?.since_ms, doc.pane_showing_session(id)?)))
-        .collect();
-    next_after(waiting, doc.focused_pane())
+    let mut focused = None;
+    let mut needs = Vec::new();
+    for s in c.sessions.values() {
+        let Some(pane) = doc.pane_showing_session(&s.id) else {
+            continue;
+        };
+        // The focused pane keeps its place even once it is seen (arriving there saw it), so the
+        // next press goes on from it rather than back to the top.
+        if Some(pane) == doc.focused_pane() {
+            focused = needs_you(c, s, mail, true).map(|key| (key, pane));
+        }
+        if let Some(key) = needs_you(c, s, mail, false) {
+            needs.push((key, pane));
+        }
+    }
+    next_after(needs, focused)
 }
 
-/// The ordering on its own: the longest wait first (ties by pane id, so it is stable), and the
-/// one after `focused` when it is one of them.
-fn next_after(mut waiting: Vec<(u64, PaneId)>, focused: Option<PaneId>) -> Option<PaneId> {
-    waiting.sort_by_key(|(since, pane)| (*since, pane.to_string()));
-    let after = focused
-        .and_then(|f| waiting.iter().position(|(_, p)| *p == f))
-        .map_or(0, |at| at + 1);
-    waiting.get(after % waiting.len().max(1)).map(|(_, p)| *p)
+/// Why a session's agent needs the operator, as (rank, since): 0 asking, 1 finished, 2 mail. A
+/// finished turn he has seen counts only `with_seen`, for where the focused pane sits.
+fn needs_you(
+    c: &Core,
+    s: &Session,
+    mail: &HashMap<String, OperatorMail>,
+    with_seen: bool,
+) -> Option<(u8, u64)> {
+    if let Some(w) = of_session(c, &s.id) {
+        return Some((0, w.since_ms));
+    }
+    let runtime = crate::hook::conversation(c, s);
+    let (done, mail) = crate::attention::of_session(c, s, runtime.as_deref(), mail);
+    done.filter(|d| (with_seen || !d.seen) && d.to == OPERATOR_HANDLE)
+        .map(|d| (1, d.since_ms))
+        .or_else(|| mail.map(|m| (2, m.since_ms)))
+}
+
+type Need = ((u8, u64), PaneId);
+
+/// The ordering on its own: by rank, then the oldest first (ties by pane id, so it is stable),
+/// and the first one after the `focused` pane's place in it, coming round at the end.
+fn next_after(mut needs: Vec<Need>, focused: Option<Need>) -> Option<PaneId> {
+    let key = |(rank, pane): &Need| (*rank, pane.to_string());
+    needs.sort_by_key(key);
+    let after = focused.map_or(0, |f| {
+        needs.iter().take_while(|n| key(n) <= key(&f)).count()
+    });
+    needs.get(after % needs.len().max(1)).map(|(_, p)| *p)
 }
 
 /// What the agent in a live session says it is doing (`SessionEntry.report`): Claude Code's
@@ -266,17 +302,27 @@ mod tests {
     }
 
     #[test]
-    fn the_jump_starts_at_the_longest_wait_and_walks_round() {
-        let [a, b, c] = [PaneId::mint(), PaneId::mint(), PaneId::mint()];
-        let waiting = vec![(30, c), (10, a), (20, b)];
-        let other = PaneId::mint();
-        assert_eq!(next_after(waiting.clone(), None), Some(a));
-        assert_eq!(next_after(waiting.clone(), Some(other)), Some(a));
-        assert_eq!(next_after(waiting.clone(), Some(a)), Some(b));
-        assert_eq!(next_after(waiting.clone(), Some(b)), Some(c));
-        assert_eq!(next_after(waiting, Some(c)), Some(a));
-        assert_eq!(next_after(vec![(10, a)], Some(a)), Some(a));
-        assert_eq!(next_after(Vec::new(), Some(a)), None);
+    fn the_jump_goes_by_rank_then_the_oldest_and_walks_round() {
+        let [a, b, c, d] = [
+            PaneId::mint(),
+            PaneId::mint(),
+            PaneId::mint(),
+            PaneId::mint(),
+        ];
+        // A finished turn and mail are older than the wait; asking still comes first.
+        let needs = vec![((2, 5), d), ((1, 1), c), ((0, 30), b), ((0, 10), a)];
+        let at = |pane, key| Some((key, pane));
+        assert_eq!(next_after(needs.clone(), None), Some(a));
+        assert_eq!(next_after(needs.clone(), at(a, (0, 10))), Some(b));
+        assert_eq!(next_after(needs.clone(), at(b, (0, 30))), Some(c));
+        assert_eq!(next_after(needs.clone(), at(c, (1, 1))), Some(d));
+        assert_eq!(next_after(needs.clone(), at(d, (2, 5))), Some(a));
+        // Arriving at the finished turn saw it, so it left the list; the walk goes on from its
+        // place, to the mail, not back to the top.
+        let seen = vec![((2, 5), d), ((0, 30), b), ((0, 10), a)];
+        assert_eq!(next_after(seen, at(c, (1, 1))), Some(d));
+        assert_eq!(next_after(vec![((0, 10), a)], at(a, (0, 10))), Some(a));
+        assert_eq!(next_after(Vec::new(), at(a, (0, 10))), None);
     }
 
     #[test]

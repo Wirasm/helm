@@ -3,7 +3,7 @@ import Foundation
 
 /// Watches for a newer build and, when the operator asks, swaps to it.
 ///
-/// **Polling, not watching, and for the reason `BoardModel` already documents.** The stamp is
+/// **Polling, not watching.** The stamp is
 /// one file that gets *rewritten* at the same path on every build, and a directory-level
 /// `DispatchSource` reports entries appearing and disappearing rather than a write to a file
 /// already listed there. A file *appearing* is the visible case; a rewrite is the invisible one,

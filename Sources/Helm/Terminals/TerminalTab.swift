@@ -4,6 +4,8 @@ import SwiftUI
 /// status change re-renders that tab alone rather than the whole strip.
 struct TerminalTab: View {
     @ObservedObject var session: TerminalSession
+    /// What the agent in this pane needs from the operator (M1, #357), redrawn when benchd says.
+    @ObservedObject var foregrounds: SessionForegrounds
     let slot: SurfaceSlot
 
     private var isSelected: Bool { slot.isSelected }
@@ -22,6 +24,14 @@ struct TerminalTab: View {
             Image(systemName: "poweroff")
                 .font(.system(size: 8))
                 .foregroundStyle(Color.textFaint)
+        } else if let kind = Attention.byPane(foregrounds.attention)[session.id] {
+            // The agent here is asking, finished unseen, or mailed him: the glyph every other
+            // surface uses. Shown on the selected tab too: it is the agent's state, not news.
+            Text(kind.glyph)
+                .font(.system(size: 9))
+                .foregroundStyle(kind.color)
+                .help(kind.help(1))
+                .accessibilityLabel(kind.help(1))
         } else if session.hasBell, !isSelected {
             // Bell from a tab you are not looking at (BEL — e.g. an agent asking
             // for attention). Cleared when the tab is selected.

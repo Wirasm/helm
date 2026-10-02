@@ -12,9 +12,8 @@ import SwiftUI
 struct RootView: View {
     @ObserveInjection private var inject
     @StateObject private var model: WorkspaceModel
-    /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` and
-    /// `BoardModel.shared` are singletons because other slices reach them, and nothing
-    /// outside the workbench reaches this one. Drawn from benchd's document (#354).
+    /// A `@StateObject` rather than a `.shared`: `TerminalManager.shared` is a singleton
+    /// because other slices reach it, and nothing outside the workbench reaches this one. Drawn from benchd's document (#354).
     @StateObject private var workbench: WorkbenchModel
     /// The operator's just runs (#356): started by his keys, failures shown on the status bar.
     @StateObject private var justRuns = JustRuns()

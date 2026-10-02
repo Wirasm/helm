@@ -18,7 +18,7 @@ import os
 /// (`verbFailure`, and the status bar's capsule).
 ///
 /// `TerminalManager` still owns every session, flat and app-wide, because a background
-/// workspace's terminals must stay alive (`BoardModel.hostedPids` reads exactly that).
+/// workspace's terminals must stay alive (a parked workspace's mark reads them).
 ///
 /// **Every command a vertical owns lives here, for the reason `TerminalWorkspace`'s header
 /// gave and this makes truer.** That file kept the terminal commands inside the terminal
@@ -114,8 +114,8 @@ final class WorkbenchModel: ObservableObject {
     /// token the observer API hands back.
     private var commands: Set<AnyCancellable> = []
 
-    /// Internal, not a `.shared`. `TerminalManager.shared` and `BoardModel.shared` are
-    /// singletons because other slices reach them; nothing outside the workbench needs
+    /// Internal, not a `.shared`. `TerminalManager.shared` is a singleton because other
+    /// slices reach it; nothing outside the workbench needs
     /// this one, and an injectable initialiser is what lets tests build isolated models.
     init(
         terminals: TerminalManager,
