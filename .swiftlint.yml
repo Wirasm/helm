@@ -27,6 +27,7 @@ included:
   - Sources
   - Tests
   - tools
+  - Pocket
 excluded:
   - tools/lint/.build
 

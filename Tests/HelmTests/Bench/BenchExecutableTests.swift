@@ -1,3 +1,4 @@
+import BenchKit
 import HelmWire
 import XCTest
 
@@ -114,7 +115,7 @@ final class BenchExecutableTests: XCTestCase {
     @MainActor
     func testAClientWithNoBenchdNeverAnswersABareName() {
         let client = BenchClient(endpoint: .unix(path: "/nonexistent/benchd.sock"))
-        switch client.benchExecutable {
+        switch AttachBench(client: client).current {
         case let .success(path): XCTAssertTrue(path.hasPrefix("/"), path)
         case let .failure(.notFound(missing)):
             XCTAssertTrue(missing.asked.contains("could not be asked"))

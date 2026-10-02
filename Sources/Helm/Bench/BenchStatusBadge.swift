@@ -1,3 +1,4 @@
+import BenchKit
 import SwiftUI
 
 /// benchd's side of the status bar (#354): a capsule when the follower cannot

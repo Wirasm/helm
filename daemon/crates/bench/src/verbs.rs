@@ -104,6 +104,7 @@ struct Parsed {
     rename: bool,
     history: bool,
     enter: bool,
+    keys: bool,
 }
 
 impl Parsed {
@@ -132,6 +133,7 @@ fn parse(raw: &[String]) -> Result<Parsed, String> {
         rename: false,
         history: false,
         enter: false,
+        keys: false,
     };
     let mut it = raw.iter();
     while let Some(arg) = it.next() {
@@ -141,6 +143,7 @@ fn parse(raw: &[String]) -> Result<Parsed, String> {
             "--rename" => parsed.rename = true,
             "--history" => parsed.history = true,
             "--enter" => parsed.enter = true,
+            "--keys" => parsed.keys = true,
             flag if VALUED.contains(&flag) => match it.next() {
                 Some(v) => parsed.values.push((flag.to_string(), v.clone())),
                 None => return Err(format!("{flag} needs a value")),
@@ -400,7 +403,8 @@ fn screen_get(p: &Parsed) -> Result<(String, Value), String> {
     ))
 }
 
-/// `send <pane|session> <text> [--enter]`: typed into the terminal, Return after it on its own.
+/// `send <pane|session> <text> [--enter] [--keys]`: typed into the terminal, Return after it on
+/// its own. `--keys` writes the text as keys rather than a paste.
 fn send(p: &Parsed) -> Result<(String, Value), String> {
     let target = p
         .words
@@ -416,6 +420,7 @@ fn send(p: &Parsed) -> Result<(String, Value), String> {
             target: target.clone(),
             text,
             enter: p.enter,
+            keys: p.keys,
         }),
     ))
 }

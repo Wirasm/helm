@@ -1,0 +1,40 @@
+import PocketKit
+import SwiftUI
+
+/// Pocket's colours, from the mockup (`proposals/phone.html`): one dark console, state by glyph
+/// and colour. Spend these; a view never names a colour of its own.
+enum Palette {
+    static let background = Color(rgb: 0x15181B)
+    static let sheet = Color(rgb: 0x1B1F23)
+    static let line = Color(rgb: 0x25292E)
+    static let text = Color(rgb: 0xD9DCE0)
+    static let dim = Color(rgb: 0x6B7178)
+    static let faint = Color(rgb: 0x3E444A)
+    static let asking = Color(rgb: 0xE8A33D)
+    static let finished = Color(rgb: 0x5FC0AC)
+
+    static func of(_ attention: Attention) -> Color {
+        switch attention {
+        case .asking: asking
+        case .finished: finished
+        case .working: faint
+        }
+    }
+}
+
+/// The one typeface: monospaced, as a terminal.
+enum Mono {
+    static let body = Font.system(size: 13, design: .monospaced)
+    static let small = Font.system(size: 11.5, design: .monospaced)
+    static let group = Font.system(size: 11, design: .monospaced)
+    static let screen = Font.system(size: 10, design: .monospaced)
+    static let title = Font.system(size: 13, weight: .semibold, design: .monospaced)
+}
+
+extension Color {
+    fileprivate init(rgb: UInt32) {
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255)
+    }
+}

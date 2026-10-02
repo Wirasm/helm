@@ -91,7 +91,8 @@ const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --versi
      \x20     watch <handle> [--timeout <s>]      until its agent waits, ends a turn after --after\n\
      \x20           [--after <ms>]                <ms>, or its session ends; exit 3 at --timeout\n\
      \x20     send <pane|session> <text>          type into a terminal (a bracketed paste when the\n\
-     \x20           [--enter]                     program asked for one); --enter adds Return\n\
+     \x20           [--enter] [--keys]            program asked for one); --enter adds Return;\n\
+     \x20                                         --keys types it as keys, never pasted\n\
      \x20     (every pane verb lands in the background; --asked says the operator asked, and\n\
      \x20      only then may it bring something forward or move his focus)\n\
      \x20     sessions                            list bench sessions\n\

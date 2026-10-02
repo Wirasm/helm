@@ -68,6 +68,9 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var branch: String?
     /// The model the agent runs, as its harness last recorded it; nil until it records one.
     package var model: String?
+    /// Its benchd mailbox (`mail.handle`), the name agents and the operator address it by: set
+    /// for a session benchd spawned or one whose hook claimed a mailbox.
+    package var handle: String?
     package var cwd: String
     package var state: State
     package var open: Open
@@ -99,14 +102,15 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case harness, id, parent, name, branch, model, cwd, state, open, done, spawner
+        case harness, id, parent, name, branch, model, cwd, state, open, mail, done, spawner
         case updatedAtMs = "updated_at_ms"
         case operatorMail = "operator_mail"
     }
+    private struct Mail: Decodable { var handle: String }
 
     package init(
         harness: String, id: String, parent: String? = nil, name: String? = nil,
-        branch: String? = nil, model: String? = nil, cwd: String,
+        branch: String? = nil, model: String? = nil, handle: String? = nil, cwd: String,
         state: State, open: Open, updatedAtMs: UInt64, done: BenchDone? = nil,
         operatorMail: BenchOperatorMail? = nil, spawner: BenchSpawner? = nil
     ) {
@@ -116,6 +120,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         self.name = name
         self.branch = branch
         self.model = model
+        self.handle = handle
         self.cwd = cwd
         self.state = state
         self.open = open
@@ -133,6 +138,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        handle = try c.decodeIfPresent(Mail.self, forKey: .mail)?.handle
         cwd = try c.decode(String.self, forKey: .cwd)
         state = try c.decode(State.self, forKey: .state)
         open = try c.decode(Open.self, forKey: .open)
@@ -140,6 +146,20 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         done = try c.decodeIfPresent(BenchDone.self, forKey: .done)
         operatorMail = try c.decodeIfPresent(BenchOperatorMail.self, forKey: .operatorMail)
         spawner = try c.decodeIfPresent(BenchSpawner.self, forKey: .spawner)
+    }
+}
+
+extension BenchSessionRow {
+    /// How long ago an epoch-ms time was, in one unit: `40s`, `2m`, `3h`, `5d`. helm's sessions
+    /// drawer and Pocket say a row's age the same way.
+    package static func age(sinceMs ms: UInt64, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince1970) - Int(ms / 1000))
+        switch seconds {
+        case ..<60: return "\(seconds)s"
+        case ..<3600: return "\(seconds / 60)m"
+        case ..<86400: return "\(seconds / 3600)h"
+        default: return "\(seconds / 86400)d"
+        }
     }
 }
 

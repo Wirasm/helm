@@ -10,7 +10,7 @@
 #                                      exit 0 if <part> must run for `base...HEAD`
 #                                      (default base origin/development), 1 if not. CI uses it.
 #
-# Parts: lint swift skills daemon pi. Within a part the first failure stops it; across
+# Parts: lint swift skills daemon pi ios. Within a part the first failure stops it; across
 # parts the run continues, so one red part does not hide another.
 #
 # HELM_CHECK_HEADLESS=1 is the one difference in the commands CI runs: no runner has an active
@@ -22,11 +22,12 @@
 # and sixty worktrees' builds filled the disk on 2026-10-01. CI sets it to 0, which turns it off.
 #
 # lint and swift need only the Swift toolchain and xcodegen (AGENTS.md). The other parts need
-# node, bash/zsh/python3, cargo or npm; a missing tool is a FAIL that names it, never a skip.
+# node, bash/zsh/python3, cargo, npm or Xcode's iOS platform; a missing tool is a FAIL that names
+# it, never a skip.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-ALL_PARTS="lint swift skills daemon pi"
+ALL_PARTS="lint swift skills daemon pi ios"
 
 # ---- path rules: the only place that says which change needs which part ----
 
@@ -55,6 +56,8 @@ needs() {
         # GhosttyTerminal's Package.swift: daemon/test.sh checks the VT engine's commit against it.
         daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|\.claude/skills/helm-canvas/|\.claude/skills/helm-orchestrate/|Sources/Helm/Shared/RenderableFile\.swift|Sources/Helm/Resources/ghostty/shell-integration/|Packages/GhosttyTerminal/Package\.swift)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
+        # What Pocket's iOS build compiles (Pocket/project.yml).
+        ios) grep -qE '^(Sources/(HelmWire|BenchKit|PocketKit)/|Pocket/)' <<<"$paths" ;;
         swift)
             # Runs when nothing changed at all, too: an empty diff proves nothing.
             [ -n "$paths" ] || return 0
@@ -73,8 +76,8 @@ needs() {
 # swift part: tests read project.yml, scripts/, daemon/fixtures/ and the canvas and board
 # skills, and Sources/ bundles markdown as resources. Re-grep Tests/ and Sources/ for repo
 # paths before adding to it. CI's Swift job also skips its lint step on this answer, which is
-# safe only while everything lint reads (Sources/, Tests/, tools/, .swiftlint.yml,
-# .swift-format) stays outside this list.
+# safe only while everything lint reads (Sources/, Tests/, tools/, Pocket/,
+# .swiftlint.yml, .swift-format) stays outside this list.
 swift_ignores() {
     case "$1" in
         daemon/fixtures/*) return 1 ;;
@@ -90,6 +93,7 @@ skip_reason() {
         swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
         daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-*, helm-canvas, helm-orchestrate, RenderableFile.swift or the shell integration" ;;
         pi) echo "no changes under pi/" ;;
+        ios) echo "no changes under Pocket/ or the Sources/ it compiles (HelmWire, BenchKit, PocketKit)" ;;
     esac
 }
 
@@ -133,6 +137,23 @@ part_skills() {
 part_daemon() {
     require cargo daemon || return 1
     bash daemon/test.sh
+}
+
+# Pocket, built for the iOS simulator: the one build that proves HelmWire and BenchKit, which
+# helm shares with it, hold nothing macOS-only. Needs Xcode with its iOS platform installed, not
+# just the Swift toolchain, so it is a part of its own and `lint` and `swift` never need it.
+part_ios() {
+    for tool in xcodegen xcodebuild; do require "$tool" ios || return 1; done
+    xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1 || {
+        echo "check: the iOS simulator SDK is not installed (Xcode > Settings > Components); the ios part needs it"
+        return 1
+    }
+    echo "--> xcodegen"
+    xcodegen generate --spec Pocket/project.yml || return 1
+    echo "--> build for the iOS simulator"
+    xcodebuild -quiet -project Pocket/Pocket.xcodeproj -scheme Pocket -sdk iphonesimulator \
+        -destination 'generic/platform=iOS Simulator' -derivedDataPath .build/pocket \
+        CODE_SIGNING_ALLOWED=NO build
 }
 
 part_pi() {

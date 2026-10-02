@@ -28,7 +28,7 @@ package enum BenchRoot {
 
     package static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     ) -> Result<URL, BenchRootError> {
         // The bench suite is judged first, as `bench` judges it before resolving anything: a
         // name that cannot isolate is an error even when BENCH_DIR would win.
@@ -64,7 +64,7 @@ package enum BenchRoot {
     /// URL set. The one place the socket is derived: every caller asks here.
     package static func endpoint(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     ) -> Result<BenchEndpoint, BenchRootError> {
         resolve(environment: environment, home: home).flatMap { root in
             let url = environment[BenchEndpoint.urlVariable]

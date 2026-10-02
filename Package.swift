@@ -39,6 +39,20 @@ let package = Package(
             name: "HelmWire",
             path: "Sources/HelmWire"
         ),
+        // benchd's client, shared by helm and Pocket (the iOS app in `Pocket/`): one socket, a
+        // verb per request, the follower that carries the document. Nothing macOS-only goes in
+        // here; the `ios` gate part builds it for the iOS simulator.
+        .target(
+            name: "BenchKit",
+            dependencies: ["HelmWire"],
+            path: "Sources/BenchKit"
+        ),
+        // What Pocket shows and sends, without its views, so `swift test` tests it on the Mac.
+        .target(
+            name: "PocketKit",
+            dependencies: ["HelmWire", "BenchKit"],
+            path: "Sources/PocketKit"
+        ),
         // The spike runs as a plain SPM executable (`swift run helm`) for fast iteration.
         // Graduation to a real .app bundle (XcodeGen + entitlements) happens after the
         // libghostty embed is proven — see docs/SPIKE.md.
@@ -46,6 +60,7 @@ let package = Package(
             name: "Helm",
             dependencies: [
                 "HelmWire",
+                "BenchKit",
                 .product(name: "GhosttyTerminal", package: "GhosttyTerminal"),
                 .product(name: "InjectionNext", package: "InjectionNext"),
                 .product(name: "Inject", package: "Inject"),
@@ -104,7 +119,7 @@ let package = Package(
         // Non-GUI smoke: ghostty_init + config load + app create, no window.
         .testTarget(
             name: "HelmTests",
-            dependencies: ["Helm", "HelmWire"],
+            dependencies: ["Helm", "HelmWire", "BenchKit", "PocketKit"],
             path: "Tests/HelmTests",
             resources: [
                 // Real `archon --json` output, captured rather than typed. This PR shipped a
@@ -124,6 +139,11 @@ let package = Package(
                 // with Archon's in the bundle.
                 .copy("Canvas/canvas-dom-stub.js")
             ]
+        ),
+        .testTarget(
+            name: "PocketKitTests",
+            dependencies: ["PocketKit", "HelmWire"],
+            path: "Tests/PocketKitTests"
         ),
         // The wrapper's own tests: the behaviour helm used to carry as patches (the wakeup
         // fan-out, the clipboard a write lands on). Here rather than in

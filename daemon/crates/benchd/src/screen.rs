@@ -4,11 +4,12 @@
 //!
 //! A target is a pane id (the terminal that pane shows) or a session id. Sent text is logged by
 //! its length and who sent it, never its content: what is typed into a shell can be a secret.
+//! Text is pasted unless the sender says it is keys, which are written as they are.
 
 use crate::Core;
 use bench_doc::PaneId;
 use bench_session::Session;
-use bench_wire::{Actor, ScreenAnswer, ScreenGetArgs, ScreenSendArgs, Verb};
+use bench_wire::{Actor, ScreenAnswer, ScreenGetArgs, ScreenSendArgs, ScreenSent, Verb};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -52,7 +53,7 @@ fn send(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Result<Valu
     let args: ScreenSendArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("screen/send args: {e}"))?;
     let session = live_session(core, &args.target)?;
-    let pasted = session.screen(false)?.bracketed_paste;
+    let pasted = !args.keys && session.screen(false)?.bracketed_paste;
     let bytes = paste(&args.text, pasted);
     session.write_input(bytes.as_bytes())?;
     // Return on its own, after the paste: inside one, a program takes it as text.
@@ -66,10 +67,14 @@ fn send(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Result<Valu
             "session": session.id,
             "bytes": args.text.len(),
             "enter": args.enter,
+            "keys": args.keys,
             "by": by.unwrap_or_else(Actor::agent),
         }),
     )?;
-    Ok(json!({ "session": session.id, "bracketed": pasted }))
+    Ok(json!(ScreenSent {
+        session: session.id.clone(),
+        bracketed: pasted,
+    }))
 }
 
 /// `text` as it is typed: whole inside a bracketed paste when the program asked for one, with

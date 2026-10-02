@@ -255,6 +255,8 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(list.rows.contains { $0.model == "claude-opus-5-5[1m]" })
         XCTAssertTrue(list.rows.contains { $0.model == nil })
         XCTAssertTrue(list.rows.contains { $0.branch == nil })
+        XCTAssertEqual(list.rows.compactMap(\.handle), ["reviewer", "s4", "drawer-pi"])
+        XCTAssertTrue(list.rows.contains { $0.handle == nil }, "a row with no mailbox")
     }
 
     /// The operator's `just/run`, its answer and the `just/finished` frame, and `just/list` with

@@ -1,3 +1,4 @@
+import BenchKit
 import Foundation
 import HelmWire
 import XCTest
@@ -71,8 +72,8 @@ final class BenchClientTests: XCTestCase {
         server.answer = { request in
             ["id": request["id"] ?? "", "status": "ok", "data": ["bench": "/forge/only/bench"]]
         }
-        let client = BenchClient(endpoint: server.endpoint)
-        switch client.benchExecutable {
+        let attach = AttachBench(client: BenchClient(endpoint: server.endpoint))
+        switch attach.current {
         case let .success(bench): XCTFail("attached with \(bench) to a benchd of no version")
         case let .failure(.notFound(missing)):
             XCTAssertTrue(missing.asked.contains("over TCP"), missing.asked)
@@ -81,7 +82,7 @@ final class BenchClientTests: XCTestCase {
             XCTAssertEqual(other.benchd, "unknown")
         case let .failure(.noAnswer(slow)): XCTFail(slow.description)
         }
-        _ = client.benchExecutable
+        _ = attach.current
         XCTAssertLessThanOrEqual(
             server.verbs.count, 1, "the verdict is kept for the connection, not asked per drawing")
     }
@@ -158,6 +159,48 @@ final class BenchClientTests: XCTestCase {
             "reconnected with the whole document: \(seen)")
         XCTAssertEqual(client.state, .connected)
         XCTAssertEqual(server.followerCount, 1)
+    }
+
+    /// Which `bench` to attach with is asked once per connection: a drawing on the same
+    /// connection reuses the answer, and the first drawing after a reconnect, which runs inside
+    /// the document delivery, asks again, since a restarted benchd may be another build.
+    func testTheAttachBenchIsAskedAgainAfterAReconnect() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helm-attach-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bench = dir.appendingPathComponent("bench").path
+        try "#!/bin/sh\nexit 0\n".write(toFile: bench, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bench)
+
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        server.answer = { request in
+            ["id": request["id"] ?? "", "status": "ok", "data": ["bench": bench]]
+        }
+        let client = BenchClient(endpoint: .unix(path: server.path))
+        let attach = AttachBench(client: client)
+        var asked: [Int] = []
+        let statuses = { server.verbs.filter { $0["verb"] as? String == "status" }.count }
+        // As WorkbenchModel draws: asked from inside the document delivery.
+        client.onDocument = { _ in
+            _ = attach.current
+            asked.append(statuses())
+        }
+        client.start()
+        defer { client.stop() }
+        XCTAssertTrue(Eventually.holds { asked == [1] }, "\(asked)")
+        XCTAssertEqual(try attach.current.get(), bench)
+        XCTAssertEqual(statuses(), 1, "the same connection reuses the answer")
+
+        server.setDocument(
+            BenchFixture.document(path, BenchFixture.bench([BenchFixture.terminal()]), seq: 9))
+        server.dropFollowers()
+        XCTAssertTrue(
+            Eventually.holds(within: 5) { asked.count == 2 }, "reconnected: \(asked)")
+        XCTAssertEqual(asked, [1, 2], "the drawing after a reconnect asked benchd again")
     }
 
     /// No daemon at all: the state names the socket's failure, and a verb throws rather than
