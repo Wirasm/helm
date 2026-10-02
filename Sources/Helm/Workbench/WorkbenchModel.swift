@@ -1,4 +1,5 @@
 import AppKit
+import BenchKit
 import Combine
 import Foundation
 import HelmWire
@@ -85,6 +86,8 @@ final class WorkbenchModel: ObservableObject {
 
     /// benchd, over its socket: a request per verb, and the follower that delivers documents.
     let client: BenchClient
+    /// The `bench` a terminal pane runs to show its session.
+    private let attachBench: AttachBench
 
     /// The document the bench was last drawn from. nil until benchd first answers.
     @Published private(set) var document: BenchDocument?
@@ -121,6 +124,7 @@ final class WorkbenchModel: ObservableObject {
         client: BenchClient
     ) {
         self.client = client
+        attachBench = AttachBench(client: client)
         self.terminals = terminals
         self.notes = notes
         // Registered here rather than by the manager because both need the bench: the canvas
@@ -568,7 +572,7 @@ extension WorkbenchModel {
             terminals.adopt(
                 terminals: bench.terminalPaneIDs, in: active,
                 attaching: document.workspace(at: active)?.bench
-                    .attachCommands(bench: client.benchExecutable) ?? [:])
+                    .attachCommands(bench: attachBench.current) ?? [:])
         } else if drawing.workspace == nil {
             terminals.deactivate()
         }

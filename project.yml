@@ -52,6 +52,19 @@ targets:
         # invisible to `Helm` here even though `swift build` saw them fine. Must match `Helm`'s
         # own `SWIFT_PACKAGE_NAME` below exactly, or the two targets are two packages again.
         SWIFT_PACKAGE_NAME: helm
+  # benchd's client, shared with Pocket (Pocket/project.yml): Package.swift's `BenchKit` target, in
+  # lockstep with it as HelmWire is.
+  BenchKit:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/BenchKit
+    dependencies:
+      - target: HelmWire
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        SWIFT_PACKAGE_NAME: helm
   Helm:
     type: application
     platform: macOS
@@ -108,6 +121,7 @@ targets:
         basedOnDependencyAnalysis: false
     dependencies:
       - target: HelmWire
+      - target: BenchKit
       - package: GhosttyTerminal
         product: GhosttyTerminal
       - package: InjectionNext

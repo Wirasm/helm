@@ -15,34 +15,38 @@ import HelmWire
 /// falling behind, costs a redraw and nothing else. While it is down `state` says so, and the
 /// last document stays on screen.
 @MainActor
-final class BenchClient: ObservableObject {
-    enum State: Equatable {
+package final class BenchClient: ObservableObject {
+    package enum State: Equatable {
         case connecting
         case connected
         /// Why, with the socket named, for the status bar.
         case disconnected(String)
     }
 
-    @Published private(set) var state: State = .connecting
+    @Published package private(set) var state: State = .connecting
 
     /// Where this client reaches benchd (`BenchRoot.endpoint`); nil when there is nowhere to try.
-    let endpoint: BenchEndpoint?
+    package let endpoint: BenchEndpoint?
 
     /// Each document the follower delivers, on the main actor, in order. The first after a
     /// (re)connect is the whole state and is delivered unless a newer one already was; after that
     /// only a newer seq is.
-    var onDocument: ((DocumentAt) -> Void)?
+    package var onDocument: ((DocumentAt) -> Void)?
     /// Who changed the document, for what helm remembers about a pane (a canvas's origin).
-    var onChange: ((BenchChange) -> Void)?
+    package var onChange: ((BenchChange) -> Void)?
 
     /// Each frame that carries no document — an event that changed no arrangement, such as a
     /// just run finishing (#356) — as the line benchd wrote, on the main actor. Whoever reads a
     /// kind decodes its data itself.
-    var onEvent: ((Data) -> Void)?
+    package var onEvent: ((Data) -> Void)?
 
     /// The follower (re)connected, after its first document was delivered. Events benchd sent
     /// while it was down are gone, so whatever depends on one reads its state again here.
-    var onConnected: (() -> Void)?
+    package var onConnected: (() -> Void)?
+
+    /// How many times the follower has connected. A value that holds for one connection, such as
+    /// which `bench` helm attaches with, is kept against this and asked again when it moves.
+    package private(set) var connections = 0
 
     private let latest = LatestDocument()
     private var follower: BenchFollower?
@@ -50,25 +54,25 @@ final class BenchClient: ObservableObject {
 
     /// How long a verb may wait for its answer. benchd answers in milliseconds; this is the
     /// ceiling on a daemon that has stopped answering, so a key does not hang the window.
-    nonisolated static let requestTimeout: TimeInterval = 2
+    package nonisolated static let requestTimeout: TimeInterval = 2
 
     /// Set when there is no socket to try at all — a bench root benchd would refuse. Then the
     /// client never connects, and says why for as long as it lives.
     private let refused: String?
 
-    init(endpoint: BenchEndpoint) {
+    package init(endpoint: BenchEndpoint) {
         self.endpoint = endpoint
         refused = nil
     }
 
-    init(unreachable why: String) {
+    package init(unreachable why: String) {
         endpoint = nil
         refused = why
         state = .disconnected(why)
     }
 
     /// The client for this helm's benchd (`BenchRoot.endpoint`), or why there is none.
-    static func resolve(
+    package static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Result<BenchClient, BenchRootError> {
         BenchRoot.endpoint(environment: environment).map { BenchClient(endpoint: $0) }
@@ -77,7 +81,7 @@ final class BenchClient: ObservableObject {
     /// This helm's client: its benchd, or — for a root or URL benchd would refuse — a
     /// client that never connects and says why. Refused rather than falling back to anything
     /// local: helm has no bench of its own to fall back to.
-    static func live(
+    package static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> BenchClient {
         switch resolve(environment: environment) {
@@ -86,7 +90,7 @@ final class BenchClient: ObservableObject {
         }
     }
 
-    func start() {
+    package func start() {
         guard follower == nil, let endpoint else { return }
         let follower = BenchFollower(endpoint: endpoint, latest: latest) { [weak self] event in
             DispatchQueue.main.async {
@@ -97,7 +101,7 @@ final class BenchClient: ObservableObject {
         follower.start()
     }
 
-    func stop() {
+    package func stop() {
         follower?.stop()
         follower = nil
     }
@@ -106,7 +110,8 @@ final class BenchClient: ObservableObject {
         switch event {
         case .connected(let at):
             state = .connected
-            benchBinaryCache = nil
+            // Before the document is drawn, so a drawing asks again of this connection.
+            connections += 1
             // A verb can have drawn a newer document (`document(atLeast:)`) while this one waited
             // on the main queue; drawing it now would put the bench back where it was. After a
             // disconnect nothing is drawn yet, so a benchd whose seq started again is followed.
@@ -129,68 +134,9 @@ final class BenchClient: ObservableObject {
         }
     }
 
-    /// The `bench` a pane runs to show a session (`SessionAttach`), as an absolute path: the one
-    /// beside the benchd this client follows, else an installed one (`BenchExecutable`). Asked
-    /// once per connection, since a restarted benchd may be a new build somewhere else. Only an
-    /// answer benchd gave is kept: a failure to ask is asked again at the next drawing.
-    ///
-    /// A benchd reached over TCP names a path on its own machine, so helm runs its own `bench`
-    /// instead (M5c), which reaches benchd through the `BENCH_URL` the pane inherits from helm.
-    /// That one is another build, so its version is compared with benchd's first (`OtherBuild`),
-    /// and the verdict either way is kept for the connection. A `bench` that does not say its
-    /// version in time gives no verdict (`NoAnswer`), and is asked again at the next drawing.
-    var benchExecutable: Result<String, BenchExecutable.Unusable> {
-        if let known = benchBinaryCache { return known }
-        if case .tcp = endpoint {
-            switch BenchExecutable.local() {
-            case let .failure(missing): return .failure(.notFound(missing))
-            case let .success(bench):
-                guard let benchd = benchdVersion() else { return .success(bench) }
-                let ours: String?
-                do { ours = try BenchExecutable.version(of: bench) } catch {
-                    // No verdict, so none is kept: the next drawing asks again.
-                    return .failure(.noAnswer(error))
-                }
-                let verdict: Result<String, BenchExecutable.Unusable> =
-                    BenchExecutable.OtherBuild(bench: bench, ours: ours, benchd: benchd)
-                    .map { .failure(.otherBuild($0)) } ?? .success(bench)
-                benchBinaryCache = verdict
-                return verdict
-            }
-        }
-        var why: String?
-        let reply: BenchResponse<BenchStatusReply>?
-        do {
-            reply = try request(
-                BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
-                answering: BenchStatusReply.self)
-        } catch {
-            why = String(describing: error)
-            reply = nil
-        }
-        let found = BenchExecutable.resolve(named: reply?.data?.bench, why: why)
-        let result = found.mapError(BenchExecutable.Unusable.notFound)
-        if case .success = result { benchBinaryCache = result }
-        return result
-    }
-
-    /// benchd's `status.version`, or nil when benchd cannot be asked: the pane then attaches, and
-    /// says for itself that it cannot reach benchd. A benchd that answers with no version
-    /// predates the field, so it is another build: `unknown`.
-    private func benchdVersion() -> String? {
-        guard
-            let reply = try? request(
-                BenchStatusRequest(id: "helm-status-\(UUID().uuidString)"),
-                answering: BenchStatusReply.self), reply.status == .ok
-        else { return nil }
-        return reply.data?.version ?? "unknown"
-    }
-
-    private var benchBinaryCache: Result<String, BenchExecutable.Unusable>?
-
     /// One verb, one answer. Blocking, and bounded by `timeout`: `requestTimeout` unless the verb
     /// is known to take longer (`prp/note` runs git on benchd's side).
-    nonisolated func request<Payload: Decodable & Sendable>(
+    package nonisolated func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, answering _: Payload.Type = Payload.self,
         timeout: TimeInterval = requestTimeout
     ) throws -> BenchResponse<Payload> {
@@ -203,7 +149,7 @@ final class BenchClient: ObservableObject {
     /// One verb, one answer, at an endpoint: for a caller that holds no client (the mail
     /// seam). Blocking and bounded by `requestTimeout`, like the instance form: a canvas note
     /// calls it on the main actor as `WorkbenchModel.send` does.
-    nonisolated static func request<Payload: Decodable & Sendable>(
+    package nonisolated static func request<Payload: Decodable & Sendable>(
         _ request: some Encodable, at endpoint: BenchEndpoint,
         answering _: Payload.Type = Payload.self, timeout: TimeInterval = requestTimeout
     ) throws -> BenchResponse<Payload> {
@@ -223,7 +169,7 @@ final class BenchClient: ObservableObject {
     ///
     /// It also delivers that document now, so the bench a caller reads next is the one its verb
     /// made; the follower's own delivery of it is then a no-op.
-    func document(atLeast seq: UInt64, within timeout: TimeInterval) -> DocumentAt? {
+    package func document(atLeast seq: UInt64, within timeout: TimeInterval) -> DocumentAt? {
         guard let at = latest.wait(atLeast: seq, until: Date().addingTimeInterval(timeout))
         else { return nil }
         receive(.frame(at))

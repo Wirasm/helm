@@ -144,9 +144,9 @@ enum SessionLine {
         case let .running(activity, detail):
             let word = activity.replacingOccurrences(of: "_", with: " ")
             let doing = detail.map { "\(word): \($0)" } ?? word
-            status = "\(doing) · \(age(since: row.updatedAtMs, now: now))"
+            status = "\(doing) · \(BenchSessionRow.age(sinceMs: row.updatedAtMs, now: now))"
         case let .finished(atMs):
-            status = "finished \(age(since: atMs, now: now)) ago"
+            status = "finished \(BenchSessionRow.age(sinceMs: atMs, now: now)) ago"
         }
         let line = row.branch.map { "\($0) · \(status)" } ?? status
         return row.model.map { "\(line) · \($0)" } ?? line
@@ -160,16 +160,6 @@ enum SessionLine {
         case .claudeAttach: "Attach to the background job in a new terminal"
         case .resume: "Resume it in a new terminal, in \(row.cwd)"
         case .transcript: "Open its transcript"
-        }
-    }
-
-    static func age(since ms: UInt64, now: Date) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince1970) - Int(ms / 1000))
-        switch seconds {
-        case ..<60: return "\(seconds)s"
-        case ..<3600: return "\(seconds / 60)m"
-        case ..<86400: return "\(seconds / 3600)h"
-        default: return "\(seconds / 86400)d"
         }
     }
 }

@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 # `swift build` never sees them — they could rot for months and no gate would say so.
 # kild hit the identical shape today: its tsconfig EXCLUDED the test files, so the code
 # whose job is noticing drift was the one thing nothing checked.
-TARGETS="Sources Tests tools"
+TARGETS="Sources Tests tools Pocket"
 
 if [ "${1:-}" = "--fix" ]; then
     swift format --in-place --recursive $TARGETS

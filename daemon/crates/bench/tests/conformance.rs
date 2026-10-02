@@ -8980,6 +8980,44 @@ fn text_sent_to_a_program_that_asked_for_bracketed_paste_arrives_as_one_paste() 
     );
 }
 
+/// Keys answer a prompt: Esc, Ctrl-C and a digit reach a program that asked for bracketed paste
+/// as the bytes themselves. Inside a paste, Claude Code reads Esc as text (#625).
+#[test]
+fn keys_sent_to_a_program_that_asked_for_bracketed_paste_arrive_unpasted() {
+    let home = TestHome::claim("m5b-keys");
+    let _daemon = scripted_pi_daemon(
+        &home.dir,
+        &format!(
+            "#!/bin/sh\nstty -icanon -isig -echo -icrnl min 1\nprintf '\\033[?2004h'\ntouch {}/written\nhead -c 4 | od -An -c\nexec sleep 60\n",
+            home.dir.display()
+        ),
+    );
+    let sid = spawn_scripted(&home.dir);
+    let sent = bench(
+        &home.dir,
+        &["send", &sid, "\u{1b}\u{3}2", "--keys", "--enter"],
+    );
+    assert_eq!(sent.code, 0, "{}", sent.stderr);
+    assert_eq!(json_of(&sent)["bracketed"], false);
+    let screen = screen_until(&home.dir, &sid, |l| l.contains("033"));
+    let text: String = screen["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // ESC ^C 2 \r, and no paste around them
+    assert!(words.contains("033 003 2 \\r"), "{words:?}");
+    let log = fs::read_to_string(home.dir.join(".bench/events.jsonl")).unwrap();
+    let sent_line = log
+        .lines()
+        .find(|l| l.contains("\"screen/sent\""))
+        .expect("screen/sent logged");
+    assert!(sent_line.contains("\"keys\":true"), "{sent_line}");
+}
+
 #[test]
 fn watch_prints_each_finished_frame_and_never_one_inside_an_update() {
     let home = TestHome::claim("m5b-watch");

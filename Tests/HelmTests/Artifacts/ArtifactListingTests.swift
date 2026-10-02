@@ -1,3 +1,4 @@
+import BenchKit
 import HelmWire
 import XCTest
 

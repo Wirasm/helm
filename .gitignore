@@ -16,3 +16,5 @@ DerivedData/
 !.archon/workflows/
 .archon/workflows/*
 !.archon/workflows/helm/
+# Pocket's generated Info.plist (Pocket/project.yml); its .xcodeproj is caught by *.xcodeproj.
+/Pocket/Info.plist
