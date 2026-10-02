@@ -16,20 +16,6 @@ struct BrowserComposition: Encodable {
 }
 
 enum BrowserTextInput {
-    static func viewRect(_ rect: CGRect, in view: CGSize, image: CGSize, page: CGSize) -> CGRect {
-        guard image.width > 0, image.height > 0, page.width > 0, page.height > 0 else {
-            return .zero
-        }
-        let scale = min(view.width / image.width, view.height / image.height)
-        let width = image.width * scale
-        let height = image.height * scale
-        return CGRect(
-            x: (view.width - width) / 2 + rect.minX * width / page.width,
-            y: (view.height - height) / 2 + rect.minY * height / page.height,
-            width: max(1, rect.width * width / page.width),
-            height: rect.height * height / page.height)
-    }
-
     /// Text controls do not expose a DOM Range at their caret. A transient, invisible mirror
     /// uses their computed typography and wrapping; it never changes the control or selection.
     static let caretExpression = """

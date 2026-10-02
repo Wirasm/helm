@@ -92,6 +92,7 @@ final class BrowserPaneModel: ObservableObject {
         watch?.cancel()
         watch = nil
         viewportTask?.cancel()
+        surface?.discardComposition()
         pageInput.reset()
         connection?.close()
         connection = nil
@@ -131,6 +132,7 @@ final class BrowserPaneModel: ObservableObject {
             self.session = nil
             self.sessionTargets = [:]
             self.dialogs = [:]
+            self.surface?.discardComposition()
             self.pageInput.reset()
             self.listed = false
             switch ending {
@@ -271,6 +273,7 @@ final class BrowserPaneModel: ObservableObject {
         guard let connection else { return }
         let previous = session
         session = nil
+        surface?.discardComposition()
         pageInput.reset()
         loadingFrames.removeAll()
         loading = false
@@ -402,14 +405,6 @@ final class BrowserPaneModel: ObservableObject {
 
     func show(tab target: String) { apply(tabs.show(target)) }
 
-    /// ⌘1–⌘8 pick a tab by position, and ⌘9 the last one, as in Chrome.
-    func show(tabAt index: Int) {
-        let all = tabs.tabs
-        guard let tab = index >= 8 ? all.last : (all.indices.contains(index) ? all[index] : nil)
-        else { return }
-        show(tab: tab.targetId)
-    }
-
     /// A new blank tab, shown, with the keyboard in its address field — Chrome's ⌘T.
     func newTab() {
         createTab("about:blank")
@@ -503,6 +498,7 @@ extension BrowserPaneModel {
         guard event.sessionId == session,
             let navigation = event.params(FrameNavigation.self), navigation.frame.parentId == nil
         else { return }
+        surface?.discardComposition()
         pageInput.reset()
     }
 

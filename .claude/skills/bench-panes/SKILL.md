@@ -129,6 +129,10 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   spawned agent's session, or the command a shell is running (the refusal names it). The pane
   holding his keyboard also needs `--asked`, and a workspace's last pane is never closed. Closing
   a canvas destroys nothing: the file and his notes beside it stay.
+- `bench workspace close <path>` takes a workspace and every pane in it off the bench, such as the
+  workspace of a worktree you are done with. It answers to `bench close`'s rules for each pane: a
+  pane where something runs needs `--force`, and the workspace he is in needs `--asked`. A
+  workspace whose folder is gone still closes. It never touches the folder, its files or git.
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
   its own hook), else a shell in the directory the pane's shell was last working in.
