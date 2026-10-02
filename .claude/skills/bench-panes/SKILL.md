@@ -76,11 +76,10 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   on; `bench resume` and `bench restore` send the same. A `--prompt-file` replaces the notice.
 - `--fork <session-id>` starts a new claude, codex or pi conversation that begins as a copy of
   that one, to ask about its work while the original carries on untouched. The fork gets its own
-  id (the answer's `runtime_session`, null for codex until its hook reports the fork's thread;
-  `forked_from` names the original) and runs **read-only** rather than in the unattended
-  posture: Claude in plan mode, codex on an app-server with a read-only sandbox, pi with only
-  `read,grep,find,ls`. It shares the original's worktree, and an edit there collides with the
-  original's work. Put the question in `--prompt-file`. A fork resumed later, by `--resume`,
+  id (the answer's `runtime_session`; `forked_from` names the original) and runs **read-only**
+  rather than in the unattended posture: Claude in plan mode, codex in a read-only sandbox, pi
+  with only `read,grep,find,ls`. It shares the original's worktree, and an edit there collides
+  with the original's work. Put the question in `--prompt-file`. A fork resumed later, by `--resume`,
   `bench resume` or `bench restore`, is read-only too. `--arg` still adds flags after the
   posture, so a permission flag there is your explicit override of it: do not pass one unless
   the operator asked.
@@ -136,11 +135,16 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
   its own hook), else a shell in the directory the pane's shell was last working in.
-- A resumed codex skips codex's "Hooks need review" too. codex ignores
-  `--dangerously-bypass-hook-trust` when it resumes against its own app-server, so benchd asks
-  codex which hooks need review and has that server trust them for the session alone; nothing is
-  saved. If that question fails, the screen shows the dialog and `bench sessions` reports `hook
-  review`.
+- Every codex benchd starts is a thread on benchd's one codex app-server; its pane attaches
+  to it. benchd starts that server trusting the hooks codex says need review, so no codex pane
+  opens on "Hooks need review"; nothing is saved. A `~/.codex/hooks.json` changed after the
+  server started brings the dialog back until benchd restarts, and `bench sessions` reports it
+  as `hook review`.
+- codex is spawned only into a folder the operator trusts (its own entry in
+  `~/.codex/config.toml`, or its git repository's). Anywhere else the spawn is refused with the
+  fix: run `cd <dir> && codex` once.
+- `/new` inside a codex pane benchd spawned starts a conversation benchd does not own: it runs
+  in the wrong folder, gets no mailbox and is not restored. Spawn a new agent instead.
 
 ## See what he sees
 

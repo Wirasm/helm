@@ -203,8 +203,8 @@ pub enum Refusal {
 }
 
 /// A session benchd itself started: recorded at spawn, so it has a finished row even if the
-/// daemon restarts before anyone asks for the list. Only a runtime whose id the bench minted
-/// can be recorded — codex names its own sessions after the fact.
+/// daemon restarts before anyone asks for the list. Only a session whose id is known at spawn
+/// can be recorded: every one benchd starts, codex's included, whose thread benchd creates.
 pub fn record_spawn(
     core: &mut Core,
     harness: Option<Harness>,

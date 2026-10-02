@@ -34,9 +34,10 @@ Facts with edges:
   prompt or a question you asked holds it until the next tool call after it.
 - **Idle, a turn is started for you** with the notice, through your harness's own
   channel: a Claude session's inbox socket, pi's `bench` extension, or, for a codex benchd
-  spawned, the app-server its TUI runs against. Those turns are **capped**: burst of 6 per
-  recipient, refilling one per minute. A codex you started yourself has no such channel (its
-  app-server is inside its own process) and gets its mail at its next prompt or tool call.
+  spawned, benchd's codex app-server, where its conversation is a thread. Those turns are
+  **capped**: burst of 6 per recipient, refilling one per minute. A codex you started yourself
+  has no such channel (it runs on codex's own app-server) and gets its mail at its next prompt or
+  tool call.
 - Held or capped mail waits **unread in your inbox**. Nothing is lost; `bench mail list`
   shows what accumulated.
 - Nothing else wakes you. No polling loop exists to arm.

@@ -132,20 +132,30 @@ app-server of its own) and names each event codex will run no bench hook for: un
 changed since trusted, disabled, or not listed at all. codex 0.159.3 saves the trust a
 `codex -p <name>` session accepts in `~/.codex/<name>.config.toml`, which `hooks/list` never reads
 and which covers only that profile, so the trust step is plain `codex`; `--check` names a profile
-that trusts the current hooks (`trusted_only_under_profile`). A codex benchd spawns runs
-its TUI against an app-server of its own (`codex --remote`, one per session, leashed to the TUI),
-which is where its hooks run and where benchd starts a turn (`turn/start`) when it is idle; a
-codex the operator starts himself embeds its app-server, so its mail waits for its next prompt
-or tool call. benchd starts codex with `--dangerously-bypass-hook-trust`, which a TUI resuming
-against its own app-server ignores: it reviews hooks at startup whatever the flag says. So a
-resumed codex's app-server gets the trust instead, for that session alone: benchd asks
-`hooks/list` which hooks need review and passes their current hashes as a `-c hooks.state=…`
-override, the form codex's own `/hooks` saves, without saving it. Folder trust has the same
-gap: a TUI against a separate app-server checks only its exact `-C` folder, where a plain codex
-also accepts the git main repository the folder belongs to, so a worktree of a trusted repo
-would stop at "Trust this folder?". When `~/.codex/config.toml` trusts that repository (and the
-folder has no entry of its own), benchd gives every codex app-server it starts
-`-c projects={"<cwd>"={trust_level="trusted"}}`, again without saving it. `just mail-ring` is the proof: claude, codex and pi pass a number around through
+that trusts the current hooks (`trusted_only_under_profile`). Every codex benchd starts is a
+thread on one codex app-server benchd runs for its root (#466): started on first use with a
+scrubbed environment, leashed like a `just` run so it ends with benchd, at `<root>/codex.sock`.
+benchd creates each thread itself (`thread/start`, `thread/fork`, `thread/resume`) with the
+agent's cwd, model, effort and posture, and its environment (`BENCH_SESSION`, `BENCH_HANDLE`,
+`BENCH_DIR`) as the thread's `shell_environment_policy`, sends its first message as a turn (a
+TUI cannot attach to a thread with no turn yet), and the pane runs `codex resume <thread>
+--remote unix://<root>/codex.sock`. codex runs every hook with the server's environment, so a
+hook names its agent only by its thread, and benchd knows every thread it made. benchd holds one
+connection to the server, the one that made every thread, so codex sends it every thread's
+status; mail wakes an idle codex with `turn/start` there, and a turn that ends without a `Stop`
+(a usage limit) is seen in its `thread/status/changed`. A TUI that resumes against a remote
+server reviews hooks at startup whatever `--dangerously-bypass-hook-trust` says, so the server
+starts with the trust: benchd asks `hooks/list` which hooks need review and passes their current
+hashes as a `-c hooks.state=…` override, the form codex's own `/hooks` saves, without saving it;
+each thread itself runs its hooks with `bypass_hook_trust`. The TUI gets no `-C`: against a
+remote server it would ask "Trust this folder?" for any folder without its own exact entry, a
+worktree of a trusted repository included. Trust stays the operator's call: benchd refuses a
+codex in a folder plain codex would have asked about (its own `[projects]` entry, else its git
+main repository's). Two limits follow: `/new` in a benchd codex pane starts a thread in the
+server's directory that no session owns, so spawn a new agent instead; and the hook trust is
+computed when the server starts, so a `hooks.json` changed later shows "Hooks need review" until
+benchd restarts. A codex the operator starts himself runs on codex's own app-server, so its mail
+waits for its next prompt or tool call. `just mail-ring` is the proof: claude, codex and pi pass a number around through
 benchd, idle and busy, with per-hop latency from the log. helm
 keeps no mailroom of its own since: it asks benchd who is in a pane (`mail/who`) and sends a
 canvas note through `mail/send`.

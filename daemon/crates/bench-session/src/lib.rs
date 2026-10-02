@@ -84,8 +84,8 @@ impl AgentKind {
     }
 
     /// Whether this runtime can mint its session identity at spawn, so a new session's id is
-    /// known before it runs. codex names its own sessions after the fact: its id comes from its
-    /// hook, and only then can it be resumed (session-state spike).
+    /// known before it runs. codex mints its own thread id when benchd creates the thread on its
+    /// app-server, before the TUI starts (#466).
     pub fn mints_session_id(&self) -> bool {
         matches!(self, AgentKind::Claude | AgentKind::Pi)
     }
@@ -94,15 +94,15 @@ impl AgentKind {
 /// Which conversation a session holds, and how it came by it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conversation {
-    /// A new conversation: under the id benchd minted (claude, pi), or none for a runtime that
-    /// names its own after the fact (codex).
+    /// A new conversation: under the id benchd minted (claude, pi) or codex minted when benchd
+    /// created its thread; none until then.
     New(Option<String>),
     /// Re-enter conversation `id`.
     Resume(String),
     /// A new conversation that starts as a copy of `from`, which carries on untouched: how the
     /// operator asks an agent about its work without interrupting it (#531). benchd mints `id`
     /// as it does for [`Conversation::New`] (claude, pi), so no record of the fork ever names
-    /// `from`; codex names its fork itself, and its hook reports it.
+    /// `from`; codex mints the fork's id when benchd forks the thread on its app-server.
     Fork { from: String, id: Option<String> },
 }
 
@@ -172,19 +172,10 @@ pub struct SpawnSpec {
     /// Claude's `--settings` file: the hooks that report to benchd, and the inbound rule that
     /// lets benchd start a turn in an idle session (#358).
     pub settings: Option<String>,
-    /// codex: the socket of the app-server this session's TUI runs against, which the session
-    /// starts beside the TUI ([`CODEX_SERVED`]). benchd starts a turn there when the agent is
-    /// idle (#358). `None` runs the TUI with its app-server embedded, which nothing outside the
-    /// process can reach.
-    pub codex_server: Option<String>,
-    /// codex: the `-c` override its app-server trusts the hooks with for this session alone
-    /// (`bench_wire::hook::codex_session_trust`), on a served resume, the one start codex
-    /// reviews hooks on despite `--dangerously-bypass-hook-trust`.
-    pub codex_hook_trust: Option<String>,
-    /// codex: its app-server trusts `cwd` as a project ([`codex_folder_trust`]). benchd sets it
-    /// when the operator trusts the git repository `cwd` belongs to, which is what a plain
-    /// `codex` goes by; a served one checks the exact `-C` folder only, and would ask.
-    pub codex_trust_folder: bool,
+    /// codex: the app-server its TUI attaches to (#466). benchd runs one per root and creates
+    /// the session's thread there before the TUI starts, so the thread carries the posture,
+    /// model, effort, cwd and environment, and the TUI only draws it.
+    pub codex: Option<CodexAttach>,
 }
 
 impl SpawnSpec {
@@ -196,84 +187,18 @@ impl SpawnSpec {
             conversation: Conversation::Resume(id),
             prompt_file: None,
             settings: None,
-            codex_server: None,
-            codex_hook_trust: None,
-            codex_trust_folder: false,
+            codex: None,
             ..self.clone()
         }
     }
-
-    /// Whether the app-server holds this codex session's permissions, so its TUI must carry
-    /// none: a served resume or fork, where codex exits on a permission flag ("Permission
-    /// overrides are not supported when resuming a remote task", measured on 0.157.0, and
-    /// "…when forking…" on 0.159.3). A new thread accepts them, and they agree with the server.
-    pub fn server_holds_permissions(&self) -> bool {
-        self.agent == AgentKind::Codex
-            && self.codex_server.is_some()
-            && matches!(
-                self.conversation,
-                Conversation::Resume(_) | Conversation::Fork { .. }
-            )
-    }
-
-    /// The thread a served codex re-enters: a resume against its own app-server, which takes
-    /// its permissions from that server ([`CODEX_SERVED`]) and fires no hook until a turn runs.
-    pub fn served_resume(&self) -> Option<&str> {
-        match (&self.codex_server, &self.conversation) {
-            (Some(_), Conversation::Resume(thread)) if self.agent == AgentKind::Codex => {
-                Some(thread)
-            }
-            _ => None,
-        }
-    }
 }
 
-/// How a served codex session starts, as a script: `$0` is the socket, `$1` the app-server's
-/// sandbox ([`codex_sandbox`]), `$2` its hook trust ([`SpawnSpec::codex_hook_trust`], empty for
-/// none), `$3` its folder trust ([`codex_folder_trust`], empty for none), the rest the TUI's
-/// flags. Measured on codex 0.157.0:
-/// - The app-server runs the hooks, not the TUI, with its own environment and as the hook's
-///   parent. So it runs in the session's environment (`BENCH_SESSION`), one per session, and
-///   benchd knows which session a hook is from without matching threads.
-/// - The TUI renders and takes keys against it with `--remote`, and a second client's
-///   `turn/start` on its idle thread runs a turn the TUI shows.
-/// - The server holds the session's posture. A resumed or forked thread takes the server's
-///   permissions, because the TUI refuses permission flags when it resumes or forks against a
-///   remote server ([`argv`]); without these it ran `workspace-write`, where `bench` cannot reach
-///   benchd's socket (measured on 0.159.3). A new thread's flags agree.
-/// - Closing stdin does not stop the app-server, and macOS has no parent-death signal. The
-///   watcher is its leash: it outlives a hangup and stops the server within a second of the
-///   TUI going, however the TUI went. `$$` is the TUI's pid after the `exec`.
-pub const CODEX_SERVED: &str = r#"s="$0" m="$1" t="$2" f="$3"
-shift 3
-codex app-server -c "sandbox_mode=\"$m\"" -c 'approval_policy="never"' ${t:+-c "$t"} ${f:+-c "$f"} --listen "unix://$s" </dev/null >/dev/null 2>"$s.log" &
-p=$!
-( trap '' HUP INT TERM; while kill -0 $$ 2>/dev/null; do sleep 1; done; kill $p 2>/dev/null ) </dev/null >/dev/null 2>&1 &
-i=0
-while [ ! -S "$s" ] && [ $i -lt 100 ] && kill -0 $p 2>/dev/null; do sleep 0.1; i=$((i+1)); done
-exec codex --remote "unix://$s" "$@"
-"#;
-
-/// The `-c` override that makes a served codex's app-server trust `cwd` as a project, so the
-/// TUI's check of its `-C` folder passes without the dialog, and nothing is written to the
-/// operator's config. One inline table, not a dotted path: codex splits a `-c` path at every
-/// dot, and helm's worktrees live under `.worktrees`. A JSON string is a TOML basic string: the
-/// same quotes and escapes. Measured on codex 0.159.3: no trust screen, config untouched.
-pub fn codex_folder_trust(cwd: &str) -> String {
-    format!(
-        "projects={{{}={{trust_level=\"trusted\"}}}}",
-        serde_json::Value::from(cwd)
-    )
-}
-
-/// codex's sandbox for a posture: every command runs unsandboxed, or none may write. Either way
-/// with approvals `never`, since nobody is at an unattended pane to approve anything, and a write
-/// a read-only fork attempts fails rather than asking.
-fn codex_sandbox(posture: Posture) -> &'static str {
-    match posture {
-        Posture::Unattended => "danger-full-access",
-        Posture::ReadOnly => "read-only",
-    }
+/// Where a codex TUI attaches: the program benchd's app-server runs (the same file, so a codex
+/// update on disk never puts a newer TUI on an older server) and that server's socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexAttach {
+    pub program: String,
+    pub socket: String,
 }
 
 /// The sentence a first prompt becomes in argv.
@@ -324,42 +249,30 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
             args.extend(claude_flags(spec));
             "claude"
         }
+        AgentKind::Codex if spec.codex.is_some() => return codex_argv(spec),
         AgentKind::Codex => {
-            // codex names its session after the fact, a fork's too; the id comes from its own
-            // hook, which is how a pane's record knows it (M5b). `codex resume <id>` and `codex
-            // fork <id>` take every flag below.
+            // A codex outside benchd: what the operator runs himself to resume a finished
+            // codex from the session list, on codex's own app-server. `codex resume <id>` and
+            // `codex fork <id>` take every flag below.
             match &spec.conversation {
                 Conversation::New(_) => {}
                 Conversation::Resume(id) => args.extend(["resume".into(), id.clone()]),
                 Conversation::Fork { from, .. } => args.extend(["fork".into(), from.clone()]),
             }
-            if !spec.server_holds_permissions() {
-                match spec.posture {
-                    Posture::Unattended => {
-                        args.push("--dangerously-bypass-approvals-and-sandbox".into())
-                    }
-                    Posture::ReadOnly => args.extend([
-                        "-s".into(),
-                        codex_sandbox(spec.posture).into(),
-                        "-a".into(),
-                        "never".into(),
-                    ]),
+            match spec.posture {
+                Posture::Unattended => {
+                    args.push("--dangerously-bypass-approvals-and-sandbox".into())
+                }
+                Posture::ReadOnly => {
+                    args.extend(["-s".into(), "read-only".into(), "-a".into(), "never".into()])
                 }
             }
             // The hooks report to benchd, and hooks run only once trusted, which is a choice
             // made in a dialog nobody is at an unattended pane to answer. An agent that already
-            // runs every command unsandboxed gains nothing a hook could add. A served resume
-            // ignores this flag at startup; its server carries the trust instead
-            // ([`SpawnSpec::codex_hook_trust`]).
+            // runs every command unsandboxed gains nothing a hook could add.
             args.push("--dangerously-bypass-hook-trust".into());
-            // The thread's directory. Against a separate app-server the TUI's own cwd is not
-            // it (measured: the thread ran in the server's).
             args.extend(["-C".into(), spec.cwd.clone()]);
-            // No modals: nobody is at an unattended pane to answer one, so the next pasted
-            // Return does. Both measured. The update prompt: the brief's Return accepted
-            // "Update now" and the pane ran `brew upgrade --cask codex` and quit (0.155.1).
-            // The rate-limit nudge: raised after a turn near the weekly limit, with "Switch
-            // to <cheaper model>" as the default a mail wake would select (0.157.0).
+            // No modals, as for a codex benchd runs ([`codex_argv`]).
             args.extend([
                 "-c".into(),
                 "check_for_update_on_startup=false".into(),
@@ -423,29 +336,41 @@ pub fn argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
     if let Some(path) = spec.prompt_file.as_deref() {
         args.push(prompt_pointer(path));
     }
-    if let (AgentKind::Codex, Some(socket)) = (spec.agent, &spec.codex_server) {
-        return Ok(("/bin/sh".to_string(), codex_served(spec, socket, args)));
-    }
     Ok((program.to_string(), args))
 }
 
-/// A served codex's argv under `/bin/sh`: [`CODEX_SERVED`], its positional slots, then the
-/// TUI's own `args`.
-fn codex_served(spec: &SpawnSpec, socket: &str, args: Vec<String>) -> Vec<String> {
-    let mut served = vec![
-        "-c".to_string(),
-        CODEX_SERVED.to_string(),
-        socket.to_string(),
-        codex_sandbox(spec.posture).to_string(),
-        spec.codex_hook_trust.clone().unwrap_or_default(),
-        if spec.codex_trust_folder {
-            codex_folder_trust(&spec.cwd)
-        } else {
-            String::new()
-        },
+/// codex's half of [`argv`]: the TUI attaches to the thread benchd created on its app-server
+/// (#466). Nothing about the conversation rides on the command line. The thread already holds
+/// the posture, model, effort and cwd, and its first message was sent as a turn, because a TUI
+/// cannot attach to a thread with no turn yet (codex 0.160.0). No `-C`: against a remote server
+/// it asks "Trust this folder?" for any folder without its own exact trust entry, a worktree of
+/// a trusted repository included, and the thread has its cwd already.
+fn codex_argv(spec: &SpawnSpec) -> Result<(String, Vec<String>), String> {
+    let attach = spec
+        .codex
+        .as_ref()
+        .ok_or("a codex attaches to benchd's app-server, and this spec names none")?;
+    let thread = spec
+        .conversation
+        .id()
+        .ok_or("a codex attaches to the thread benchd created for it, and this spec names none")?;
+    let mut args: Vec<String> = vec![
+        "resume".into(),
+        thread.into(),
+        "--remote".into(),
+        format!("unix://{}", attach.socket),
+        // No modals: nobody is at an unattended pane to answer one, so the next pasted Return
+        // does. Both measured. The update prompt: the brief's Return accepted "Update now" and the pane ran
+        // `brew upgrade --cask codex` and quit (0.155.1). The rate-limit nudge: raised after a
+        // turn near the weekly limit, with "Switch to <cheaper model>" as the default a mail
+        // wake would select (0.157.0).
+        "-c".into(),
+        "check_for_update_on_startup=false".into(),
+        "-c".into(),
+        "notice.hide_rate_limit_model_nudge=true".into(),
     ];
-    served.extend(args);
-    served
+    args.extend(spec.extra_args.iter().cloned());
+    Ok((attach.program.clone(), args))
 }
 
 /// claude's half of [`argv`]: posture, settings, model and effort, then the conversation.
@@ -825,10 +750,16 @@ mod tests {
             prompt_file: None,
             settings: None,
             extra_args: Vec::new(),
-            codex_server: None,
-            codex_hook_trust: None,
-            codex_trust_folder: false,
+            codex: None,
         }
+    }
+
+    fn attached(mut s: SpawnSpec) -> SpawnSpec {
+        s.codex = Some(CodexAttach {
+            program: "/opt/codex/0.160.0/codex".into(),
+            socket: "/r/codex.sock".into(),
+        });
+        s
     }
 
     #[test]
@@ -905,203 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn a_served_codex_starts_its_app_server_and_runs_the_tui_against_it() {
-        let mut s = spec(AgentKind::Codex);
-        s.prompt_file = Some("/tmp/p.txt".into());
-        let (_, embedded) = argv(&s).unwrap();
-        s.codex_server = Some("/r/codex/s1.sock".into());
-        let (p, a) = argv(&s).unwrap();
-        assert_eq!(p, "/bin/sh");
-        assert_eq!(
-            a[..6],
-            [
-                "-c",
-                CODEX_SERVED,
-                "/r/codex/s1.sock",
-                "danger-full-access",
-                "",
-                ""
-            ]
-        );
-        assert_eq!(
-            a[6..],
-            embedded[..],
-            "the TUI keeps every flag and the prompt"
-        );
-    }
-
-    /// A worktree's path has dots in it, which a dotted `-c` key would split on, and a path can
-    /// hold a quote: the folder goes in as one quoted TOML key, the same string as `-C`.
-    #[test]
-    fn a_served_codex_trusts_its_folder_only_when_benchd_says_so() {
-        let mut s = spec(AgentKind::Codex);
-        s.cwd = "/r/helm/.worktrees/issue-195".into();
-        s.codex_server = Some("/r/codex/s1.sock".into());
-        assert_eq!(
-            argv(&s).unwrap().1[5],
-            "",
-            "no trust unless benchd decided it"
-        );
-        s.codex_trust_folder = true;
-        let (_, a) = argv(&s).unwrap();
-        assert_eq!(
-            a[5],
-            r#"projects={"/r/helm/.worktrees/issue-195"={trust_level="trusted"}}"#
-        );
-        assert!(
-            a.windows(2)
-                .any(|w| w == ["-C", "/r/helm/.worktrees/issue-195"])
-        );
-        assert_eq!(
-            codex_folder_trust(r#"/r/a "b"\c"#),
-            r#"projects={"/r/a \"b\"\\c"={trust_level="trusted"}}"#
-        );
-    }
-
-    #[test]
-    fn a_served_codex_resume_leaves_its_posture_to_the_server() {
-        let mut s = spec(AgentKind::Codex);
-        s.conversation = Conversation::Resume("019a-thread".into());
-        let (_, embedded) = argv(&s).unwrap();
-        assert!(embedded.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
-        s.codex_server = Some("/r/codex/s1.sock".into());
-        let (_, a) = argv(&s).unwrap();
-        assert_eq!(
-            a[3..8],
-            ["danger-full-access", "", "", "resume", "019a-thread"]
-        );
-        assert!(
-            !a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
-            "codex exits on a permission flag in a remote resume: {a:?}"
-        );
-        assert!(CODEX_SERVED.contains(r#"-c "sandbox_mode=\"$m\"" -c 'approval_policy="never"'"#));
-    }
-
-    /// A stub `codex` on PATH: `app-server` records its pid and sleeps; the TUI sleeps too, so
-    /// the test decides how it goes.
-    fn served_codex_stub(dir: &std::path::Path) -> String {
-        let stub = dir.join("codex");
-        std::fs::write(
-            &stub,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = app-server ]; then echo $$ > {}/server.pid; exec sleep 30; fi\nexec sleep 30\n",
-                dir.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        format!("{}:/bin:/usr/bin", dir.display())
-    }
-
-    fn gone_within(pid: i32, limit: Duration) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < limit {
-            // SAFETY: signal 0 only asks whether the pid exists.
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        false
-    }
-
-    #[test]
-    fn a_served_codexs_app_server_dies_with_its_tui_however_the_tui_goes() {
-        for signal in [libc::SIGTERM, libc::SIGKILL] {
-            let dir = std::env::temp_dir().join(format!("bcx{}-{signal}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let path = served_codex_stub(&dir);
-            let socket = dir.join("s.sock");
-            let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-            let mut tui = std::process::Command::new("/bin/sh")
-                .args([
-                    "-c",
-                    CODEX_SERVED,
-                    socket.to_str().unwrap(),
-                    "danger-full-access",
-                    "",
-                    "",
-                ])
-                .env("PATH", path)
-                .spawn()
-                .unwrap();
-            let pid_file = dir.join("server.pid");
-            let start = Instant::now();
-            while !pid_file.exists() && start.elapsed() < Duration::from_secs(5) {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let server: i32 = std::fs::read_to_string(&pid_file)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap();
-            assert!(
-                !gone_within(server, Duration::from_millis(300)),
-                "server started"
-            );
-            // SAFETY: the TUI is this test's own child.
-            unsafe { libc::kill(tui.id() as i32, signal) };
-            let _ = tui.wait();
-            let gone = gone_within(server, Duration::from_secs(4));
-            if !gone {
-                // SAFETY: the stub server is this test's own grandchild.
-                unsafe { libc::kill(server, libc::SIGKILL) };
-            }
-            let _ = std::fs::remove_dir_all(&dir);
-            assert!(
-                gone,
-                "the app-server outlived its TUI after signal {signal}"
-            );
-        }
-    }
-
-    /// Each trust is one `-c` value to the app-server, however many spaces and quotes it holds,
-    /// and with none the server gets no `-c` for it at all.
-    #[test]
-    fn a_served_codexs_hook_and_folder_trust_reach_its_app_server_as_one_argument_each() {
-        let dir = std::env::temp_dir().join(format!("bcxt{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let stub = dir.join("codex");
-        std::fs::write(
-            &stub,
-            format!(
-                "#!/bin/sh\n[ \"$1\" = app-server ] && printf '%s\\n' \"$@\" > {}/server.args\nexit 0\n",
-                dir.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        let trust = r#"hooks.state={ "/h/x.json:stop:0:0" = { trusted_hash = "sha256:a b" } }"#;
-        let folder = codex_folder_trust("/r/helm/.worktrees/a b");
-        let server_args = |trust: &str, folder: &str| {
-            let _ = std::fs::remove_file(dir.join("server.args"));
-            let status = std::process::Command::new("/bin/sh")
-                .args(["-c", CODEX_SERVED, dir.join("s.sock").to_str().unwrap()])
-                .args(["danger-full-access", trust, folder, "resume", "019a"])
-                .env("PATH", format!("{}:/bin:/usr/bin", dir.display()))
-                .status()
-                .unwrap();
-            assert!(status.success());
-            std::fs::read_to_string(dir.join("server.args")).unwrap()
-        };
-        let with = server_args(trust, &folder);
-        let without = server_args("", "");
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            with.contains(&format!("-c\n{trust}\n-c\n{folder}\n--listen\n")),
-            "{with}"
-        );
-        assert!(
-            without.contains("approval_policy=\"never\"\n--listen\n"),
-            "{without}"
-        );
-    }
-
-    #[test]
     fn model_and_effort_flags_match_the_spike() {
         let mut s = spec(AgentKind::Claude);
         s.model = Some("opus".into());
@@ -1115,28 +849,6 @@ mod tests {
                 "opus",
                 "--effort",
                 "high"
-            ]
-        );
-
-        let mut s = spec(AgentKind::Codex);
-        s.model = Some("gpt-5.3-codex".into());
-        s.effort = Some("high".into());
-        let (_, a) = argv(&s).unwrap();
-        assert_eq!(
-            a,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--dangerously-bypass-hook-trust",
-                "-C",
-                "/tmp",
-                "-c",
-                "check_for_update_on_startup=false",
-                "-c",
-                "notice.hide_rate_limit_model_nudge=true",
-                "-m",
-                "gpt-5.3-codex",
-                "-c",
-                "model_reasoning_effort=high"
             ]
         );
 
@@ -1168,18 +880,10 @@ mod tests {
             "pi resume is the same flag"
         );
 
-        let mut s = spec(AgentKind::Codex);
+        let mut s = attached(spec(AgentKind::Codex));
         s.conversation = Conversation::Resume("019a-codex".into());
-        let (p, a) = argv(&s).unwrap();
-        assert_eq!(p, "codex");
-        assert_eq!(
-            a[..3],
-            [
-                "resume",
-                "019a-codex",
-                "--dangerously-bypass-approvals-and-sandbox"
-            ]
-        );
+        let (_, a) = argv(&s).unwrap();
+        assert_eq!(a[..2], ["resume", "019a-codex"]);
     }
 
     #[test]
@@ -1215,61 +919,85 @@ mod tests {
         assert_eq!(a[..4], ["--permission-mode", "plan", "--resume", "fork-2"]);
     }
 
-    /// A codex fork is a fork against its own app-server, which holds the read-only sandbox: the
-    /// TUI takes no permission flag there, and the server's posture is what codex runs the fork
-    /// in. Resumed later, it is served read-only again.
+    /// Every codex conversation, new, forked or resumed, is a thread benchd created (or
+    /// re-entered) on its app-server before the TUI starts, so the TUI's command line is the same
+    /// for all three: attach to that thread. Posture, model, effort, cwd and the first message
+    /// live on the thread, never here; a permission flag would even make codex exit on a remote
+    /// resume or fork.
     #[test]
-    fn a_served_codex_fork_runs_on_a_read_only_server() {
-        let mut s = spec(AgentKind::Codex);
-        s.conversation = Conversation::Fork {
-            from: "019a-author".into(),
-            id: None,
-        };
+    fn a_codex_tui_attaches_to_its_thread_and_carries_nothing_else() {
+        let mut s = attached(spec(AgentKind::Codex));
+        s.cwd = "/r/helm/.worktrees/issue-195".into();
+        s.model = Some("gpt-6-luna".into());
+        s.effort = Some("low".into());
         s.posture = Posture::ReadOnly;
-        s.codex_server = Some("/r/codex/s2.sock".into());
         s.prompt_file = Some("/tmp/q.md".into());
-        let (p, a) = argv(&s).unwrap();
-        assert_eq!(p, "/bin/sh");
-        assert_eq!(
-            a[..8],
-            [
-                "-c",
-                CODEX_SERVED,
-                "/r/codex/s2.sock",
-                "read-only",
-                "",
-                "",
-                "fork",
-                "019a-author"
-            ]
-        );
-        for refused in ["--dangerously-bypass-approvals-and-sandbox", "-s", "-a"] {
-            assert!(!a.contains(&refused.to_string()), "{refused} in {a:?}");
+        s.extra_args = vec!["--no-alt-screen".into()];
+        let want = [
+            "resume",
+            "019b-thread",
+            "--remote",
+            "unix:///r/codex.sock",
+            "-c",
+            "check_for_update_on_startup=false",
+            "-c",
+            "notice.hide_rate_limit_model_nudge=true",
+            "--no-alt-screen",
+        ];
+        for conversation in [
+            Conversation::New(Some("019b-thread".into())),
+            Conversation::Resume("019b-thread".into()),
+            Conversation::Fork {
+                from: "019a-author".into(),
+                id: Some("019b-thread".into()),
+            },
+        ] {
+            s.conversation = conversation;
+            let (p, a) = argv(&s).unwrap();
+            assert_eq!(p, "/opt/codex/0.160.0/codex", "the server's own program");
+            assert_eq!(a, want);
         }
-        assert_eq!(a.last().unwrap(), "Read and act on the prompt in /tmp/q.md");
-
-        s.conversation = Conversation::Resume("019b-fork".into());
-        s.prompt_file = None;
-        let (_, a) = argv(&s).unwrap();
-        assert_eq!(a[3..8], ["read-only", "", "", "resume", "019b-fork"]);
     }
 
-    /// Unserved, the TUI carries the posture itself.
     #[test]
-    fn an_embedded_read_only_codex_carries_its_sandbox_on_the_tui() {
+    fn a_codex_on_benchds_server_without_its_thread_is_refused() {
+        let s = attached(spec(AgentKind::Codex));
+        assert!(argv(&s).unwrap_err().contains("the thread benchd created"));
+    }
+
+    /// Outside benchd (the session list's resume of a finished codex), the TUI carries the
+    /// posture itself.
+    #[test]
+    fn a_codex_outside_benchd_carries_its_posture_on_the_command_line() {
         let mut s = spec(AgentKind::Codex);
-        s.conversation = Conversation::Fork {
-            from: "019a-author".into(),
-            id: None,
-        };
+        s.conversation = Conversation::Resume("019a-fork".into());
         s.posture = Posture::ReadOnly;
+        s.model = Some("gpt-5.3-codex".into());
+        s.effort = Some("high".into());
         let (p, a) = argv(&s).unwrap();
         assert_eq!(p, "codex");
         assert_eq!(
-            a[..6],
-            ["fork", "019a-author", "-s", "read-only", "-a", "never"]
+            a,
+            [
+                "resume",
+                "019a-fork",
+                "-s",
+                "read-only",
+                "-a",
+                "never",
+                "--dangerously-bypass-hook-trust",
+                "-C",
+                "/tmp",
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                "notice.hide_rate_limit_model_nudge=true",
+                "-m",
+                "gpt-5.3-codex",
+                "-c",
+                "model_reasoning_effort=high"
+            ]
         );
-        assert!(!a.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
     }
 
     #[test]
