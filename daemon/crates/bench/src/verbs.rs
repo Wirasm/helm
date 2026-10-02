@@ -562,8 +562,10 @@ fn working(activity: &Activity) -> bool {
 #[derive(Default)]
 struct Turn {
     /// The time of the latest report that showed the agent at work. An idle report at that time
-    /// or later ends the work: benchd stamps an agent's changes in order, to the millisecond, so a
-    /// turn that fails in the millisecond it started has the same time, and is still after it.
+    /// or later ends the work: a report is stamped when the agent's state changes, in order and
+    /// to the millisecond, on benchd's machine (by benchd for a hook, by Claude Code for its
+    /// registry row), so a turn that fails in the millisecond it started has the same time, and
+    /// is still after it.
     worked_at: Option<u64>,
     /// An event announced work after the report of this time. Only an idle report newer than
     /// that one has caught up with it, so a turn that started and failed between two looks
@@ -830,8 +832,8 @@ mod tests {
 
     /// The flake on #628: the watch read the agent busy between two back-to-back hooks, and the
     /// turn failed in the same millisecond it started, so the idle report carried the busy one's
-    /// time and was never "newer". benchd stamps an agent's changes in order, so an idle report
-    /// at a time it was seen working is the end of that work.
+    /// time and was never "newer". A report is stamped when the state changes, in order, so an
+    /// idle report at a time it was seen working is the end of that work.
     #[test]
     fn a_turn_that_fails_in_the_millisecond_it_started_still_ends() {
         let mut turn = Turn::default();
