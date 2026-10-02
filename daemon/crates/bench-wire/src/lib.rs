@@ -583,9 +583,10 @@ pub struct HelmAnswer {
 
 pub const HELM_ASKED: &str = "helm/asked";
 
-/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `pane`,
-/// `foreground_pid`, `waiting` and `report` for each pane's agent (presence, the snapshot's
-/// `agent`), so the shape is pinned by `fixtures/session-list.json` on both sides.
+/// One row of `sessions`: a session benchd runs, and the pane that shows it. helm reads `handle`,
+/// `pane`, `foreground_pid`, `waiting`, `report`, `done` and `operator_mail` for each pane's agent
+/// (the snapshot's `agent`, the attention it draws), so the shape is pinned by
+/// `fixtures/session-list.json` on both sides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub session: String,

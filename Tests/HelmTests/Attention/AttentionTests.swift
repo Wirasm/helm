@@ -77,6 +77,21 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(new.map(\.who), ["theirs"])
     }
 
+    /// A wait already open when helm starts is not news; one that begins after is told, once.
+    func testNoNotificationForWhatWasAlreadyAskingAtLaunch() {
+        let foregrounds = SessionForegrounds()
+        var told: [String] = []
+        foregrounds.onAsking = { told += $0.map(\.who) }
+        let first = Attention.items(entries())
+        foregrounds.set([:], attention: first)
+        XCTAssertEqual(told, [], "the first answer only sets the scene")
+        var later = entries()
+        later[2].waiting = .init(waitingFor: "question", since: at(40), source: "hook")
+        foregrounds.set([:], attention: Attention.items(later))
+        foregrounds.set([:], attention: Attention.items(later))
+        XCTAssertEqual(told, ["theirs"])
+    }
+
     /// The whole path: benchd's `sessions` answer reaches every surface's items.
     func testARefreshTakesBenchdsAnswer() async throws {
         let server = try FakeBenchd(

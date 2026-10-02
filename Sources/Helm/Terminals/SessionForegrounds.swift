@@ -58,12 +58,17 @@ final class SessionForegrounds: ObservableObject {
         take(Attention.items(live.sessions))
     }
 
-    /// Keep what needs someone now, and say which items have just started asking.
+    /// Keep what needs someone now, and say which items have just started asking. The first
+    /// answer only sets the scene: a wait already open when helm started is not news.
     private func take(_ attention: [AttentionItem]) {
         let asking = Attention.newlyAsking(before: self.attention, after: attention)
         if attention != self.attention { self.attention = attention }
-        if !asking.isEmpty { onAsking?(asking) }
+        defer { answered = true }
+        if answered, !asking.isEmpty { onAsking?(asking) }
     }
+
+    /// Whether an answer has been taken yet (`take`).
+    private var answered = false
 
     /// Set directly, for tests that say what benchd would answer.
     func set(

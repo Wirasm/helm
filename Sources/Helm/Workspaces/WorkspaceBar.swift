@@ -16,6 +16,9 @@ struct WorkspaceBar: View {
     /// What benchd last said about every pane's agent: the marks are read off it, so the bar
     /// redraws when it changes and keeps nothing of its own.
     @ObservedObject private var foregrounds = TerminalManager.shared.foregrounds
+    /// Which workspace each terminal is in: a pane moved to another workspace takes its mark
+    /// along.
+    @ObservedObject private var terminals = TerminalManager.shared
     @ObservedObject private var keymap = Keymap.shared
     /// Where a dragged tab goes (#178): a workspace tab reorders the bar, and a pane's tab dropped
     /// here moves to that workspace. The bar reports its frames and its own tabs' drags; the
