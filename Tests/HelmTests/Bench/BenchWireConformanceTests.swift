@@ -243,6 +243,8 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertTrue(list.rows.contains { $0.parent != nil }, "a subagent row")
         XCTAssertTrue(list.rows.contains { if case .finished = $0.state { true } else { false } })
         XCTAssertTrue(list.rows.contains { $0.branch == "feat/sessions" })
+        XCTAssertTrue(list.rows.contains { $0.model == "claude-opus-5-5[1m]" })
+        XCTAssertTrue(list.rows.contains { $0.model == nil })
         XCTAssertTrue(list.rows.contains { $0.branch == nil })
     }
 

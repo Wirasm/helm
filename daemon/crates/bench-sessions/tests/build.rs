@@ -1201,3 +1201,110 @@ fn a_finished_codex_session_is_listed_from_its_rollout() {
     };
     assert_eq!(argv[..3], ["codex", "resume", kept]);
 }
+
+#[test]
+fn every_row_says_the_model_its_harness_last_recorded_and_follows_a_switch() {
+    let mut f = Fixture::new();
+    let ws = Fixture::s(f.ws());
+    let append = |path: &Path, record: Value| {
+        use std::io::Write;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(format!("{record}\n").as_bytes())
+            .unwrap();
+    };
+    let claude_model = |id: &str| json!({"type": "attachment", "attachment": {"type": "model", "identity": {"modelId": id}}});
+    // A Claude agent in a pane, and a subagent of it on another model.
+    f.claude(100, "c1", &ws, json!({"status": "busy"}));
+    f.pane(PANE, Some(100));
+    let transcript = f.transcript(&ws, "c1");
+    append(&transcript, claude_model("claude-opus-5-5[1m]"));
+    // A reply names the model without the suffix; the attachment is the record.
+    append(
+        &transcript,
+        json!({"type": "assistant", "message": {"model": "claude-opus-5-5", "content": []}}),
+    );
+    f.subagent(
+        &ws,
+        "c1",
+        "sub",
+        &[
+            claude_model("claude-haiku-4-5-20251001"),
+            assistant(Value::Null, &["tool_use"]),
+        ],
+    );
+    // A pi benchd spawned.
+    let pi_file = f
+        .home()
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws))
+        .join("t_pi-1.jsonl");
+    let pi_model = |id: &str| json!({"type": "model_change", "provider": "p", "modelId": id});
+    write(
+        &pi_file,
+        &jsonl(&[
+            json!({"type": "session", "version": 3, "id": "pi-1", "cwd": ws}),
+            pi_model("google/gemini-2.5-flash"),
+        ]),
+    );
+    f.bench
+        .push(bench_session("s1", "pi-1", &ws, "pi-worker", true));
+    // A finished codex thread, and a codex benchd spawned that has run no turn yet.
+    let thread = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+    let rollout = f.home().join(format!(
+        ".codex/sessions/2026/10/01/rollout-2026-10-01T10-34-56-{thread}.jsonl"
+    ));
+    let turn = |model: &str| json!({"type": "turn_context", "payload": {"model": model}});
+    write(
+        &rollout,
+        &jsonl(&[
+            json!({"type": "session_meta", "payload": {"id": thread}}),
+            turn("gpt-6.1-sol"),
+        ]),
+    );
+    f.hosted(Harness::Codex, thread, &ws);
+    f.bench.push(BenchSession {
+        session: "s2".into(),
+        harness: Harness::Codex,
+        runtime_session: None,
+        cwd: ws.clone(),
+        pid: 401,
+        live: true,
+        spawned_ms: now_ms(),
+        handle: "worker".into(),
+    });
+
+    let mut cache = Cache::default();
+    let models = |built: &Built| -> Vec<(String, Option<String>)> {
+        let mut m: Vec<_> = built
+            .list
+            .rows
+            .iter()
+            .map(|r| (r.id.clone(), r.model.clone()))
+            .collect();
+        m.sort();
+        m
+    };
+    let some = |m: &str| Some(m.to_string());
+    assert_eq!(
+        models(&f.build_with(&mut cache, &f.ws())),
+        [
+            (thread.to_string(), some("gpt-6.1-sol")),
+            ("c1".into(), some("claude-opus-5-5[1m]")),
+            ("pi-1".into(), some("google/gemini-2.5-flash")),
+            ("s2".into(), None),
+            ("sub".into(), some("claude-haiku-4-5-20251001")),
+        ]
+    );
+
+    // Each harness records a switch; the next build with the same cache shows it.
+    append(&transcript, claude_model("claude-sonnet-5-5"));
+    append(&pi_file, pi_model("claude-opus-5-5"));
+    append(&rollout, turn("gpt-6.1-mini"));
+    let built = f.build_with(&mut cache, &f.ws());
+    assert_eq!(row(&built, "c1").unwrap().model, some("claude-sonnet-5-5"));
+    assert_eq!(row(&built, "pi-1").unwrap().model, some("claude-opus-5-5"));
+    assert_eq!(row(&built, thread).unwrap().model, some("gpt-6.1-mini"));
+}

@@ -6,6 +6,7 @@
 //! values it relies on, and anything else is an `Unreadable` — the row skipped and the file
 //! reported — never a guess. Vocabulary was read from Claude Code 2.1.280–2.1.282.
 
+use crate::latest::{self, Field};
 use bench_wire::{Activity, Unreadable};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -53,6 +54,25 @@ pub fn transcript(home: &Path, cwd: &str, session: &str) -> PathBuf {
         .join(mangle(cwd))
         .join(format!("{session}.jsonl"))
 }
+
+/// The model a session runs: the latest `{"type":"attachment","attachment":{"type":"model",
+/// "identity":{"modelId":…}}}`, which Claude writes when a session starts or resumes and on every
+/// `/model`, before the next reply (2.1.287; 596 of 600 transcripts and every subagent's had one).
+/// An assistant record's `message.model` is not used: it comes only with a reply, lacks the
+/// attachment's context suffix (`[1m]`), and is `<synthetic>` on an API error.
+pub const MODEL: Field = Field {
+    needle: b"\"modelId\"",
+    pick: |record| {
+        let attachment = &record["attachment"];
+        (record["type"] == "attachment" && attachment["type"] == "model")
+            .then(|| {
+                attachment["identity"]["modelId"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .flatten()
+    },
+};
 
 pub fn subagents_dir(home: &Path, cwd: &str, session: &str) -> PathBuf {
     home.join(".claude/projects")
@@ -362,8 +382,9 @@ pub struct Cache {
     /// what was appended since the last one — the regression check for a scan that starts
     /// over each time (the spike's naive search once read 193 MB per build).
     pub bytes_scanned: u64,
-    /// pi session names, scanned the same way: only what was appended since the last build.
-    pi_names: HashMap<PathBuf, crate::pi::NameScan>,
+    /// The latest-record scans ([`crate::latest`]) by file and field: pi's session names and
+    /// every harness's model, each reading only what was appended since the last build.
+    latest: HashMap<(PathBuf, &'static [u8]), latest::Scan>,
 }
 
 /// A running subagent's verdict.
@@ -424,18 +445,22 @@ impl Cache {
         }
     }
 
-    /// A pi session's name ([`crate::pi::name`]), kept between builds like a transcript's tail.
-    pub fn pi_name(&mut self, session: &Path) -> Option<String> {
-        self.touched.push(session.to_path_buf());
-        let scan = self.pi_names.entry(session.to_path_buf()).or_default();
-        crate::pi::name(session, scan)
+    /// `field`'s latest value in `path` ([`crate::latest`]), kept between builds like a
+    /// transcript's tail.
+    pub fn latest(&mut self, path: &Path, field: &'static Field) -> Option<String> {
+        self.touched.push(path.to_path_buf());
+        let scan = self
+            .latest
+            .entry((path.to_path_buf(), field.needle))
+            .or_default();
+        latest::read(path, field, scan)
     }
 
     /// Drop every entry this build did not ask about.
     pub fn end_build(&mut self) {
         let touched: std::collections::HashSet<PathBuf> = self.touched.drain(..).collect();
         self.entries.retain(|p, _| touched.contains(p));
-        self.pi_names.retain(|p, _| touched.contains(p));
+        self.latest.retain(|(p, _), _| touched.contains(p));
     }
 }
 

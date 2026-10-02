@@ -136,7 +136,8 @@ enum SessionLine {
         if case .running = row.state { true } else { false }
     }
 
-    /// "feat/x · busy · 2m", "waiting: permission prompt · 40m", "finished 3h ago".
+    /// "feat/x · busy · 2m · claude-opus-5-5", "waiting: permission prompt · 40m", "finished 3h
+    /// ago". The model comes last, so a narrow drawer cuts it before what the agent is doing.
     static func status(_ row: BenchSessionRow, now: Date) -> String {
         let status: String
         switch row.state {
@@ -147,7 +148,8 @@ enum SessionLine {
         case let .finished(atMs):
             status = "finished \(age(since: atMs, now: now)) ago"
         }
-        return row.branch.map { "\($0) · \(status)" } ?? status
+        let line = row.branch.map { "\($0) · \(status)" } ?? status
+        return row.model.map { "\(line) · \($0)" } ?? line
     }
 
     /// What pressing the row does, for its tooltip.

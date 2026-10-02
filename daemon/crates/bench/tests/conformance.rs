@@ -3765,6 +3765,21 @@ fn the_bench_sessions_skills_snippets_execute() {
     let ws = workspace(&home.dir);
     fs::write(ws.join(".git/HEAD"), "ref: refs/heads/feat/skill\n").unwrap();
     let (_, pi_session) = spawn_pi(&home.dir, &ws, "worker");
+    // The session file the fake pi does not write: its header and the model it runs.
+    let pi_dir = home
+        .dir
+        .join(".pi/agent/sessions")
+        .join(bench_sessions::pi::dir_name(&ws.display().to_string()));
+    fs::create_dir_all(&pi_dir).unwrap();
+    fs::write(
+        pi_dir.join(format!("t_{pi_session}.jsonl")),
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"type": "session", "version": 3, "id": pi_session, "cwd": ws}),
+            serde_json::json!({"type": "model_change", "provider": "p", "modelId": "gpt-6.1-sol"}),
+        ),
+    )
+    .unwrap();
     write_claude_transcript(&home.dir, "s-2");
     let mut outputs = Vec::new();
     for (i, snippet) in snippets.iter().enumerate() {
@@ -3787,7 +3802,7 @@ fn the_bench_sessions_skills_snippets_execute() {
         outputs.push(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     assert!(
-        outputs[0].contains(&format!("pi {pi_session} feat/skill running")),
+        outputs[0].contains(&format!("pi {pi_session} feat/skill running gpt-6.1-sol")),
         "the live session is listed: {}",
         outputs[0]
     );

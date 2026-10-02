@@ -166,7 +166,7 @@ final class SessionsModelTests: XCTestCase {
         }!
         XCTAssertEqual(
             SessionLine.status(branched, now: Date(timeIntervalSince1970: 1_790_000_129)),
-            "feat/sessions · shell · 2m")
+            "feat/sessions · shell · 2m · claude-opus-5-5[1m]")
         XCTAssertEqual(
             SessionLine.status(running("waiting", "permission prompt", at: 7_600), now: now),
             "waiting: permission prompt · 40m")

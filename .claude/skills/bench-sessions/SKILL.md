@@ -19,7 +19,7 @@ OUT=$($BENCH sessions --all) || exit
 printf '%s' "$OUT" | python3 -c '
 import json, sys
 for r in json.load(sys.stdin)["rows"]:
-    print(r["harness"], r["id"], r.get("branch") or "", r["state"]["kind"], r.get("name") or "")
+    print(r["harness"], r["id"], r.get("branch") or "", r["state"]["kind"], r.get("model") or "", r.get("name") or "")
 '
 ```
 
@@ -29,6 +29,10 @@ for r in json.load(sys.stdin)["rows"]:
   and finished sessions helm or benchd hosted. Running rows come first.
 - `branch` is the short branch checked out in the row's worktree (`feat/x`), or `null` when
   the root is not a git checkout, its HEAD is detached or HEAD cannot be read.
+- `model` is the model id the harness last recorded for the session (`claude-opus-5-5[1m]`,
+  `gpt-6.1-sol`, pi's `modelId`), so it follows a `/model` switch: Claude and pi record one at
+  start and on every switch, codex at every turn. `null` until the harness records one, which
+  for a codex means before its first turn. A spawn's `--model` alias is never shown in its place.
 - It needs benchd running (exit 2 when it is not). The `bench-mail` skill covers each row's
   `mail` field.
 - **`name` is the harness's own**: Claude's session name, codex's thread name, pi's `/name`.
