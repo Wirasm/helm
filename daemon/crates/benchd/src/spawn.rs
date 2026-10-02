@@ -16,7 +16,7 @@
 //! session it would have shown.
 
 use crate::layout::{self, Change, Committed};
-use crate::{Core, claude_settings, hook, restore, sessions};
+use crate::{Core, claude_settings, hook, restore, resume_dir, sessions};
 use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
@@ -39,6 +39,8 @@ struct Plan {
     /// The mailbox address asked for; the session id when none was.
     handle: Option<String>,
     spec: SpawnSpec,
+    /// What the resume notice says about where a resume runs, when that is not where it ran.
+    note: Option<String>,
     workspace: StandardPath,
     rows: u16,
     cols: u16,
@@ -138,7 +140,7 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
         (c.root.clone(), c.notices.clone())
     };
     let mut spec = plan.spec.clone();
-    wire(&mut spec, &root, id).map_err(|why| (Status::Error, why))?;
+    wire(&mut spec, &root, id, plan.note.as_deref()).map_err(|why| (Status::Error, why))?;
     spec.codex_hook_trust = hook_trust(&spec);
     Session::spawn(
         id.to_string(),
@@ -163,8 +165,14 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 /// [`resume_notice`], so the agent starts a turn rather than sitting at its prompt after its
 /// last turn was cut off. A caller's own prompt (`bench spawn --resume --prompt-file`, what
 /// `just release-resume` sends) wins. `bench resume` drops the old spawn's prompt before it
-/// gets here, so the notice is the only thing a resume ever sends that the caller did not.
-pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<(), String> {
+/// gets here, so the notice is the only thing a resume ever sends that the caller did not. `note`
+/// is what the notice adds about where the resume runs ([`resume_dir::Start`]).
+pub fn wire(
+    spec: &mut SpawnSpec,
+    root: &std::path::Path,
+    id: &str,
+    note: Option<&str>,
+) -> Result<(), String> {
     match spec.agent {
         AgentKind::Claude => spec.settings = Some(claude_settings(root)?),
         AgentKind::Codex => {
@@ -179,21 +187,27 @@ pub fn wire(spec: &mut SpawnSpec, root: &std::path::Path, id: &str) -> Result<()
         _ => {}
     }
     if matches!(spec.conversation, Conversation::Resume(_)) && spec.prompt_file.is_none() {
-        spec.prompt_file = Some(write_prompt(root, &resume_notice(&crate::now_rfc3339()))?);
+        let notice = resume_notice(&crate::now_rfc3339(), note);
+        spec.prompt_file = Some(write_prompt(root, &notice)?);
     }
     Ok(())
 }
 
 /// What a conversation benchd resumes is told first. It asks only to carry on: the operator's
-/// own agents are resumed too, and the notice must never restate a task.
-fn resume_notice(at: &str) -> String {
-    format!(
+/// own agents are resumed too, and the notice must never restate a task. `note` follows, on its
+/// own line, when the resume does not run where the conversation ran.
+fn resume_notice(at: &str, note: Option<&str>) -> String {
+    let mut notice = format!(
         "benchd resumed this conversation in a new process at {at}: benchd restarted, or the \
          process it ran in ended. Everything above is still your conversation. Your last turn \
          was interrupted. Continue where you were; if that work was already finished, say so in \
          one line and wait. Check that anything you had running (gates, watchers, reviewers, \
          background processes) is still alive, and re-arm it. This notice is not a new task.\n"
-    )
+    );
+    if let Some(note) = note {
+        notice.push_str(&format!("\n{note}\n"));
+    }
+    notice
 }
 
 /// The hook trust `spec` starts with ([`SpawnSpec::codex_hook_trust`]): asked of codex for a
@@ -281,13 +295,11 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         serde_json::from_value(req.args.clone()).map_err(|e| format!("spawn args: {e}"))?;
     let test_ok = std::env::var(TEST_AGENT_ENV).is_ok_and(|v| v == "1");
     let agent = AgentKind::parse(&args.agent, test_ok)?;
-    let cwd = args.cwd.as_str();
-    if !cwd.starts_with('/') || !PathBuf::from(cwd).is_dir() {
-        return Err(format!(
-            "cwd must be an absolute path to an existing directory, got {cwd:?}"
-        ));
+    let refused_cwd =
+        |cwd: &str| format!("cwd must be an absolute path to an existing directory, got {cwd:?}");
+    if !args.cwd.starts_with('/') {
+        return Err(refused_cwd(&args.cwd));
     }
-    let workspace = StandardPath::new(cwd)?;
     if args.prompt.is_some() && args.prompt_file.is_some() {
         return Err("pass the first prompt as prompt or as prompt_file, not both".into());
     }
@@ -302,6 +314,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             "prompt_file must be an absolute path to a file the agent can read, got {p:?}"
         ));
     }
+    let (mut cwd, mut note) = (args.cwd.clone(), None);
     let (conversation, posture) = match (args.resume.as_deref(), args.fork.as_deref()) {
         (Some(_), Some(_)) => {
             return Err(
@@ -311,18 +324,23 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         // A conversation is re-entered in the posture it was spawned in: a fork's is read-only
         // (#531), whoever resumes it and by whichever route.
         (Some(id), None) => {
-            let c = core.lock().unwrap();
-            // Two processes on one conversation fork it, as `restore` says too.
-            if restore::held(&c, id) {
-                return Err(format!(
-                    "conversation {id} is already live in another session — attach to that one"
-                ));
-            }
-            let forked_from =
-                sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.as_deref());
+            let forked_from = {
+                let c = core.lock().unwrap();
+                // Two processes on one conversation fork it, as `restore` says too.
+                if restore::held(&c, id) {
+                    return Err(format!(
+                        "conversation {id} is already live in another session — attach to that one"
+                    ));
+                }
+                sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.clone())
+            };
+            let id = conversation_id("--resume", id)?;
+            // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
+            let start = resume_dir::start(agent, &id, &args.cwd)?;
+            (cwd, note) = (start.cwd, start.note);
             (
-                Conversation::Resume(conversation_id("--resume", id)?),
-                Posture::resuming(forked_from),
+                Conversation::Resume(id),
+                Posture::resuming(forked_from.as_deref()),
             )
         }
         // A fork answers questions about the original's work in the original's worktree, so it
@@ -339,9 +357,13 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             Posture::Unattended,
         ),
     };
+    if !PathBuf::from(&cwd).is_dir() {
+        return Err(refused_cwd(&cwd));
+    }
+    let workspace = StandardPath::new(&cwd)?;
     let spec = SpawnSpec {
         agent,
-        cwd: args.cwd.clone(),
+        cwd,
         model: args.model,
         effort: args.effort,
         conversation,
@@ -366,6 +388,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         agent,
         handle: args.name,
         spec,
+        note,
         workspace,
         rows: args.rows.unwrap_or(40),
         cols: args.cols.unwrap_or(140),

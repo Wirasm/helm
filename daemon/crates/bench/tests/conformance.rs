@@ -8488,6 +8488,172 @@ fn spawn_resume_sends_the_notice_unless_the_caller_sent_a_prompt() {
     );
 }
 
+/// A repository under `home` that ignores `.worktrees/`, as helm's does, with the worktree
+/// `.worktrees/w` on branch `feat/x`, and a Claude transcript of conversation `c-wt` there that
+/// names the branch, as Claude Code writes one.
+fn claude_in_a_worktree(home: &Path) -> (PathBuf, String) {
+    let repo = home.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let repo = repo.canonicalize().unwrap();
+    fs::write(repo.join(".gitignore"), "/.worktrees/\n").unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]);
+    git_in(&repo, &["add", ".gitignore"]);
+    git_in(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "x",
+        ],
+    );
+    git_in(
+        &repo,
+        &["worktree", "add", "-q", "-b", "feat/x", ".worktrees/w"],
+    );
+    let wt = repo.join(".worktrees/w").display().to_string();
+    let mangled: String = wt
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let transcript = home
+        .join(".claude/projects")
+        .join(mangled)
+        .join("c-wt.jsonl");
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let line = serde_json::json!({"type": "user", "cwd": wt, "gitBranch": "feat/x"});
+    fs::write(&transcript, format!("{line}\n")).unwrap();
+    (repo, wt)
+}
+
+/// An agent stand-in that records each run as `<physical cwd> <argv>` in `<home>/runs`.
+fn recording_where(home: &Path) -> (String, PathBuf) {
+    let runs = home.join("runs");
+    let record = format!(
+        "printf '%s %s\\n' \"$(pwd -P)\" \"$*\" >> '{}'\nexec cat",
+        runs.display()
+    );
+    (record, runs)
+}
+
+/// The note a resume notice carries about where the resume runs, if any.
+fn resume_note(line: &str) -> String {
+    let (_, text) = pointed_prompt(line);
+    text.split_once("This notice is not a new task.\n")
+        .map(|(_, note)| note.trim().to_string())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_resume_whose_worktree_was_removed_recreates_it_on_the_agents_branch() {
+    // The merge queue prunes a worktree after its merge; the finished agent stays resumable
+    // (#621). Every route that resumes brings the worktree back.
+    let home = TestHome::claim("resume-gone-wt");
+    let (repo, wt) = claude_in_a_worktree(&home.dir);
+    let (record, runs) = recording_where(&home.dir);
+    let remove = || git_in(&repo, &["worktree", "remove", "--force", ".worktrees/w"]);
+    let on_branch = || {
+        let out = isolated("git")
+            .args(["-C", &wt, "branch", "--show-current"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let recreated = |line: &str| {
+        assert!(
+            line.starts_with(&format!("{wt} ")),
+            "runs in the worktree: {line}"
+        );
+        assert_eq!(on_branch(), "feat/x");
+        let note = resume_note(line);
+        assert!(
+            note.contains("recreated") && note.contains("feat/x"),
+            "{note:?}"
+        );
+    };
+    {
+        let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+        let first = &recorded_runs(&runs, 1)[0];
+        assert!(first.starts_with(&format!("{wt} ")), "{first}");
+        assert_eq!(
+            resume_note(first),
+            "",
+            "a folder that is there gets no note"
+        );
+
+        // `bench resume` of the exited session, after its worktree went.
+        let spawned = json_of(&spawned);
+        let sid = spawned["session"].as_str().unwrap().to_string();
+        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
+        wait_until("the agent's session ends", Duration::from_secs(10), || {
+            session_row(&home.dir, &sid)["live"] == false
+        });
+        remove();
+        let resumed = bench(&home.dir, &["resume", &sid]);
+        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+        recreated(&recorded_runs(&runs, 2)[1]);
+    }
+
+    // `restore` after a restart, the worktree gone again.
+    remove();
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    recreated(&recorded_runs(&runs, 3)[2]);
+}
+
+#[test]
+fn with_its_branch_gone_too_claude_resumes_in_the_repo_root_and_pi_is_refused() {
+    // claude and codex re-enter a conversation from any folder; pi starts a new, empty one
+    // there, so it is refused rather than resumed somewhere it would lose its conversation.
+    let home = TestHome::claim("resume-gone-br");
+    let (repo, wt) = claude_in_a_worktree(&home.dir);
+    git_in(&repo, &["worktree", "remove", ".worktrees/w"]);
+    git_in(&repo, &["branch", "-D", "feat/x"]);
+    let (record, runs) = recording_where(&home.dir);
+    let pi_runs = home.dir.join("pi-runs");
+    write_agent_script(
+        &home.dir,
+        "pi",
+        &format!("echo ran >> '{}'\nexec cat", pi_runs.display()),
+    );
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+
+    let claude = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+        ],
+    );
+    assert_eq!(claude.code, 0, "{}", claude.stderr);
+    let line = &recorded_runs(&runs, 1)[0];
+    assert!(line.starts_with(&format!("{} ", repo.display())), "{line}");
+    let note = resume_note(line);
+    assert!(note.contains("repository root"), "{note:?}");
+    assert!(!Path::new(&wt).exists(), "nothing was recreated");
+
+    let pi = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &wt, "--resume", "p-wt"],
+    );
+    assert_eq!(pi.code, 3, "refused: {}", pi.stderr);
+    assert!(pi.stderr.contains("worktree add"), "{}", pi.stderr);
+    // A refusal answers before any process starts; the sleep only lets a wrong start show.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!pi_runs.exists(), "no pi ran");
+}
+
 #[test]
 fn an_alternate_profile_is_neither_read_nor_passed_on() {
     // The operator's ruling (#491): benchd and its agents always use the default profile under

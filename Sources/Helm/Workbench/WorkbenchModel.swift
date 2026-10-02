@@ -247,9 +247,9 @@ final class WorkbenchModel: ObservableObject {
         }
         let prompt = CanvasForkPrompt.text(
             canvas: canvas, source: source, marked: anchor.text, question: annotation.comment)
-        let request = BenchForkRequest(
-            id: "helm-\(UUID().uuidString.lowercased())", agent: author.command,
-            fork: author.session, cwd: author.cwd, prompt: prompt)
+        let request = BenchSpawnRequest(
+            id: "helm-\(UUID().uuidString.lowercased())", agent: author.command, cwd: author.cwd,
+            conversation: .fork(from: author.session, prompt: prompt))
         do {
             let answer = try client.request(request, answering: BenchSpawned.self)
             guard answer.status == .ok, let spawned = answer.data else {

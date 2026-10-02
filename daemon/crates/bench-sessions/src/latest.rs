@@ -79,6 +79,8 @@ mod tests {
             pi::MODEL.needle,
             claude::MODEL.needle,
             codex::MODEL.needle,
+            claude::BRANCH.needle,
+            codex::BRANCH.needle,
         ];
         let distinct: std::collections::HashSet<_> = needles.iter().collect();
         assert_eq!(distinct.len(), needles.len());
