@@ -97,11 +97,13 @@ final class PocketModelTests: XCTestCase {
         for _ in 0..<150 where model.workspaces.isEmpty {
             try await Task.sleep(for: .milliseconds(100))
         }
+        XCTAssertEqual(model.workspaces, ["/w/helm"], "nothing to poll: \(model.state)")
         let poll = Task { await model.refreshSessions() }
         try await Task.sleep(for: .milliseconds(100))
         model.connect("tcp://127.0.0.1:9")
         await poll.value
         XCTAssertEqual(model.sessions, [:], "the old benchd's rows were drawn after moving")
+        model.connect("")  // stop following the address nothing listens on
     }
 
     /// Pocket reaches benchd over TCP only: anything else is refused by name, and nothing is
