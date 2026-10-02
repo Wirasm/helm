@@ -12318,8 +12318,14 @@ fn watch_wakes_on_a_turn_end_and_a_wait_and_gives_up_at_its_timeout() {
     // A turn that fails ends with no `Stop`, and no done: the watch still wakes, as idle.
     claude_turn(&daemon.socket, &sid, pid, conv, "PostToolUse");
     let waiter = watch(h, &["watched", "--timeout", "20"]);
-    // Long enough for the watch to see it at work first.
     std::thread::sleep(Duration::from_millis(1200));
+    claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
+    // However short: a turn that starts and fails back to back, with no pause for a poll.
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(500));
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
     claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
     let (code, out) = watched(waiter);
     assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");

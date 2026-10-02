@@ -355,9 +355,10 @@ turns true when focus arrives at its pane, when the turn ends in the focused pan
 never closes a pane, ends a session or removes a worktree. The only state is three fields on the
 conversation's hosted-sessions entry (`spawner`, `turn_ended_ms`, `seen_ms`), so an unseen finish
 survives a restart; the rest is projected at answer time. `bench watch <handle>` is the agents'
-wait: one `sessions` a second, client-side, until the agent waits, finishes a turn (after
-`--after`), goes idle without finishing one (a failed or interrupted turn, which ends with no
-`Stop`), or its session ends, with no model turn spent.
+wait: it follows benchd's events client-side (`events --follow`) and reads `sessions` only when one
+is about that agent, until the agent waits, finishes a turn (after `--after`), goes idle without
+finishing one after the watch saw it working (a failed or interrupted turn, which ends with no
+`Stop`), or its session ends, with no model turn spent and no turn too short to see.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

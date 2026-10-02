@@ -12,10 +12,12 @@
 use crate::{Cli, exchange, fail, print_response, record_root, refuse};
 use bench_doc::{Direction, Document, DrawerName, PaneId, PaneName, Place, SlotId, Split, Surface};
 use bench_wire::{
-    Activity, DocumentAt, HelmAsk, HelmAskArgs, LayoutVerb, LiveSessions, MoveTo, OpenInto,
-    PaneOpen, ScreenGetArgs, ScreenSendArgs, SessionEntry, SpawnArgs, Status,
+    Activity, DocumentAt, EXIT_NO_DAEMON, HelmAsk, HelmAskArgs, LayoutVerb, LiveSessions, MoveTo,
+    OpenInto, PaneOpen, Response, ScreenGetArgs, ScreenSendArgs, SessionEntry, SpawnArgs, Status,
 };
 use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -456,15 +458,13 @@ fn watch(p: &Parsed, root: PathBuf) -> i32 {
     }
 }
 
-/// How often `watch <handle>` asks. Each ask is one `sessions` answer, which costs benchd a few
-/// file reads; no model turn is spent while it waits.
-const WATCH_EVERY: Duration = Duration::from_secs(1);
-
 /// `watch <handle>` (M1, #357): wait until the agent in the benchd session with that handle waits
-/// on the operator, ends a turn, or its session ends, then print one line saying which, with the
-/// session as `sessions` gives it. A turn that had already ended counts, unless it ended at or
-/// before `--after` (the `since_ms` of the done an earlier watch printed), so a watch right after
-/// mailing new work is not answered with the turn before it. Exit 3 at `--timeout` (1800 s).
+/// on the operator, ends a turn, goes idle without ending one, or its session ends, then print
+/// one line saying which, with the session as `sessions` gives it. It follows benchd's events
+/// rather than polling, so it costs nothing while the agent works and misses no change, however
+/// short the turn. A turn that had already ended counts, unless it ended at or before `--after`
+/// (the `since_ms` of the done an earlier watch printed), so a watch right after mailing new work
+/// is not answered with the turn before it. Exit 3 at `--timeout` (1800 s).
 fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
     let number = |flag: &str| p.value(flag).map(|v| v.parse::<u64>());
     let timeout = match number("--timeout") {
@@ -477,40 +477,31 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
         Some(Ok(ms)) => Some(ms),
         Some(Err(_)) => return refuse("--after needs epoch ms: an earlier done's since_ms"),
     };
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    // Subscribed before the first look, so no change falls between the two.
+    let mut feed = match Feed::open(root.clone()) {
+        Ok(feed) => feed,
+        Err(code) => return code,
+    };
     let cli = Cli {
         verb: "sessions".into(),
         args: Value::Null,
         root,
         asked: false,
     };
-    let deadline = Instant::now() + Duration::from_secs(timeout);
     // Whether this watch has seen the agent at work: only then is idle without a done a turn that
     // ended without finishing, rather than a session that has not started one.
     let mut worked = false;
     // A closed session leaves the list: one this watch saw and cannot find again has ended.
     let mut last: Option<SessionEntry> = None;
     loop {
-        let response = match exchange(&cli) {
-            Ok(r) => r,
-            Err(code) => return code,
-        };
-        if response.status != Status::Ok {
-            return print_response(&response);
-        }
-        let live: LiveSessions = match serde_json::from_value(response.data.unwrap_or_default()) {
+        let live = match live_sessions(&cli) {
             Ok(live) => live,
-            Err(e) => {
-                return fail(&format!(
-                    "sessions answered a shape this bench cannot read: {e}"
-                ));
-            }
+            Err(code) => return code,
         };
         let (entry, outcome) = match (session_of(&live.sessions, handle), last.take()) {
             (Some(entry), _) => {
-                worked |= entry
-                    .report
-                    .as_ref()
-                    .is_some_and(|r| !matches!(r.activity, Activity::Idle | Activity::Unknown));
+                worked |= entry.report.as_ref().is_some_and(|r| working(&r.activity));
                 (entry.clone(), watched(entry, after, worked))
             }
             (None, Some(gone)) => (gone, Some(Watched::Ended)),
@@ -520,15 +511,17 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
                 ));
             }
         };
-        let left = deadline.saturating_duration_since(Instant::now());
         let outcome = match outcome {
             Some(outcome) => outcome,
-            None if left.is_zero() => Watched::Timeout,
-            None => {
-                last = Some(entry);
-                std::thread::sleep(WATCH_EVERY.min(left));
-                continue;
-            }
+            None => match feed.next_about(&entry, deadline) {
+                Ok(Some(busy)) => {
+                    worked |= busy;
+                    last = Some(entry);
+                    continue;
+                }
+                Ok(None) => Watched::Timeout,
+                Err(code) => return code,
+            },
         };
         println!(
             "{}",
@@ -538,6 +531,81 @@ fn watch_agent(p: &Parsed, root: PathBuf, handle: &str) -> i32 {
             Watched::Timeout => Status::Refused.exit_code(),
             Watched::Waiting | Watched::Done | Watched::Idle | Watched::Ended => 0,
         };
+    }
+}
+
+fn live_sessions(cli: &Cli) -> Result<LiveSessions, i32> {
+    let response = exchange(cli)?;
+    if response.status != Status::Ok {
+        return Err(print_response(&response));
+    }
+    serde_json::from_value(response.data.unwrap_or_default()).map_err(|e| {
+        fail(&format!(
+            "sessions answered a shape this bench cannot read: {e}"
+        ))
+    })
+}
+
+fn working(activity: &Activity) -> bool {
+    !matches!(activity, Activity::Idle | Activity::Unknown)
+}
+
+/// benchd's events as they happen (`events --follow`), for `watch <handle>`.
+struct Feed {
+    lines: BufReader<UnixStream>,
+}
+
+impl Feed {
+    fn open(root: PathBuf) -> Result<Feed, i32> {
+        let cli = Cli {
+            verb: "events".into(),
+            args: json!({ "follow": true }),
+            root,
+            asked: false,
+        };
+        let (stream, request) = crate::open(&cli)?;
+        if (&stream).write_all(request.as_bytes()).is_err() {
+            return Err(EXIT_NO_DAEMON);
+        }
+        let reply = crate::read_response_line(&stream).ok_or(EXIT_NO_DAEMON)?;
+        let response: Response = serde_json::from_str(&reply)
+            .map_err(|e| fail(&format!("unreadable response ({e}): {}", reply.trim())))?;
+        if response.status != Status::Ok {
+            return Err(print_response(&response));
+        }
+        Ok(Feed {
+            lines: BufReader::new(stream),
+        })
+    }
+
+    /// Block until an event about the agent in `entry`'s session (its handle or its session id),
+    /// and say whether it was at work; `None` at the deadline.
+    fn next_about(&mut self, entry: &SessionEntry, deadline: Instant) -> Result<Option<bool>, i32> {
+        let mut line = String::new();
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            let _ = self.lines.get_ref().set_read_timeout(Some(left));
+            line.clear();
+            match self.lines.read_line(&mut line) {
+                Ok(0) => return Err(fail("benchd ended the event stream")),
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    return Ok(None);
+                }
+                Err(e) => return Err(fail(&format!("the event stream broke: {e}"))),
+            }
+            let frame: Value = serde_json::from_str(&line).unwrap_or_default();
+            let data = &frame["event"]["data"];
+            if data["handle"] == entry.handle.as_str() || data["session"] == entry.session.as_str()
+            {
+                let busy = serde_json::from_value::<Activity>(data["activity"].clone())
+                    .is_ok_and(|a| working(&a));
+                return Ok(Some(busy));
+            }
+        }
     }
 }
 
