@@ -42,6 +42,9 @@ final class BenchAttentionWireTests: XCTestCase {
         let done = list.rows.compactMap(\.done)
         XCTAssertEqual(Set(done.map(\.to)), ["orchestrator", "operator"])
         XCTAssertEqual(Set(done.map(\.seen)), [true, false])
+        XCTAssertEqual(
+            Set(list.rows.compactMap(\.spawner)), [.operator, .agent(handle: "orchestrator")])
+        XCTAssertTrue(list.rows.contains { $0.spawner == nil }, "unknown is nil")
         let subjects = list.rows.compactMap(\.operatorMail).map { $0.subject ?? "" }
         XCTAssertEqual(subjects.sorted(), ["", "reviewer: blocked"])
         XCTAssertTrue(

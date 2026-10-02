@@ -334,10 +334,10 @@ struct Core {
     stopping: bool,
     /// Each harness's plan limits as last reported (#143, `usage`).
     usage: std::collections::BTreeMap<bench_wire::Harness, bench_wire::Usage>,
-    /// Who spawned each benchd session, by session id, when an agent did (`attention::spawner`):
+    /// Who spawned each benchd session, by session id (`attention::spawner`):
     /// what a codex's record is given when its hook first names its conversation, after the
     /// spawn. Pruned to the sessions `sessions` still holds at each insert.
-    spawners: HashMap<String, String>,
+    spawners: HashMap<String, bench_wire::Spawner>,
 }
 
 /// How many frames a follower may fall behind before it is dropped.
@@ -1004,7 +1004,6 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     }
 }
 
-/// A verb's answer to `req`, or its refusal, closing the connection.
 /// The answer to a verb whose handler tells a refusal (the caller's to fix) from a failure
 /// (benchd's own).
 fn settled(req: &Request, result: Result<Value, sessions::Refusal>) -> (Response, AfterResponse) {
@@ -1022,6 +1021,7 @@ fn settled(req: &Request, result: Result<Value, sessions::Refusal>) -> (Response
     (response, AfterResponse::Done)
 }
 
+/// A verb's answer to `req`, or its refusal, closing the connection.
 fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterResponse) {
     let (status, reason, data) = match result {
         Ok(data) => (Status::Ok, None, Some(data)),

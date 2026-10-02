@@ -126,7 +126,8 @@ for r in json.load(sys.stdin)["rows"]:
 - `done` means the agent's last turn ended and it has not started another. `unseen` means the
   operator has not looked at its pane since; one you spawned is yours to act on, not his.
 - To wait on one agent, `bench watch <handle> --timeout <s>` blocks without a model turn until it
-  waits on the operator, finishes a turn, or its session ends, and prints which (`outcome`) with
+  waits on the operator, finishes a turn, goes idle without finishing one (`idle`: a failed or
+  interrupted turn; read its `bench log`), or its session ends, and prints which (`outcome`) with
   its `bench sessions` entry. After you mail it new work, pass the `done.since_ms` you last saw
   as `--after <ms>`, or the turn before answers for the next one. With no mailbox of your own,
   this is how you hear from the fleet; run it in the background, one per agent you wait on.

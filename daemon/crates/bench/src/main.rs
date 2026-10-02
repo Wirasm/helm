@@ -99,7 +99,8 @@ const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --versi
      \x20                                         cwd's): helm panes, bench sessions, --bg jobs,\n\
      \x20                                         running subagents, and finished hosted sessions\n\
      \x20     sessions dismiss <id> --harness <h> hide a finished row until it finishes again\n\
-     \x20     sessions seen <id> --harness <h>    mark its finished turn seen; it closes nothing\n\
+     \x20     sessions seen <id> --harness <h>    mark its finished turn seen, when the operator\n\
+     \x20           --asked                       asked; it closes nothing\n\
      \x20     log <session id | transcript path>  a Claude, pi or codex session's prompts, replies,\n\
      \x20         [-n N] [--since 30m|2h|1d|<time>] tool calls and errors, read from its transcript\n\
      \x20         [--json]                        with no daemon; the last 40 unless -n says so\n\
@@ -232,8 +233,11 @@ fn run() -> i32 {
     if in_pane && verb != "attach" {
         return refuse("--in-pane is for `attach`");
     }
-    if asked && verb != "drawer" {
-        return refuse("--asked here is for `drawer`; the pane verbs take it too");
+    let marks_seen = verb == "sessions" && positional.first().map(String::as_str) == Some("seen");
+    if asked && verb != "drawer" && !marks_seen {
+        return refuse(
+            "--asked here is for `drawer` and `sessions seen`; the pane verbs take it too",
+        );
     }
     if follow && verb != "events" {
         return refuse("--follow is for `events`");

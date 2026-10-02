@@ -294,6 +294,7 @@ impl<'a> Rows<'a> {
             // Attention (M1, #357) is benchd's own state; it fills these for the rows returned.
             done: None,
             operator_mail: None,
+            spawner: None,
         });
     }
 }

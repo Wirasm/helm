@@ -15,7 +15,7 @@ use bench_sessions::{BenchSession, Cache, Inputs, PaneAgent, Resumable, Waits};
 use bench_wire::{
     AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal, DismissedRecord,
     HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, HostedRecord, HostedSession, HostedVia,
-    MailAddress, SessionKey, SessionsArgs, Unreadable, dismissed_path, hosted_path,
+    MailAddress, SessionKey, SessionsArgs, Spawner, Unreadable, dismissed_path, hosted_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -209,18 +209,36 @@ pub enum Refusal {
 
 /// A session benchd itself started: recorded at spawn, so it has a finished row even if the
 /// daemon restarts before anyone asks for the list. Only a runtime whose id the bench minted
-/// can be recorded — codex names its own sessions after the fact. `spawner` is the agent that
-/// asked for it, `None` for the operator.
-pub fn record_spawn(
-    core: &mut Core,
-    session: &Session,
-    spawner: Option<&str>,
-) -> Result<(), String> {
+/// can be recorded — codex names its own sessions after the fact. `spawner` is who asked for it:
+/// a conversation spawned again (`--resume`) is the new asker's from then on, logged as
+/// `sessions/spawner`.
+pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Result<(), String> {
     let spec = &session.spec;
     let (Some(harness), Some(id)) = (Harness::parse(spec.agent.name()), spec.conversation.id())
     else {
         return Ok(());
     };
+    let key = SessionKey {
+        harness,
+        id: id.to_string(),
+    };
+    let spawner = Some(spawner.clone());
+    if let Some(i) = core
+        .session_records
+        .hosted
+        .iter()
+        .position(|h| h.key() == key)
+    {
+        if core.session_records.hosted[i].attention.spawner == spawner {
+            return Ok(());
+        }
+        core.append(
+            "sessions/spawner",
+            json!({ "harness": harness, "id": id, "spawner": spawner }),
+        )?;
+        core.session_records.hosted[i].attention.spawner = spawner;
+        return save_hosted(&core.root, &core.session_records.hosted);
+    }
     record_hosted(
         core,
         vec![HostedSession {
@@ -234,7 +252,7 @@ pub fn record_spawn(
             recorded_at: now_rfc3339(),
             forked_from: spec.conversation.forked_from().map(str::to_string),
             attention: AttentionRecord {
-                spawner: spawner.map(str::to_string),
+                spawner,
                 ..AttentionRecord::default()
             },
         }],

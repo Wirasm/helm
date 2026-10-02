@@ -196,7 +196,9 @@ pub struct Unread {
     pub delivered_ms: u64,
 }
 
-/// A handle's unread mail only, without the `read/` history [`list`] also walks.
+/// A handle's unread mail only, without the `read/` history [`list`] also walks. Each file's head
+/// is read, not its body, since attention asks on every `sessions` answer; a message that cannot
+/// be read is still counted, from nobody, as [`unread`] counts it.
 pub fn unread_list(root: &Path, handle: &str) -> Vec<Unread> {
     let entries = fs::read_dir(inbox(root, handle))
         .into_iter()
@@ -205,21 +207,28 @@ pub fn unread_list(root: &Path, handle: &str) -> Vec<Unread> {
     entries
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "md"))
-        .filter_map(|path| {
+        .map(|path| {
             let delivered_ms = fs::metadata(&path)
                 .and_then(|m| m.modified())
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_millis() as u64;
-            let (from, _, subject) = parse_front_matter(&fs::read_to_string(&path).ok()?);
-            Some(Unread {
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis() as u64);
+            let (from, _, subject) = parse_front_matter(&head_of(&path));
+            Unread {
                 from,
                 subject,
                 delivered_ms,
-            })
+            }
         })
         .collect()
+}
+
+/// The start of a message file, enough for its front matter: empty when it cannot be read.
+fn head_of(path: &Path) -> String {
+    use std::io::Read;
+    let mut head = Vec::new();
+    let _ = fs::File::open(path).and_then(|f| f.take(2048).read_to_end(&mut head));
+    String::from_utf8_lossy(&head).into_owned()
 }
 
 /// The first id no message in the mailroom has: one past the highest `m<n>` in any inbox
@@ -420,6 +429,9 @@ mod tests {
         );
         assert!(unread[0].delivered_ms > 0);
         assert!(unread_list(&r, "nobody").is_empty());
+        // A file that is not text is still unread mail, from nobody, as `unread` counts it.
+        fs::write(inbox(&r, "b").join("binary.md"), [0xff, 0xfe, 0x00]).unwrap();
+        assert_eq!(unread_list(&r, "b").len(), super::unread(&r, "b"));
         let _ = fs::remove_dir_all(r);
     }
 

@@ -11560,7 +11560,12 @@ fn done_goes_to_the_agent_that_spawned_it_and_survives_a_restart() {
         .into_iter()
         .find(|(k, _)| k == "session/spawned")
         .unwrap();
-    assert_eq!(spawned_event.1["spawner"], "orch", "{:?}", spawned_event.1);
+    assert_eq!(
+        spawned_event.1["spawner"],
+        serde_json::json!({ "kind": "agent", "handle": "orch" }),
+        "{:?}",
+        spawned_event.1
+    );
     // The operator's own spawn is his.
     let (mine, mine_pid) = terminal_process(h, "mine");
     let conv2 = "3e1f4a5b-6c7d-4e8f-9a0b-2c3d4e5f6a7b";
@@ -11644,7 +11649,14 @@ fn marking_seen_clears_done_and_closes_nothing() {
     let before = live_entry(h, &sid);
     let unknown = bench(h, &["sessions", "seen", "nobody", "--harness", "claude"]);
     assert_eq!(unknown.code, 3, "{}", unknown.stderr);
-    let marked = bench(h, &["sessions", "seen", conv, "--harness", "claude"]);
+    // Seen is the operator's: an agent marks it only when he asked.
+    let unasked = bench(h, &["sessions", "seen", conv, "--harness", "claude"]);
+    assert_eq!(unasked.code, 3, "{}", unasked.stderr);
+    assert_eq!(live_entry(h, &sid)["done"]["seen"], false);
+    let marked = bench(
+        h,
+        &["sessions", "seen", conv, "--harness", "claude", "--asked"],
+    );
     assert_eq!(marked.code, 0, "{}", marked.stderr);
     let after = live_entry(h, &sid);
     assert_eq!(after["done"]["seen"], true, "{after}");
@@ -11737,6 +11749,13 @@ fn watch_wakes_on_a_turn_end_and_a_wait_and_gives_up_at_its_timeout() {
         (0, "waiting".into()),
         "{out}"
     );
+    // A turn that fails ends with no `Stop`, and no done: the watch still wakes, as idle.
+    claude_turn(&daemon.socket, &sid, pid, conv, "PostToolUse");
+    let waiter = watch(h, &["watched", "--timeout", "20"]);
+    std::thread::sleep(Duration::from_millis(300));
+    claude_turn(&daemon.socket, &sid, pid, conv, "StopFailure");
+    let (code, out) = watched(waiter);
+    assert_eq!((code, out["outcome"].clone()), (0, "idle".into()), "{out}");
     // A handle nobody has is refused, not waited on.
     let (code, _) = watched(watch(h, &["nobody", "--timeout", "1"]));
     assert_eq!(code, 3);
@@ -11800,12 +11819,81 @@ fn a_pane_agent_s_spawn_is_addressed_to_the_mailbox_in_that_pane() {
         [
             (
                 before["session"].as_str().unwrap().to_string(),
-                serde_json::Value::Null
+                serde_json::json!({ "kind": "operator" })
             ),
             (
                 after["session"].as_str().unwrap().to_string(),
-                orchestrator.into()
+                serde_json::json!({ "kind": "agent", "handle": orchestrator })
             ),
         ]
+    );
+}
+
+/// A conversation spawned again (`--resume`) by another agent is that agent's from then on.
+#[test]
+fn a_resume_by_another_agent_readdresses_its_done() {
+    let home = TestHome::claim("m1-respawn");
+    let h = &home.dir;
+    let daemon = scripted_pi_daemon(h, "#!/bin/sh\nexec sleep 60\n");
+    let ws = workspace(h).display().to_string();
+    let spawn_as = |who: &str, args: &[&str]| {
+        let mut all = vec!["spawn", "--agent", "pi", "--cwd", ws.as_str()];
+        all.extend_from_slice(args);
+        let run = bench_as(h, &all, &[("BENCH_HANDLE", who)]);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)
+    };
+    let settle = |spawned: &serde_json::Value, conv: &str| {
+        for event in ["session_start", "agent_start", "agent_settled"] {
+            hook_verb(
+                &daemon.socket,
+                serde_json::json!({ "harness": "pi", "event": event, "session": conv, "cwd": ws,
+                    "pid": spawned["pid"], "bench_session": spawned["session"] }),
+            );
+        }
+        live_entry(h, spawned["session"].as_str().unwrap())["done"]["to"].clone()
+    };
+    let first = spawn_as("orch-a", &["--name", "first"]);
+    let conv = first["runtime_session"].as_str().unwrap().to_string();
+    assert_eq!(settle(&first, &conv), "orch-a");
+    // A closed pi says so on its way out.
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({ "harness": "pi", "event": "session_shutdown", "session": conv,
+            "cwd": ws, "pid": first["pid"], "bench_session": first["session"] }),
+    );
+    let closed = bench(h, &["close", first["session"].as_str().unwrap()]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    wait_until("the first session is gone", Duration::from_secs(10), || {
+        let list = json_of(&bench(h, &["sessions"]));
+        !list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == first["session"] && s["live"] == true)
+    });
+    let again = spawn_as("orch-b", &["--name", "again", "--resume", &conv]);
+    assert_eq!(settle(&again, &conv), "orch-b");
+    // The drawer's row names its spawner too, beside its own handle.
+    let all = json_of(&bench(h, &["sessions", "--all", "--workspace", &ws]));
+    let row = all["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == conv.as_str());
+    let row = row.unwrap_or_else(|| panic!("no row: {all}"));
+    assert_eq!(
+        (row["spawner"].clone(), row["mail"]["handle"].clone()),
+        (
+            serde_json::json!({ "kind": "agent", "handle": "orch-b" }),
+            "again".into()
+        ),
+        "{row}"
+    );
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "sessions/spawner" && d["spawner"]["handle"] == "orch-b"),
+        "the readdress is logged"
     );
 }

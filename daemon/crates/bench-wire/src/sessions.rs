@@ -78,6 +78,31 @@ pub struct SessionRow {
     /// Unread mail this session's mailbox sent the operator (M1, #357), unlike `mail`, which is
     /// mail waiting for it. `null` when there is none, and always sent.
     pub operator_mail: Option<crate::OperatorMail>,
+    /// Who spawned it (M1, #357): the operator, or an agent and its handle. `null` when benchd
+    /// never recorded it (an entry from before it did, a session it only saw in a pane); always
+    /// sent. The row's own handle is `mail.handle`.
+    pub spawner: Option<Spawner>,
+}
+
+/// Who spawned a session. Tagged from the first kind, so a third is an addition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Spawner {
+    /// The operator: his gesture in helm, helm acting for him, `bench spawn` from his shell, or an
+    /// agent he started himself in a pane.
+    Operator,
+    /// An agent, by its mailbox handle.
+    Agent { handle: String },
+}
+
+impl Spawner {
+    /// The handle its finished turns are addressed to (`Done::to`).
+    pub fn handle(&self) -> &str {
+        match self {
+            Spawner::Operator => crate::OPERATOR_HANDLE,
+            Spawner::Agent { handle } => handle,
+        }
+    }
 }
 
 /// A benchd mailbox: who to `bench mail send --to`, and what that send will do.
@@ -266,10 +291,9 @@ pub struct HostedSession {
 /// benchd already knows. Every field is absent in entries recorded before it existed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionRecord {
-    /// The handle of the agent that spawned it: whose its finished turns are. Absent for a
-    /// session the operator started.
+    /// Who spawned it: whose its finished turns are. Absent when benchd did not record it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spawner: Option<String>,
+    pub spawner: Option<Spawner>,
     /// When its last turn ended, in epoch ms; cleared when it starts another. Kept on disk so a
     /// finished turn nobody looked at is still one after a daemon restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -436,7 +460,14 @@ mod tests {
         assert_the_fixture_carries_attention(&list, &hosted);
         // Each is sent as `null` rather than left out: every row says whether it has a mailbox,
         // whether its worktree has a branch, whether its model is known, and its attention.
-        for key in ["mail", "branch", "model", "done", "operator_mail"] {
+        for key in [
+            "mail",
+            "branch",
+            "model",
+            "done",
+            "operator_mail",
+            "spawner",
+        ] {
             let rows = value["list"]["rows"].as_array().unwrap();
             assert!(rows.iter().all(|r| r.get(key).is_some()), "{key}");
         }
@@ -471,6 +502,14 @@ mod tests {
             .filter_map(|r| Some(r.operator_mail.as_ref()?.subject.is_some()))
             .collect();
         assert!(subjects.contains(&true) && subjects.contains(&false));
+        let spawners: Vec<Option<&Spawner>> =
+            list.rows.iter().map(|r| r.spawner.as_ref()).collect();
+        assert!(spawners.contains(&None) && spawners.contains(&Some(&Spawner::Operator)));
+        assert!(
+            spawners
+                .iter()
+                .any(|s| matches!(s, Some(Spawner::Agent { .. })))
+        );
         assert!(hosted.sessions.iter().any(|h| h.attention.spawner.is_some()
             && h.attention.turn_ended_ms.is_some()
             && h.attention.seen_ms.is_some()));

@@ -76,6 +76,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var done: BenchDone?
     /// Unread mail this session sent the operator (M1, #357).
     package var operatorMail: BenchOperatorMail?
+    /// Who spawned it; nil when benchd never recorded it.
+    package var spawner: BenchSpawner?
 
     package enum State: Equatable, Sendable {
         /// `activity` is the harness's own word: busy, shell, idle, waiting, blocked,
@@ -95,7 +97,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case harness, id, parent, name, branch, model, cwd, state, open, done
+        case harness, id, parent, name, branch, model, cwd, state, open, done, spawner
         case updatedAtMs = "updated_at_ms"
         case operatorMail = "operator_mail"
     }
@@ -104,7 +106,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         harness: String, id: String, parent: String? = nil, name: String? = nil,
         branch: String? = nil, model: String? = nil, cwd: String,
         state: State, open: Open, updatedAtMs: UInt64, done: BenchDone? = nil,
-        operatorMail: BenchOperatorMail? = nil
+        operatorMail: BenchOperatorMail? = nil, spawner: BenchSpawner? = nil
     ) {
         self.harness = harness
         self.id = id
@@ -118,6 +120,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         self.updatedAtMs = updatedAtMs
         self.done = done
         self.operatorMail = operatorMail
+        self.spawner = spawner
     }
 
     package init(from decoder: any Decoder) throws {
@@ -134,6 +137,7 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
         updatedAtMs = try c.decode(UInt64.self, forKey: .updatedAtMs)
         done = try c.decodeIfPresent(BenchDone.self, forKey: .done)
         operatorMail = try c.decodeIfPresent(BenchOperatorMail.self, forKey: .operatorMail)
+        spawner = try c.decodeIfPresent(BenchSpawner.self, forKey: .spawner)
     }
 }
 

@@ -36,7 +36,10 @@
         "id": "4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d",
         "recorded_at": "2026-09-25T12:00:00Z",
         "seen_ms": 1790540700000,
-        "spawner": "orchestrator",
+        "spawner": {
+          "handle": "orchestrator",
+          "kind": "agent"
+        },
         "turn_ended_ms": 1790540812000,
         "via": {
           "handle": "drawer-pi",
@@ -78,6 +81,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "shell"
@@ -104,6 +108,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "waiting",
@@ -143,6 +148,10 @@
           "unread": 2
         },
         "root": "/Users/op/Projects/helm",
+        "spawner": {
+          "handle": "orchestrator",
+          "kind": "agent"
+        },
         "state": {
           "activity": {
             "kind": "idle"
@@ -180,6 +189,9 @@
           "unread": 1
         },
         "root": "/Users/op/Projects/helm",
+        "spawner": {
+          "kind": "operator"
+        },
         "state": {
           "activity": {
             "kind": "unknown"
@@ -207,6 +219,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "detail": "which branch?",
@@ -236,6 +249,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "kind": "busy"
@@ -266,6 +280,7 @@
         "operator_mail": null,
         "parent": "6b1f0c9e-3d2a-4f5b-9c8d-7e6a5b4c3d2e",
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "activity": {
             "count": 3,
@@ -298,6 +313,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm",
+        "spawner": null,
         "state": {
           "at_ms": 1789990000000,
           "kind": "finished"
@@ -331,6 +347,7 @@
         },
         "operator_mail": null,
         "root": "/Users/op/Projects/helm/.worktrees/drawer",
+        "spawner": null,
         "state": {
           "at_ms": 1789980000000,
           "kind": "finished"

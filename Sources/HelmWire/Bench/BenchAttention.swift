@@ -57,6 +57,26 @@ package struct BenchOperatorMail: Decodable, Equatable, Sendable {
     }
 }
 
+/// `bench_wire::Spawner` (M1, #357): who spawned a session. A kind this build does not know is
+/// refused, not guessed.
+package enum BenchSpawner: Decodable, Hashable, Sendable {
+    case `operator`
+    case agent(handle: String)
+
+    private enum CodingKeys: String, CodingKey { case kind, handle }
+
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .kind) {
+        case "operator": self = .operator
+        case "agent": self = .agent(handle: try c.decode(String.self, forKey: .handle))
+        case let kind:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind, in: c, debugDescription: "unknown spawner kind \(kind)")
+        }
+    }
+}
+
 extension Date {
     /// An epoch-ms time off the bench's wire.
     fileprivate init(milliseconds: UInt64) {

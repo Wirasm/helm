@@ -45,9 +45,12 @@ for r in json.load(sys.stdin)["rows"]:
   trust prompt, shows up at all. `bench sessions` (without `--all`) gives each benchd session's
   `waiting` with `since_ms` and its `source`, `hook` or `screen`.
 - **`done`** is on a running row whose agent's turn ended and that has not started another:
-  `{"since_ms", "to", "seen"}`. `to` is the handle of the agent that spawned it, or `operator`.
-  `seen` is whether the operator looked at its pane since; `bench sessions seen <id> --harness
-  <h>` marks it seen for him, and closes nothing. `null` otherwise.
+  `{"since_ms", "to", "seen"}`. `to` is the handle of the agent that last spawned it, or
+  `operator`. `seen` is whether the operator looked at its pane since. `bench sessions seen <id>
+  --harness <h> --asked` marks it seen for him, only when he asked you to; it closes nothing.
+  `null` otherwise.
+- **`spawner`** is who spawned the row's session: `{"kind": "operator"}` or `{"kind": "agent",
+  "handle": "<h>"}`, `null` when benchd never recorded it. The row's own handle is `mail.handle`.
 - **`operator_mail`** is mail the row's mailbox sent the operator that he has not read:
   `{"unread", "since_ms", "subject"}` for the oldest. `null` when there is none.
 
@@ -60,8 +63,9 @@ $BENCH watch "$HANDLE" --timeout 1800
 
 It blocks, spending no model turn, until the agent in the bench session with that handle waits
 on the operator, ends a turn, or its session ends, and prints one line: `{"handle", "outcome":
-"waiting"|"done"|"ended"|"timeout", "session": <its bench sessions entry>}`. Exit 0, or 3 at the
-timeout and for a handle no bench session has. A turn that already ended answers at once: after
+"waiting"|"done"|"idle"|"ended"|"timeout", "session": <its bench sessions entry>}`. `idle` is an
+agent that went quiet without finishing a turn (a failed turn, an interrupt): read its log. Exit
+0, or 3 at the timeout and for a handle no bench session has. A turn that already ended answers at once: after
 you mail it new work, pass the `since_ms` of the `done` you last saw as `--after <ms>` so the
 previous turn does not answer for the next one.
 

@@ -19,32 +19,33 @@ use bench_doc::PaneId;
 use bench_session::Session;
 use bench_wire::{
     Activity, Actor, AttentionRecord, Done, Harness, OPERATOR_HANDLE, OperatorMail, Request,
-    SessionKey, SessionRow, SessionState, hook::Transition,
+    SessionKey, SessionRow, SessionState, Spawner, hook::Transition,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// Whose a spawn's finished turns are: the agent that asked for it, or `None` for the operator.
-/// An agent benchd spawned names its own handle (`BENCH_HANDLE`); one the operator started in a
-/// pane names only the pane, and is whoever holds that pane's mailbox ([`hook::who`]). Anything
-/// else is the operator: his gesture, helm acting for him, or him typing `bench spawn` in a shell.
-/// Asked outside the core lock: `who` probes processes.
-pub fn spawner(core: &Arc<Mutex<Core>>, by: &Actor) -> Option<String> {
-    match by {
+/// Who a spawn is for, from who asked. An agent benchd spawned names its own handle
+/// (`BENCH_HANDLE`); one the operator started in a pane names only the pane, and is whoever holds
+/// that pane's mailbox ([`hook::who`]). Anything else is the operator: his gesture, helm acting
+/// for him, or him typing `bench spawn` in a shell. Asked outside the core lock: `who` probes
+/// processes.
+pub fn spawner(core: &Arc<Mutex<Core>>, by: &Actor) -> Spawner {
+    let agent = match by {
         Actor::Agent {
             handle: Some(handle),
             ..
         } => Some(handle.clone()),
         Actor::Agent {
             pane: Some(pane), ..
-        } => {
-            let pane = PaneId::parse(pane.trim()).ok()?;
-            hook::who(core, pane).map(|who| who.handle)
-        }
+        } => PaneId::parse(pane.trim())
+            .ok()
+            .and_then(|pane| hook::who(core, pane))
+            .map(|who| who.handle),
         _ => None,
-    }
+    };
+    agent.map_or(Spawner::Operator, |handle| Spawner::Agent { handle })
 }
 
 /// A hook event's effect on the record of the agent `key`: a turn end stamps when (and, in the
@@ -104,9 +105,15 @@ pub fn looked(c: &mut Core, pane: PaneId, seq: u64) -> Result<(), String> {
 }
 
 /// `sessions/seen`: the operator has seen this session's finished turn, as if he had focused its
-/// pane. Only a session the record holds; it changes nothing else.
+/// pane. His to say: helm's gesture, or an agent he asked (`asked`). Only a session the record
+/// holds; it changes nothing else.
 pub fn answer_seen(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, Refusal> {
     let by = req.by.clone().unwrap_or_else(Actor::agent);
+    if matches!(by, Actor::Agent { .. }) && !req.asked {
+        return Err(Refusal::Refused(
+            "seen is the operator's: mark it only when he asked you to (--asked)".into(),
+        ));
+    }
     let key: SessionKey = serde_json::from_value(req.args.clone())
         .map_err(|e| Refusal::Refused(format!("sessions/seen args: {e}")))?;
     let mut c = core.lock().unwrap();
@@ -187,7 +194,11 @@ pub fn done(c: &Core, key: &SessionKey, activity: Option<&Activity>) -> Option<D
 fn project(a: &AttentionRecord) -> Option<Done> {
     Some(Done {
         since_ms: a.turn_ended_ms?,
-        to: a.spawner.clone().unwrap_or_else(|| OPERATOR_HANDLE.into()),
+        to: a
+            .spawner
+            .as_ref()
+            .map_or(OPERATOR_HANDLE, Spawner::handle)
+            .to_string(),
         seen: seen(a),
     })
 }
@@ -218,14 +229,16 @@ pub fn of_session(
     (done, mail_from(&s.handle))
 }
 
-/// A `sessions/all` row's attention: a running row's finished turn, by its own conversation and
-/// the activity its harness reports, and its mailbox's unread mail to the operator.
+/// A `sessions/all` row's attention: who spawned it, a running row's finished turn, by its own
+/// conversation and the activity its harness reports, and its mailbox's unread mail to the
+/// operator.
 pub fn show(c: &Core, row: &mut SessionRow, operator_mail: &HashMap<String, OperatorMail>) {
+    let key = SessionKey {
+        harness: row.harness,
+        id: row.id.clone(),
+    };
+    row.spawner = record(c, &key).and_then(|a| a.spawner.clone());
     if let SessionState::Running { activity } = &row.state {
-        let key = SessionKey {
-            harness: row.harness,
-            id: row.id.clone(),
-        };
         row.done = done(c, &key, Some(activity));
     }
     row.operator_mail = row
@@ -259,7 +272,9 @@ mod tests {
 
     fn rec(ended: Option<u64>, seen: Option<u64>, spawner: Option<&str>) -> AttentionRecord {
         AttentionRecord {
-            spawner: spawner.map(str::to_string),
+            spawner: spawner.map(|handle| Spawner::Agent {
+                handle: handle.to_string(),
+            }),
             turn_ended_ms: ended,
             seen_ms: seen,
         }

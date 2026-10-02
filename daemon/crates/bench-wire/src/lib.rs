@@ -63,7 +63,7 @@ pub use sessions::{
     Activity, AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal,
     DismissedRecord, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord,
     HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow,
-    SessionState, SessionsArgs, Unreadable, dismissed_path, hosted_path, sessions_dir,
+    SessionState, SessionsArgs, Spawner, Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
 /// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
@@ -626,10 +626,11 @@ pub struct SessionEntry {
 pub struct Done {
     /// When the turn ended, in epoch ms.
     pub since_ms: u64,
-    /// Whose it is: the handle of the agent that spawned it, or `operator` for one he started.
+    /// Whose it is: the handle of the agent that last spawned it (a `--resume` by another agent
+    /// makes it that agent's), or `operator` for one he started.
     pub to: String,
-    /// The operator focused its pane, or marked it seen (`sessions/seen`), after the turn ended.
-    /// Looking is the only thing that clears it: nothing acknowledges or decays.
+    /// The operator focused its pane, or marked it seen (`sessions/seen`, his or an agent's he
+    /// asked), after the turn ended. Nothing else clears it: nothing acknowledges or decays.
     pub seen: bool,
 }
 

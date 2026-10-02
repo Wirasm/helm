@@ -25,8 +25,8 @@ use bench_session::{
     AgentKind, Conversation, Posture, Session, SpawnSpec, TEST_AGENT_ENV, mint_session_id,
 };
 use bench_wire::{
-    Actor, LayoutVerb, OPERATOR_HANDLE, OpenInto, PaneOpen, Request, Response, SpawnArgs, Status,
-    validate_handle,
+    Actor, LayoutVerb, OPERATOR_HANDLE, OpenInto, PaneOpen, Request, Response, SpawnArgs, Spawner,
+    Status, validate_handle,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -80,7 +80,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
             return Err((Status::Refused, refusal.to_string()));
         }
     };
-    register(&mut c, &plan, &session, pane, spawner.as_deref())?;
+    register(&mut c, &plan, &session, pane, &spawner)?;
     let data = |report: &bench_wire::LayoutReport| {
         json!({
             "session": session.id,
@@ -238,23 +238,20 @@ pub fn agent_env(root: &std::path::Path, id: &str, handle: &str) -> bench_sessio
 }
 
 /// The session joins the registry and the record, logged before the pane that shows it.
-/// `spawner` is the agent that asked for it (`attention::spawner`), `None` for the operator.
+/// `spawner` is who asked for it (`attention::spawner`).
 fn register(
     core: &mut Core,
     plan: &Plan,
     session: &Arc<Session>,
     pane: PaneId,
-    spawner: Option<&str>,
+    spawner: &Spawner,
 ) -> Outcome<()> {
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
-    if let Some(spawner) = spawner {
-        let live = &core.sessions;
-        core.spawners.retain(|id, _| live.contains_key(id));
-        core.spawners
-            .insert(session.id.clone(), spawner.to_string());
-    }
+    let live = &core.sessions;
+    core.spawners.retain(|id, _| live.contains_key(id));
+    core.spawners.insert(session.id.clone(), spawner.clone());
     hook::serve_resumed(core, session);
     core.append(
         "session/spawned",

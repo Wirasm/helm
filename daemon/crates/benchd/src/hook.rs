@@ -525,6 +525,8 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         // `claims_a_mailbox` needs a declaration, so this is never reached.
         (None, None) => return Ok(None),
     };
+    // A pane's own agent is one the operator started there.
+    let spawner = matches!(via, HostedVia::Pane { .. }).then_some(bench_wire::Spawner::Operator);
     sessions::record_claim(
         c,
         HostedSession {
@@ -534,7 +536,10 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
             via,
             recorded_at: now_rfc3339(),
             forked_from: None,
-            attention: AttentionRecord::default(),
+            attention: AttentionRecord {
+                spawner,
+                ..AttentionRecord::default()
+            },
         },
         args.pid,
     )?;
