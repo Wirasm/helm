@@ -561,11 +561,12 @@ fn working(activity: &Activity) -> bool {
 /// can lag one (a turn the hook already announced). An event only says when to look again.
 #[derive(Default)]
 struct Turn {
-    /// A report showed the agent at work during this watch.
-    worked: bool,
-    /// An event announced work; the report's time then. A report newer than it has caught up
-    /// with that turn, even one that started and failed between two looks.
-    announced_after: Option<u64>,
+    /// Work began by then: the time of a report that showed the agent at work, or of the report
+    /// seen before an event announced work. Only an idle report newer than it ends that work, so
+    /// a turn that started and failed between two looks counts, and a row older than the work it
+    /// follows (one that lags, or first appears after the hooks) does not. A report with no time
+    /// cannot be ordered and ends nothing: the timeout answers for it.
+    work_from: Option<u64>,
     /// The time of the last report seen.
     last_since: u64,
 }
@@ -578,14 +579,17 @@ impl Turn {
             return false;
         };
         let since = r.since_ms.unwrap_or(0);
-        self.worked |= working(&r.activity);
-        let caught_up = self.announced_after.is_some_and(|at| since > at);
         self.last_since = since;
-        r.activity == Activity::Idle && (self.worked || caught_up)
+        if working(&r.activity) {
+            self.work_from = Some(self.work_from.map_or(since, |from| from.max(since)));
+            return false;
+        }
+        r.activity == Activity::Idle && self.work_from.is_some_and(|from| since > from)
     }
 
     fn announced(&mut self) {
-        self.announced_after.get_or_insert(self.last_since);
+        let before = self.last_since;
+        self.work_from = Some(self.work_from.map_or(before, |from| from.max(before)));
     }
 }
 
@@ -607,6 +611,8 @@ const WATCH_TICK: Duration = Duration::from_secs(1);
 /// benchd's events as they happen (`events --follow`), for `watch <handle>`.
 struct Feed {
     lines: BufReader<UnixStream>,
+    /// A line read in part when a tick cut the read short; the rest follows.
+    line: String,
 }
 
 impl Feed {
@@ -629,13 +635,13 @@ impl Feed {
         }
         Ok(Feed {
             lines: BufReader::new(stream),
+            line: String::new(),
         })
     }
 
     /// Block until an event about the agent in `entry`'s session (its handle or its session id),
     /// a tick, or the deadline.
     fn next_about(&mut self, entry: &SessionEntry, deadline: Instant) -> Result<Wake, i32> {
-        let mut line = String::new();
         let tick = Instant::now() + WATCH_TICK;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -647,8 +653,7 @@ impl Feed {
                 return Ok(Wake::Tick);
             }
             let _ = self.lines.get_ref().set_read_timeout(Some(wait));
-            line.clear();
-            match self.lines.read_line(&mut line) {
+            match self.lines.read_line(&mut self.line) {
                 Ok(0) => return Err(fail("benchd ended the event stream")),
                 Ok(_) => {}
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
@@ -656,7 +661,8 @@ impl Feed {
                 }
                 Err(e) => return Err(fail(&format!("the event stream broke: {e}"))),
             }
-            let frame: Value = serde_json::from_str(&line).unwrap_or_default();
+            let frame: Value = serde_json::from_str(&self.line).unwrap_or_default();
+            self.line.clear();
             let data = &frame["event"]["data"];
             if data["handle"] == entry.handle.as_str() || data["session"] == entry.session.as_str()
             {

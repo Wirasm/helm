@@ -359,8 +359,9 @@ wait: it follows benchd's events client-side (`events --follow`) and reads `sess
 about that agent and once a second besides (Claude's registry row can change with no hook, as on
 Esc), judging work and idle from that report alone, until the agent waits, finishes a turn (after
 `--after`), goes idle without finishing one after the watch saw it working (a failed or interrupted
-turn, which ends with no `Stop`), or its session ends, with no model turn spent and no turn too
-short to see.
+turn, which ends with no `Stop`), or its session ends, with no model turn spent; an idle report
+counts only when it is newer than the work it follows, so a report with no time waits for the
+timeout.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance

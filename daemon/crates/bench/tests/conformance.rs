@@ -12531,8 +12531,19 @@ fn watch_reads_claude_s_registry_row_for_a_turn_no_hook_ends() {
         )
         .unwrap();
     };
+    // A row that first appears after the hooks, idle and older than the work they announced,
+    // ends nothing.
     claude_turn(&daemon.socket, &sid, pid, conv, "SessionStart");
+    claude_turn(&daemon.socket, &sid, pid, conv, "UserPromptSubmit");
+    let late = watch(h, &["clauded", "--timeout", "3"]);
+    std::thread::sleep(Duration::from_millis(800));
     row("idle", started + 10);
+    let (code, out) = watched(late);
+    assert_eq!(
+        (code, out["outcome"].clone()),
+        (3, "timeout".into()),
+        "{out}"
+    );
     // The hook says a turn began; the row has not caught up: not an answer.
     let lagging = watch(h, &["clauded", "--timeout", "3"]);
     std::thread::sleep(Duration::from_millis(800));
