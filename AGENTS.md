@@ -141,8 +141,9 @@ from `statusUpdatedAt`, is a stall. Read on demand; the file is replaced, not re
 ## Driving the bench
 
 An agent's whole surface onto the bench is the `bench` CLI, the same door the operator's keys go
-through: `open <file|browser|terminal>`, `split`, `show`, `focus`, `move`, `name`, `close`, `get`,
-`get pane`, `get screen`, `watch screen`, `send`, `spawn`, `sessions`, `file read|write`, `mail`.
+through: `open <file|browser|terminal>`, `split`, `show`, `focus`, `move`, `name`, `close`,
+`workspace close`, `get`, `get pane`, `get screen`, `watch screen`, `send`, `spawn`, `sessions`,
+`file read|write`, `mail`.
 The skills are the guides: `bench-panes`, `bench-mail`, `bench-browser`, `bench-sessions`,
 `helm-canvas`, and `helm-orchestrate` for running a fleet of agents through them.
 

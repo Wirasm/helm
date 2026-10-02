@@ -206,7 +206,8 @@ fn log_and_save(core: &mut Core, change: Change) -> Committed {
 ///
 /// - **Close (#176).** An agent's close ends what runs in a terminal, so it says `force` when
 ///   something would be lost: a live agent session (named), or a shell running a command (the
-///   command named). A shell at its prompt closes without it (M5b).
+///   command named). A shell at its prompt closes without it (M5b). A workspace's close
+///   answers to the same rule for every pane on its bench (#608).
 /// - **Name (#313).** An agent replaces a name somebody chose only with `rename`.
 /// - **The caller's workspace (#226).** An agent's `pane/open`/`pane/split` that names no
 ///   workspace goes to the workspace it is working in, as `push.sh` routed by its pane.
@@ -242,30 +243,27 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
     };
     let doc = &core.bench.document;
     match verb {
-        LayoutVerb::PaneClose { pane: id, force } => {
-            let live = doc
-                .pane(id)
-                .and_then(|p| p.surface.session())
-                .and_then(|s| core.sessions.get(s))
-                .filter(|s| s.is_live());
-            let refusal = match live {
-                _ if force => None,
-                // Its session has ended, or it never had one: nothing runs there to lose.
-                None => None,
-                // A shell at its prompt loses nothing; one running a command would lose it.
-                Some(shell) if shell.agent == AgentKind::Shell => {
-                    shell.foreground_job().map(|(_, name)| format!(
-                        "pane {id} is running {name} — closing the pane ends it; pass --force if that is what you mean"
-                    ))
-                }
-                Some(session) => Some(format!(
-                    "pane {id} shows session {}, which is still running — closing the pane ends it; pass --force if that is what you mean",
-                    session.id
+        LayoutVerb::PaneClose { pane: id, force } => match still_running(core, id) {
+            Some(what) if !force => Err(format!(
+                "pane {id} {what} — closing the pane ends it; pass --force if that is what you mean"
+            )),
+            _ => Ok(LayoutVerb::PaneClose { pane: id, force }),
+        },
+        // The pane-by-pane rule, for every pane of its bench: an agent closes through the
+        // workspace only what it could close pane by pane (#608). The focus half needs no check
+        // here: closing the workspace on screen moves the operator's focus, which the document
+        // refuses.
+        LayoutVerb::WorkspaceClose { path, force } => {
+            let running = doc.workspace(&path).filter(|_| !force).and_then(|w| {
+                w.bench
+                    .panes()
+                    .find_map(|p| Some((p.id, still_running(core, p.id)?)))
+            });
+            match running {
+                Some((id, what)) => Err(format!(
+                    "workspace {path}: pane {id} {what} — closing the workspace ends it; pass --force if that is what you mean"
                 )),
-            };
-            match refusal {
-                Some(why) => Err(why),
-                None => Ok(LayoutVerb::PaneClose { pane: id, force }),
+                None => Ok(LayoutVerb::WorkspaceClose { path, force }),
             }
         }
         LayoutVerb::PaneName {
@@ -306,6 +304,29 @@ fn admit(core: &Core, verb: LayoutVerb, by: &Actor) -> Result<LayoutVerb, String
         }),
         other => Ok(other),
     }
+}
+
+/// What closing pane `id` would end, in words for a refusal: a live agent session, or the
+/// command a shell is running. `None` when nothing would be lost — its session has ended, it
+/// never had one, or it is a shell at its prompt (M5b). `pane/close` and `workspace/close` both
+/// ask this, so an agent's `--force` means the same thing for one pane and for a workspace.
+fn still_running(core: &Core, id: PaneId) -> Option<String> {
+    let session = core
+        .bench
+        .document
+        .pane(id)
+        .and_then(|p| p.surface.session())
+        .and_then(|s| core.sessions.get(s))
+        .filter(|s| s.is_live())?;
+    if session.agent == AgentKind::Shell {
+        return session
+            .foreground_job()
+            .map(|(_, name)| format!("is running {name}"));
+    }
+    Some(format!(
+        "shows session {}, which is still running",
+        session.id
+    ))
 }
 
 /// An agent's `by`, with the pane it runs in filled in when benchd knows it and the agent did
@@ -392,7 +413,7 @@ pub fn apply(
                 Outcome::default()
             })
         }
-        LayoutVerb::WorkspaceClose { path } => {
+        LayoutVerb::WorkspaceClose { path, .. } => {
             doc.close_workspace(path, focus)?;
             Ok(Outcome::default())
         }

@@ -73,8 +73,15 @@ pub enum LayoutVerb {
     Get,
     #[serde(rename = "workspace/open")]
     WorkspaceOpen { path: StandardPath },
+    /// Takes the workspace and every pane on its bench off the bench, ending the sessions they
+    /// show; the folder, worktree and branch stay. `force`: an agent's close of a workspace where
+    /// something runs ends it, so it says it means to, as `pane/close` does.
     #[serde(rename = "workspace/close")]
-    WorkspaceClose { path: StandardPath },
+    WorkspaceClose {
+        path: StandardPath,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
     #[serde(rename = "workspace/activate")]
     WorkspaceActivate { path: StandardPath },
     /// Reorder the workspace bar (#178): `path` goes before `before`, or last. Focus is
@@ -541,6 +548,30 @@ mod tests {
         assert!(to(json!({"tab": {}})).is_err());
         assert!(to(json!({"beside": {"slot": slot}})).is_err());
         assert!(to(json!({"anywhere": {}})).is_err());
+    }
+
+    /// helm's operator close never sends `force`, so the shared fixture's sample is the bare
+    /// path; an agent's `--force` is spelled here, as `pane/close`'s is (#608).
+    #[test]
+    fn workspace_close_writes_force_only_when_it_is_said() {
+        let verb = |args: Value| {
+            serde_json::from_value::<LayoutVerb>(json!({"verb": "workspace/close", "args": args}))
+                .unwrap()
+        };
+        let bare = verb(json!({"path": "/tmp/w"}));
+        assert!(matches!(
+            bare,
+            LayoutVerb::WorkspaceClose { force: false, .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&bare).unwrap()["args"],
+            json!({"path": "/tmp/w"})
+        );
+        let forced = verb(json!({"path": "/tmp/w", "force": true}));
+        assert_eq!(
+            serde_json::to_value(&forced).unwrap()["args"],
+            json!({"path": "/tmp/w", "force": true})
+        );
     }
 
     #[test]

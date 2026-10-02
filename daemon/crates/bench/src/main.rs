@@ -79,6 +79,9 @@ fn usage() -> &'static str {
      \x20     move <pane> --workspace <path>      into that workspace's focused slot\n\
      \x20     name <pane> <words> [--rename]      name a pane; a chosen name needs --rename\n\
      \x20     close <pane> [--force] [--asked]    close a pane; a terminal needs --force\n\
+     \x20     workspace close <path>              take a workspace and its panes off the bench; the\n\
+     \x20           [--force] [--asked]           folder stays. Something running there needs\n\
+     \x20                                         --force, the one on screen --asked\n\
      \x20     get pane <pane>                     where a pane is, and whether it is seen\n\
      \x20     get screenshot [--out <p.png>]      helm draws its window (helm must follow the\n\
      \x20           [--window <title>]            bench)\n\

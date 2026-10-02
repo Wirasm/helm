@@ -7429,6 +7429,130 @@ fn closing_a_workspace_ends_the_shells_its_panes_ran() {
     assert!(session_row(&home.dir, &sid).is_null());
 }
 
+/// `bench workspace close` (#608): an orchestrator closes the workspace of a worktree it is done
+/// with. It closes only what the agent could close pane by pane: a pane where something runs
+/// needs --force, and the workspace the operator is in needs --asked. A workspace whose folder is
+/// gone still closes, and nothing on disk is touched.
+#[test]
+fn an_agent_closes_a_workspace_only_as_it_could_close_its_panes() {
+    let home = TestHome::claim("ws-close");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let dir = |name: &str| {
+        let d = home.dir.join(name);
+        fs::create_dir_all(d.join(".git")).unwrap();
+        d.canonicalize().unwrap().display().to_string()
+    };
+    let (held, busy, gone) = (dir("held"), dir("busy"), dir("gone"));
+    fs::write(Path::new(&busy).join("keep.txt"), "mine").unwrap();
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": held }),
+        operator(),
+        false,
+    ));
+    // The orchestrator's worktrees: background workspaces, each a shell.
+    let mut first = Vec::new();
+    for ws in [&busy, &gone] {
+        let opened = ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            None,
+            false,
+        ));
+        first.push(opened["pane_created"].as_str().unwrap().to_string());
+    }
+    let sid = pane_session(&home.dir, &first[0]).unwrap();
+    let pid = session_row(&home.dir, &sid)["pid"].as_i64().unwrap();
+    let (resp, stream) = raw_request(
+        &daemon.socket,
+        "attach",
+        serde_json::json!({"session": sid}),
+    );
+    assert_eq!(resp["status"], "ok");
+    (&stream)
+        .write_all(&AttachFrame::Input(b"sleep 30\n".to_vec()).encode())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while session_row(&home.dir, &sid)["foreground_pid"].as_i64() == Some(pid) {
+        assert!(Instant::now() < deadline, "sleep never took the terminal");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let open = |doc: &serde_json::Value| -> Vec<String> {
+        doc["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let refused = bench(&home.dir, &["workspace", "close", &busy]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("running sleep") && refused.stderr.contains("--force"),
+        "{}",
+        refused.stderr
+    );
+    assert!(open(&document(&daemon.socket)).contains(&busy));
+    let forced = bench(&home.dir, &["workspace", "close", &busy, "--force"]);
+    assert_eq!(forced.code, 0, "{}", forced.stderr);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while libc_alive(pid as i32) {
+        assert!(
+            Instant::now() < deadline,
+            "the shell outlived its workspace"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        fs::read_to_string(Path::new(&busy).join("keep.txt")).unwrap(),
+        "mine",
+        "closing a workspace touches no file"
+    );
+    assert!(Path::new(&busy).join(".git").is_dir(), "nor git");
+
+    // A removed worktree: its folder is gone, its shell idles at the prompt.
+    fs::remove_dir_all(&gone).unwrap();
+    let closed = bench(&home.dir, &["workspace", "close", &gone]);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+
+    // The operator's own workspace moves his focus, whatever --force says.
+    let mine = bench(&home.dir, &["workspace", "close", &held, "--force"]);
+    assert_eq!(mine.code, 3, "{}", mine.stderr);
+    assert!(mine.stderr.contains("--asked"), "{}", mine.stderr);
+    assert_eq!(open(&document(&daemon.socket)), vec![held.clone()]);
+    let asked = bench(&home.dir, &["workspace", "close", &held, "--asked"]);
+    assert_eq!(asked.code, 0, "{}", asked.stderr);
+    assert!(open(&document(&daemon.socket)).is_empty());
+}
+
+/// A spawned agent's session in a background workspace: the other half of the rule, a live
+/// agent rather than a shell's job, refused naming the session (#608).
+#[test]
+fn closing_a_workspace_where_an_agent_runs_needs_force() {
+    let home = TestHome::claim("ws-close-agent");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    working_bench(&daemon.socket);
+    let ws = workspace(&home.dir).display().to_string();
+    let spawned = bench(
+        &home.dir,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--name", "worker"],
+    );
+    assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+    let session = json_of(&spawned)["session"].as_str().unwrap().to_string();
+    let refused = bench(&home.dir, &["workspace", "close", &ws]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains(&session) && refused.stderr.contains("--force"),
+        "{}",
+        refused.stderr
+    );
+    let forced = bench(&home.dir, &["workspace", "close", &ws, "--force"]);
+    assert_eq!(forced.code, 0, "{}", forced.stderr);
+}
+
 #[test]
 fn after_a_restart_restore_resumes_the_recorded_agent_and_gives_other_panes_a_shell() {
     let home = TestHome::claim("m5b-restore");
