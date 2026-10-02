@@ -45,9 +45,14 @@ final class BrowserFormPicker: ObservableObject {
     @Published private(set) var highlighted = -1
 
     fileprivate struct Element {
-        let connection: CDPConnection
-        let session: String
-        let object: String
+        let frames: BrowserFrameResolver
+        let target: BrowserFrameResolver.Object
+    }
+
+    private var resolving: BrowserFrameResolver?
+
+    func invalidated(by event: CDPConnection.Event) -> Bool {
+        resolving?.invalidated(by: event) == true
     }
 
     /// A plain left press resolves its hit target; keyboard opening resolves the focused leaf.
@@ -55,40 +60,26 @@ final class BrowserFormPicker: ObservableObject {
     func open(
         at point: CGPoint?, connection: CDPConnection, session: String, isCurrent: () -> Bool
     ) async throws -> Bool {
+        dismiss()
+        let frames = BrowserFrameResolver(connection: connection, session: session)
+        resolving = frames
+        defer {
+            if current?.element.frames !== frames {
+                frames.close()
+                if resolving === frames { resolving = nil }
+            }
+        }
         var captured: Element?
         do {
-            guard
-                let resolved = try await resolve(
-                    at: point, connection: connection, session: session)
-            else { return false }
-            let object = resolved.control
-            defer {
-                connection.send(
-                    "Runtime.releaseObject", ObjectID(objectId: resolved.hit), session: session)
-            }
-            let held = Element(connection: connection, session: session, object: object)
+            guard let resolved = try await resolve(at: point, frames: frames) else { return false }
+            defer { frames.release(resolved.hit) }
+            let held = Element(frames: frames, target: resolved.control)
             captured = held
-            guard isCurrent() else { release(held); return true }
-            if point != nil {
-                let activation = try await connection.call(
-                    "Runtime.callFunctionOn",
-                    Function(
-                        objectId: resolved.hit, functionDeclaration: BrowserFormScript.activate,
-                        arguments: [.object(object)]),
-                    session: session, returning: ValueReply<Bool>.self)
-                guard activation.result.value == true else { release(held); return true }
-            }
-            guard isCurrent() else { release(held); return true }
-            let reply = try await connection.call(
-                "Runtime.callFunctionOn",
-                Function(objectId: object, functionDeclaration: BrowserFormScript.read),
-                session: session, returning: ValueReply<Control>.self)
-            guard isCurrent(), let control = reply.result.value else {
-                release(held)
-                return true
-            }
+            guard
+                let control = try await read(
+                    held, hit: resolved.hit, pointer: point != nil, isCurrent: isCurrent)
+            else { release(held); return true }
             if point == nil, case .date = control { release(held); return false }
-            dismiss()
             current = Pick(control: control, element: held)
             if case let .select(_, selected) = control { highlighted = selected }
             return true
@@ -97,55 +88,70 @@ final class BrowserFormPicker: ObservableObject {
                 release(captured)
                 throw error
             }
+            if error is BrowserFrameResolver.Invalidation { throw error }
             return false
         }
     }
 
-    private func resolve(
-        at point: CGPoint?, connection: CDPConnection, session: String
-    )
-        async throws -> (control: String, hit: String)?
-    {
-        let object: String?
-        if let point {
-            let node = try await connection.call(
-                "DOM.getNodeForLocation", Location(x: Int(point.x), y: Int(point.y)),
-                session: session, returning: Node.self)
-            let resolved = try await connection.call(
-                "DOM.resolveNode", Resolve(backendNodeId: node.backendNodeId),
-                session: session, returning: Resolved.self)
-            object = resolved.object.objectId
-        } else {
-            object = try await BrowserFocusedElement.resolve(
-                connection: connection, session: session)
-        }
-        guard let object else { return nil }
-        do {
-            let control = try await connection.call(
+    private func read(
+        _ held: Element, hit: BrowserFrameResolver.Object, pointer: Bool, isCurrent: () -> Bool
+    ) async throws -> Control? {
+        guard isCurrent() else { return nil }
+        let connection = held.frames.connection
+        let object = held.target.id
+        let session = held.target.session
+        if pointer {
+            let activation = try await connection.call(
                 "Runtime.callFunctionOn",
                 Function(
-                    objectId: object, functionDeclaration: BrowserFormScript.control,
+                    objectId: hit.id, functionDeclaration: BrowserFormScript.activate,
+                    arguments: [.object(object)]),
+                session: session, returning: ValueReply<Bool>.self)
+            guard activation.result.value == true else { return nil }
+        }
+        guard isCurrent() else { return nil }
+        let reply = try await connection.call(
+            "Runtime.callFunctionOn",
+            Function(objectId: object, functionDeclaration: BrowserFormScript.read),
+            session: session, returning: ValueReply<Control>.self)
+        return isCurrent() ? reply.result.value : nil
+    }
+
+    private func resolve(
+        at point: CGPoint?, frames: BrowserFrameResolver
+    ) async throws
+        -> (control: BrowserFrameResolver.Object, hit: BrowserFrameResolver.Object)?
+    {
+        guard let hit = try await frames.resolve(at: point) else { return nil }
+        do {
+            let control = try await frames.connection.call(
+                "Runtime.callFunctionOn",
+                Function(
+                    objectId: hit.id, functionDeclaration: BrowserFormScript.control,
                     returnByValue: false),
-                session: session, returning: ObjectReply.self)
-            if let captured = control.result.objectId { return (captured, object) }
+                session: hit.session, returning: ObjectReply.self)
+            if let captured = control.result.objectId {
+                return (.init(session: hit.session, id: captured), hit)
+            }
         } catch {
-            connection.send("Runtime.releaseObject", ObjectID(objectId: object), session: session)
+            frames.release(hit)
             throw error
         }
-        connection.send("Runtime.releaseObject", ObjectID(objectId: object), session: session)
+        frames.release(hit)
         return nil
     }
 
     func dismiss() {
         if let current { release(current.element) }
         current = nil
+        resolving?.close()
+        resolving = nil
         failure = nil
         highlighted = -1
     }
 
     private func release(_ element: Element) {
-        element.connection.send(
-            "Runtime.releaseObject", ObjectID(objectId: element.object), session: element.session)
+        element.frames.release(element.target)
     }
 
     func choose(index: Int) async {
@@ -160,12 +166,12 @@ final class BrowserFormPicker: ObservableObject {
         guard let pick = current else { return }
         let held = pick.element
         do {
-            let result = try await held.connection.call(
+            let result = try await held.frames.connection.call(
                 "Runtime.callFunctionOn",
                 Function(
-                    objectId: held.object, functionDeclaration: BrowserFormScript.commit,
+                    objectId: held.target.id, functionDeclaration: BrowserFormScript.commit,
                     arguments: [.answer(answer)]),
-                session: held.session, returning: ValueReply<String>.self)
+                session: held.target.session, returning: ValueReply<String>.self)
             guard current?.id == pick.id else { return }
             if result.result.value == "ok" {
                 dismiss()
@@ -197,12 +203,7 @@ final class BrowserFormPicker: ObservableObject {
     }
 }
 
-private struct Location: Encodable { let x: Int; let y: Int }
-private struct Node: Decodable { let backendNodeId: Int }
-private struct Resolve: Encodable { let backendNodeId: Int }
-private struct ObjectID: Encodable { let objectId: String }
 private struct RemoteObject: Decodable { let objectId: String? }
-private struct Resolved: Decodable { let object: RemoteObject }
 private struct ObjectReply: Decodable { let result: RemoteObject }
 private struct Answer: Encodable { let index: Int?; let value: String?; let label: String? }
 private enum Argument: Encodable {

@@ -49,6 +49,10 @@ final class BrowserPageInput {
         forms.dismiss()
     }
 
+    func handle(_ event: CDPConnection.Event) {
+        if forms.invalidated(by: event) { reset() }
+    }
+
     private func current(_ dest: Destination, revision: Int) -> Bool {
         self.revision == revision && isCurrent(dest)
     }
@@ -113,6 +117,9 @@ final class BrowserPageInput {
             return try await forms.open(
                 at: point, connection: dest.connection, session: dest.session,
                 isCurrent: { self.current(dest, revision: revision) })
+        } catch is BrowserFrameResolver.Invalidation {
+            if current(dest, revision: revision) { reset() }
+            return true
         } catch {
             if current(dest, revision: revision) {
                 failed("The page could not open this picker: \(error)")
