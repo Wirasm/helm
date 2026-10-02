@@ -1339,6 +1339,14 @@ mod tests {
         let args: SpawnArgs = serde_json::from_value(resume.args.clone()).unwrap();
         assert_eq!(serde_json::to_value(&args).unwrap(), resume.args);
         assert!(args.resume.is_some() && args.prompt.is_none());
+        // Pocket's start (#625): a new conversation with its first message as text, sent by
+        // helm so benchd moves nobody's focus, and recorded as the operator's spawn.
+        let start: Request = serde_json::from_value(value["start"].clone()).unwrap();
+        assert_eq!(start.by, Some(Actor::Helm));
+        let args: SpawnArgs = serde_json::from_value(start.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), start.args);
+        assert!(args.prompt.is_some() && args.model.is_some() && args.effort.is_some());
+        assert!(args.resume.is_none() && args.fork.is_none());
     }
 
     /// `fixtures/session-list.json` holds a `sessions` answer as helm reads it (M5b).

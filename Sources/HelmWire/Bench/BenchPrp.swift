@@ -92,6 +92,12 @@ package struct BenchPrpArtifact: Decodable, Equatable, Sendable {
     package var relative: String
     package var modifiedMs: UInt64
 
+    package init(path: String, relative: String, modifiedMs: UInt64) {
+        self.path = path
+        self.relative = relative
+        self.modifiedMs = modifiedMs
+    }
+
     private enum CodingKeys: String, CodingKey {
         case path, relative
         case modifiedMs = "modified_ms"

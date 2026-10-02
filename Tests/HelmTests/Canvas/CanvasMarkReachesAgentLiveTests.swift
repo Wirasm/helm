@@ -1,3 +1,4 @@
+import CanvasKit
 import Combine
 import HelmWire
 import WebKit

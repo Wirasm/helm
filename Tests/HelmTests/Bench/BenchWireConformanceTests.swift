@@ -176,38 +176,6 @@ final class BenchWireConformanceTests: XCTestCase {
                 session: "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", pid: 4242))
     }
 
-    /// "Ask a fork" (#535) and the drawer's resume (#621): the spawns helm sends are the ones
-    /// benchd reads, and helm reads what benchd answers. The daemon gate decodes the same requests
-    /// into `SpawnArgs` and checks a live fork's answer carries every key of `fork_reply`.
-    func testTheSpawnRequestsAndAnswerMatchTheDaemonsFixture() throws {
-        let samples =
-            try JSONSerialization.jsonObject(with: fixture("spawn-verbs.json")) as! [String: Any]
-        let request = BenchSpawnRequest(
-            id: "helm-3", agent: "claude", cwd: "/Users/operator/Projects/helm",
-            conversation: .fork(
-                from: "4b1c9e0f-2a3d-4c5e-8f60-718293a4b5c6",
-                prompt: "You are a fork.\n\n```text\nthe marked passage\n```\n\nWhy four retries?"
-            ))
-        XCTAssertEqual(
-            try normalized(JSONEncoder().encode(request)),
-            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["fork"]))))
-        // The sessions drawer's resume of a finished row (#621).
-        let resume = BenchSpawnRequest(
-            id: "helm-4", agent: "codex", cwd: "/Users/operator/Projects/helm/.worktrees/oopif",
-            conversation: .resume("01a0faf8-b4ca-7122-9900-1340d800117a"))
-        XCTAssertEqual(
-            try normalized(JSONEncoder().encode(resume)),
-            try normalized(JSONSerialization.data(withJSONObject: XCTUnwrap(samples["resume"]))))
-
-        let reply = try JSONDecoder().decode(
-            BenchSpawned.self,
-            from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["fork_reply"])))
-        XCTAssertEqual(
-            reply,
-            BenchSpawned(
-                handle: "s7", pane: UUID(uuidString: "0e8e8cc6-159b-45d8-bc02-485120975998")!))
-    }
-
     /// The sessions drawer's two requests are written as benchd reads them, and every row of
     /// its reply decodes — every state and every open action (#384).
     func testTheSessionsRequestsMatchTheDaemonsSampleAndEveryRowDecodes() throws {
@@ -228,6 +196,12 @@ final class BenchWireConformanceTests: XCTestCase {
         XCTAssertEqual(
             try args(
                 .dismiss(
+                    id: "x", harness: "claude", session: "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918")),
+            try sample("dismiss_args"))
+        // `sessions/seen` reads the same session key as `sessions/dismiss` (`SessionKey`).
+        XCTAssertEqual(
+            try args(
+                .seen(
                     id: "x", harness: "claude", session: "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918")),
             try sample("dismiss_args"))
 

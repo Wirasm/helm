@@ -57,7 +57,7 @@ needs() {
         daemon) grep -qE '^(daemon/|\.github/workflows/daemon\.yml|\.claude/skills/bench-|\.claude/skills/helm-canvas/|\.claude/skills/helm-orchestrate/|Sources/Helm/Shared/RenderableFile\.swift|Sources/Helm/Resources/ghostty/shell-integration/|Packages/GhosttyTerminal/Package\.swift)' <<<"$paths" ;;
         pi) grep -qE '^pi/' <<<"$paths" ;;
         # What Pocket's iOS build compiles (Pocket/project.yml).
-        ios) grep -qE '^(Sources/(HelmWire|BenchKit|PocketKit)/|Pocket/)' <<<"$paths" ;;
+        ios) grep -qE '^(Sources/(HelmWire|BenchKit|CanvasKit|PocketKit)/|Pocket/)' <<<"$paths" ;;
         swift)
             # Runs when nothing changed at all, too: an empty diff proves nothing.
             [ -n "$paths" ] || return 0
@@ -93,7 +93,7 @@ skip_reason() {
         swift) echo "only docs/, pi/, daemon/ (not fixtures) or markdown outside Sources/, Tests/ and skills changed" ;;
         daemon) echo "no changes under daemon/, daemon.yml, .claude/skills/bench-*, helm-canvas, helm-orchestrate, RenderableFile.swift or the shell integration" ;;
         pi) echo "no changes under pi/" ;;
-        ios) echo "no changes under Pocket/ or the Sources/ it compiles (HelmWire, BenchKit, PocketKit)" ;;
+        ios) echo "no changes under Pocket/ or the Sources/ it compiles (HelmWire, BenchKit, CanvasKit, PocketKit)" ;;
     esac
 }
 

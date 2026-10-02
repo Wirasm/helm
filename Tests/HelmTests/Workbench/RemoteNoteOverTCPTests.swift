@@ -1,4 +1,5 @@
 import BenchKit
+import CanvasKit
 import Foundation
 import HelmWire
 import XCTest

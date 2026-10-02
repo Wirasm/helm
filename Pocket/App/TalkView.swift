@@ -42,7 +42,10 @@ struct TalkView: View {
         .padding(.top, 8)
         .background(Palette.background)
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: target) { await follow() }
+        .task(id: target) {
+            await markSeen()
+            await follow()
+        }
     }
 
     private var talkable: [BenchSessionRow] {
@@ -118,6 +121,15 @@ struct TalkView: View {
             if refused == nil { delivered() }
             answered()
         }
+    }
+
+    /// Opening a finished turn is reading it: benchd hears it as when he focuses its pane, so it
+    /// leaves the top of the agents tab.
+    private func markSeen() async {
+        guard let row = talkable.first(where: { $0.screen == target }),
+            Attention(row) == .finished
+        else { return }
+        _ = await model.markSeen(harness: row.harness, session: row.id)
     }
 
     /// The screen ten times a second while this view is up, as `bench watch screen` reads it.

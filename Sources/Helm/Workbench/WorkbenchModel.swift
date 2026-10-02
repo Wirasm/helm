@@ -1,5 +1,6 @@
 import AppKit
 import BenchKit
+import CanvasKit
 import Combine
 import Foundation
 import HelmWire

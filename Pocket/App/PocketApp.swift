@@ -17,15 +17,17 @@ struct PocketApp: App {
     }
 }
 
-/// home and agents under one bar; a session's talk screen pushed over them.
+/// home, agents and pages under one bar; a session's talk screen pushed over them, the start
+/// sheet from home's `+`.
 struct RootView: View {
-    enum Tab: String, CaseIterable { case home, agents }
+    enum Tab: String, CaseIterable { case home, agents, pages }
 
     @EnvironmentObject private var model: PocketModel
     @Binding var benchURL: String
     @State private var tab = Tab.home
     @State private var talking: String?
     @State private var connecting = false
+    @State private var starting = false
 
     var body: some View {
         NavigationStack {
@@ -34,6 +36,7 @@ struct RootView: View {
                 switch tab {
                 case .home: HomeView { talking = $0 }
                 case .agents: AgentsView { talking = $0 }
+                case .pages: PagesView()
                 }
                 bar
             }
@@ -42,6 +45,7 @@ struct RootView: View {
             .navigationDestination(item: $talking) { TalkView(target: $0) }
         }
         .sheet(isPresented: $connecting) { ConnectView(url: $benchURL) }
+        .sheet(isPresented: $starting) { StartView() }
         .onAppear {
             model.connect(benchURL)
             connecting = benchURL.isEmpty
@@ -53,6 +57,9 @@ struct RootView: View {
     private var header: some View {
         HStack {
             Text(tab.rawValue).font(Mono.title).foregroundStyle(Palette.text)
+            if tab == .home {
+                Button("+") { starting = true }.font(Mono.title).foregroundStyle(Palette.finished)
+            }
             Spacer()
             Button {
                 connecting = true

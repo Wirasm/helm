@@ -16,6 +16,10 @@ package struct BenchSpawnRequest: Encodable, Equatable, Sendable {
         /// the pane it opens takes his keyboard; benchd sends the resume notice, and brings back
         /// the worktree it ran in when that is gone (#621).
         case resume(String)
+        /// A new conversation, its first message `prompt` (Pocket's start, #625). Sent by helm
+        /// too: the operator is away from the Mac, so benchd moves no focus, and records the
+        /// spawn as his (`spawner: operator`). nil `model` or `effort` is the harness's default.
+        case start(prompt: String, model: String?, effort: String?)
     }
 
     package var id: String
@@ -33,7 +37,7 @@ package struct BenchSpawnRequest: Encodable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey { case id, verb, args, by }
-    private enum ArgKeys: String, CodingKey { case agent, cwd, fork, prompt, resume }
+    private enum ArgKeys: String, CodingKey { case agent, cwd, fork, prompt, resume, model, effort }
 
     package func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -50,6 +54,11 @@ package struct BenchSpawnRequest: Encodable, Equatable, Sendable {
         case let .resume(session):
             try c.encode(BenchActor.operatorGesture, forKey: .by)
             try args.encode(session, forKey: .resume)
+        case let .start(prompt, model, effort):
+            try c.encode(BenchActor.helm, forKey: .by)
+            try args.encode(prompt, forKey: .prompt)
+            try args.encodeIfPresent(model, forKey: .model)
+            try args.encodeIfPresent(effort, forKey: .effort)
         }
     }
 }

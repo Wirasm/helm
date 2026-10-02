@@ -1,4 +1,5 @@
 import AppKit
+import CanvasKit
 import Foundation
 
 /// Copy to the system pasteboard.

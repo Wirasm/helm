@@ -19,10 +19,10 @@ import Foundation
 /// Pure on purpose, in the style of `TerminalURLPolicy`: a
 /// `WKSecurityOrigin` cannot be built in a test, so the decision lives here where
 /// `swift test` reaches it and the webview is left with nothing but plumbing.
-enum CanvasAddress {
+package enum CanvasAddress {
     /// helm's own scheme. Not one WebKit handles natively — registering a handler for
     /// `file:`/`http:`/`about:` and friends throws — and not one any other app claims.
-    static let scheme = "helm-canvas"
+    package static let scheme = "helm-canvas"
 
     /// The host this artifact is served on: stable for a path, distinct between paths.
     ///
@@ -34,7 +34,7 @@ enum CanvasAddress {
     /// It takes a `StandardizedPath` rather than a `String` so the identity the origin
     /// carries is the same identity `Workbench.pane(showing:)` compares by (#88) — two
     /// spellings of one file cannot become two hosts.
-    static func host(for path: StandardizedPath) -> String {
+    package static func host(for path: StandardizedPath) -> String {
         let digest = SHA256.hash(data: Data(path.value.utf8))
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
@@ -42,7 +42,7 @@ enum CanvasAddress {
     /// Where the artifact itself is served. The last path component is kept so a page's
     /// own relative references (`./diagram.css`, `img/x.png`) resolve to sibling paths on
     /// the same host, which is what makes an `.html` artifact keep working.
-    static func url(for path: StandardizedPath) -> URL? {
+    package static func url(for path: StandardizedPath) -> URL? {
         var components = URLComponents()
         components.scheme = scheme
         components.host = host(for: path)
@@ -63,7 +63,7 @@ enum CanvasAddress {
     ///
     /// An empty expected host is refused rather than matched, so a source that could not be
     /// addressed fails closed instead of accepting everything.
-    static func accepts(
+    package static func accepts(
         isMainFrame: Bool, originScheme: String?, originHost: String?, expectedHost: String
     ) -> Bool {
         guard isMainFrame, !expectedHost.isEmpty else { return false }

@@ -10,34 +10,50 @@ final class PocketRowsTests: XCTestCase {
     private func row(
         _ id: String, _ state: BenchSessionRow.State,
         open: BenchSessionRow.Open = .benchAttach(session: "s"), cwd: String = "/w/helm",
-        at ms: UInt64 = 0
+        at ms: UInt64 = 0, done: BenchDone? = nil, mail: BenchOperatorMail? = nil,
+        spawner: BenchSpawner? = nil
     ) -> BenchSessionRow {
         BenchSessionRow(
-            harness: "claude", id: id, cwd: cwd, state: state, open: open, updatedAtMs: ms)
+            harness: "claude", id: id, cwd: cwd, state: state, open: open, updatedAtMs: ms,
+            done: done, operatorMail: mail, spawner: spawner)
     }
 
     private func running(_ activity: String, _ detail: String? = nil) -> BenchSessionRow.State {
         .running(activity: activity, detail: detail)
     }
 
-    /// ● when the agent waits on him, ✓ when its turn is over, ○ while it works. Every activity
-    /// word benchd sends (`bench_wire::Activity`) lands somewhere on purpose.
-    func testEveryStateHasItsGlyph() {
-        let cases: [(BenchSessionRow.State, Attention)] = [
-            (running("waiting", "permission prompt"), .asking),
-            (running("waiting"), .asking),
-            (running("blocked", "needs_approval"), .asking),
-            (running("idle"), .finished),
-            (.finished(atMs: 1), .finished),
-            (running("busy"), .working),
-            (running("shell"), .working),
-            (running("waiting_on_tasks", "2 tasks"), .working),
-            (running("unknown"), .working),
+    /// What a row wants from the operator, from what benchd says of it (#623): ● it waits on him
+    /// (a prompt, a block, or mail to him unread), ✓ its turn ended and he has not looked, ○ it
+    /// works; then, dimmed, ✓ a turn he has seen and ✓ a session that ended. Every activity word
+    /// benchd sends (`bench_wire::Activity`) lands somewhere on purpose.
+    func testEveryStateHasItsAttention() {
+        let done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
+        let seen = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: true)
+        // A worker's turn is its orchestrator's to read, not the operator's.
+        let toAgent = BenchDone(since: Date(timeIntervalSince1970: 1), to: "lead", seen: false)
+        let mail = BenchOperatorMail(unread: 1, since: Date(timeIntervalSince1970: 1))
+        let cases: [(BenchSessionRow, Attention)] = [
+            (row("x", running("waiting", "permission prompt")), .asking),
+            (row("x", running("waiting")), .asking),
+            (row("x", running("blocked", "needs_approval")), .asking),
+            (row("x", running("idle"), mail: mail), .asking),
+            (row("x", running("idle"), done: done), .finished),
+            (row("x", running("idle"), done: seen), .seen),
+            (row("x", running("idle"), done: toAgent), .seen),
+            (row("x", running("idle")), .seen),
+            (row("x", .finished(atMs: 1)), .ended),
+            (row("x", running("busy")), .working),
+            (row("x", running("shell")), .working),
+            (row("x", running("waiting_on_tasks", "2 tasks")), .working),
+            (row("x", running("unknown")), .working),
         ]
-        for (state, attention) in cases {
-            XCTAssertEqual(Attention(row("x", state)), attention, "\(state)")
+        for (row, attention) in cases {
+            XCTAssertEqual(
+                Attention(row), attention, "\(row.state) \(String(describing: row.done))")
         }
-        XCTAssertEqual([Attention.asking, .finished, .working].map(\.glyph), ["●", "✓", "○"])
+        XCTAssertEqual(
+            [Attention.asking, .finished, .working, .seen, .ended].map(\.glyph),
+            ["●", "✓", "○", "✓", "✓"])
     }
 
     /// A row Pocket can open is one whose session runs on the bench: benchd takes the session id,
@@ -56,35 +72,45 @@ final class PocketRowsTests: XCTestCase {
     }
 
     /// Home: each workspace in the document's order, named by its folder, holding the sessions
-    /// Pocket can talk to in benchd's order. A workspace with none still shows, empty.
-    func testHomeGroupsTalkableSessionsUnderTheirWorkspace() {
+    /// Pocket can talk to: the operator's orchestrators first, then the rest, each in benchd's
+    /// order. A workspace with none still shows, empty.
+    func testHomePinsTheOperatorsOrchestratorsInEachWorkspace() {
         let sessions: [String: [BenchSessionRow]] = [
             "/w/helm": [
-                row("asking", running("waiting", "permission prompt")),
+                row(
+                    "asking", running("waiting", "permission prompt"), spawner: .agent(handle: "o")),
                 row("ended", .finished(atMs: 1), open: .resume(argv: ["claude"], cwd: "/w/helm")),
                 row("job", running("busy"), open: .claudeAttach(job: "j")),
                 row("busy", running("busy")),
+                row("lead", running("busy"), spawner: .operator),
             ],
-            "/w/prp": [row("lead", running("idle"))],
+            "/w/prp": [row("prp-lead", running("idle"), spawner: .operator)],
         ]
         let groups = PocketHome.groups(
             workspaces: ["/w/prp", "/w/helm", "/w/kild"], sessions: sessions)
         XCTAssertEqual(groups.map(\.name), ["prp", "helm", "kild"])
-        XCTAssertEqual(groups.map { $0.rows.map(\.id) }, [["lead"], ["asking", "busy"], []])
+        XCTAssertEqual(
+            groups.map { $0.rows.map(\.id) }, [["prp-lead"], ["lead", "asking", "busy"], []])
+        XCTAssertEqual(groups[1].rows.map(\.isOrchestrator), [true, false, false])
     }
 
-    /// Agents: every session on every workspace once, running before finished, newest first,
-    /// as benchd orders one workspace's.
-    func testAgentsListsEverySessionOnceRunningFirstNewestFirst() {
+    /// Agents: every session on every workspace once, by what it wants from the operator (asking,
+    /// finished and not seen, working, seen, ended), newest first within each.
+    func testAgentsListsEverySessionOnceByAttention() {
+        let done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
         let shared = row("shared", running("busy"), at: 50)
         let sessions: [String: [BenchSessionRow]] = [
             "/w/helm": [
-                row("old", running("idle"), at: 10), shared, row("done", .finished(atMs: 90)),
+                row("idle", running("idle"), at: 95), shared, row("ended", .finished(atMs: 99)),
+                row("unseen", running("idle"), at: 10, done: done),
             ],
-            "/w/helm/.worktrees/x": [shared, row("new", running("busy"), at: 70)],
+            "/w/helm/.worktrees/x": [
+                shared, row("new", running("busy"), at: 70), row("ask", running("waiting"), at: 1),
+            ],
         ]
         XCTAssertEqual(
-            PocketHome.agents(sessions: sessions).map(\.id), ["new", "shared", "old", "done"])
+            PocketHome.agents(sessions: sessions).map(\.id),
+            ["ask", "unseen", "new", "shared", "idle", "ended"])
     }
 
     /// A session is called by its mailbox handle, the name it is mailed by, before anything else.

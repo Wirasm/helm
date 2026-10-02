@@ -11,10 +11,11 @@ It shares helm's code rather than copying it:
 | --- | --- | --- |
 | HelmWire | `Sources/HelmWire` | the wire: verbs, documents, sessions, screens |
 | BenchKit | `Sources/BenchKit` | benchd's client: the socket, a request per verb, the follower |
+| CanvasKit | `Sources/CanvasKit` | a canvas page: its address, its files through benchd, its live file |
 | PocketKit | `Sources/PocketKit` | what Pocket shows and sends; `swift test` runs its tests |
 | the app | `Pocket/App` | SwiftUI views only |
 
-Nothing macOS-only goes into the first three. The gate's `ios` part builds Pocket for the iOS
+Nothing macOS-only goes into the first four. The gate's `ios` part builds Pocket for the iOS
 simulator, which is what proves it.
 
 ## Build it

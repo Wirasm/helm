@@ -4,7 +4,8 @@
 # helm's wire, benchd's client and Pocket's logic compile from ../Sources as static libraries,
 # the way project.yml builds HelmWire for helm. They are not taken from Package.swift: resolving
 # it would fetch Ghostty's binary and the injection packages for an app that uses none of them.
-# Keep these source paths in step with Package.swift's HelmWire, BenchKit and PocketKit targets.
+# Keep these source paths in step with Package.swift's HelmWire, BenchKit, CanvasKit and
+# PocketKit targets.
 name: Pocket
 options:
   bundleIdPrefix: com.wirasm
@@ -31,6 +32,14 @@ targets:
       - path: ../Sources/BenchKit
     dependencies:
       - target: HelmWire
+  CanvasKit:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: ../Sources/CanvasKit
+    dependencies:
+      - target: HelmWire
+      - target: BenchKit
   PocketKit:
     type: library.static
     platform: iOS
@@ -39,6 +48,7 @@ targets:
     dependencies:
       - target: HelmWire
       - target: BenchKit
+      - target: CanvasKit
   Pocket:
     type: application
     platform: iOS
@@ -47,6 +57,7 @@ targets:
     dependencies:
       - target: HelmWire
       - target: BenchKit
+      - target: CanvasKit
       - target: PocketKit
     info:
       path: Info.plist

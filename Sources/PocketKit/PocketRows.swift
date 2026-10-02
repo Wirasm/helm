@@ -1,30 +1,37 @@
 import Foundation
 import HelmWire
 
-/// What a session wants from the operator, as one glyph: ● it waits on him, ✓ its turn is over,
-/// ○ it is working. Read from the harness's own activity word until benchd says it outright
-/// (#623's `done`).
-package enum Attention: Equatable, Sendable {
+/// What a session wants from the operator, in the order the agents tab lists it: ● it waits on
+/// him, ✓ its turn ended and he has not looked, ○ it works, then, dimmed, ✓ a turn he has seen and
+/// ✓ a session that ended. From what benchd says of the row (#623): `done`, mail to him, and the
+/// harness's own activity word.
+package enum Attention: Comparable, Sendable {
     case asking
     case finished
     case working
+    case seen
+    case ended
 
     package init(_ row: BenchSessionRow) {
-        switch row.state {
-        case .finished: self = .finished
-        case let .running(activity, _):
-            switch activity {
-            case "waiting", "blocked": self = .asking
-            case "idle": self = .finished
-            default: self = .working
-            }
+        guard case let .running(activity, _) = row.state else {
+            self = .ended
+            return
+        }
+        if ["waiting", "blocked"].contains(activity) || (row.operatorMail?.unread ?? 0) > 0 {
+            self = .asking
+        } else if let done = row.done {
+            // A turn addressed to the agent that spawned it is that agent's to read.
+            self = done.seen || done.to != "operator" ? .seen : .finished
+        } else {
+            // A harness whose hooks do not report a turn's end still says idle.
+            self = activity == "idle" ? .seen : .working
         }
     }
 
     package var glyph: String {
         switch self {
         case .asking: "●"
-        case .finished: "✓"
+        case .finished, .seen, .ended: "✓"
         case .working: "○"
         }
     }
@@ -36,6 +43,10 @@ extension BenchSessionRow {
     package var title: String {
         handle ?? name ?? branch ?? String(id.prefix(8))
     }
+
+    /// An orchestrator: a session the operator started himself (`spawner: operator`), which home
+    /// lists first.
+    package var isOrchestrator: Bool { spawner == .operator }
 
     /// The target `screen/get` and `screen/send` take for this row, when its session runs on the
     /// bench: the session id, or the pane showing it. nil for a row with no screen to show.
@@ -58,36 +69,36 @@ package struct PocketGroup: Equatable, Sendable, Identifiable {
 }
 
 package enum PocketHome {
-    /// Each workspace in the document's order, with its sessions that have a screen, in benchd's
-    /// order (`sessions/all`: running first, newest first).
+    /// Each workspace in the document's order, with its sessions that have a screen: the
+    /// orchestrators first, then the rest, each in benchd's order (`sessions/all`: running first,
+    /// newest first).
     package static func groups(
         workspaces: [String], sessions: [String: [BenchSessionRow]]
     )
         -> [PocketGroup]
     {
         workspaces.map { path in
-            PocketGroup(path: path, rows: (sessions[path] ?? []).filter { $0.screen != nil })
+            let rows = (sessions[path] ?? []).filter { $0.screen != nil }
+            return PocketGroup(
+                path: path,
+                rows: rows.filter(\.isOrchestrator) + rows.filter { !$0.isOrchestrator })
         }
     }
 
     /// Every session once, however many workspaces list it (by id, as the row is `Identifiable`),
-    /// in benchd's order: running first, then newest first.
+    /// by its `Attention`, newest first within each.
     package static func agents(sessions: [String: [BenchSessionRow]]) -> [BenchSessionRow] {
         var seen = Set<String>()
         let unique = sessions.values.joined().filter { seen.insert($0.id).inserted }
         return unique.sorted { a, b in
-            let (aRuns, bRuns) = (a.isRunning, b.isRunning)
-            if aRuns != bRuns { return aRuns }
+            let (aWants, bWants) = (Attention(a), Attention(b))
+            if aWants != bWants { return aWants < bWants }
             return a.lastMs > b.lastMs
         }
     }
 }
 
 extension BenchSessionRow {
-    fileprivate var isRunning: Bool {
-        if case .running = state { true } else { false }
-    }
-
     /// When it last changed: its finish for a finished row.
     package var lastMs: UInt64 {
         if case let .finished(atMs) = state { atMs } else { updatedAtMs }

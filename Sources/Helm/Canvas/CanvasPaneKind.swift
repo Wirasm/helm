@@ -1,3 +1,4 @@
+import CanvasKit
 import SwiftUI
 
 /// The canvas as a `SurfaceKind`: a `CanvasModel` over a file, drawn by `CanvasView`.
