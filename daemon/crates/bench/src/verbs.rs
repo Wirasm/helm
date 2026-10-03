@@ -357,7 +357,7 @@ fn absolute(raw: &str) -> Result<bench_doc::StandardPath, String> {
     bench_doc::StandardPath::new(&path.display().to_string())
 }
 
-/// `spawn`: an agent in a benchd pty, shown in a pane of `--cwd`'s workspace.
+/// `spawn`: an agent in a benchd pty, shown in a pane of the workspace of `--cwd`'s project.
 fn spawn(p: &Parsed) -> Result<(String, Value), String> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let number = |flag: &str| -> Result<Option<u16>, String> {

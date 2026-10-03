@@ -125,7 +125,9 @@ socket (the `hook` verb), and the reply carries the agent's unread mail as point
 Claude and codex put in front of the model as hook context: a busy agent gets its mail at the
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
-in `sessions/hosted.json` so it survives a restart. A session resumed in another pane keeps its
+in `sessions/hosted.json` so it survives a restart. A place a live agent holds is its own while its
+process lives: an agent's children inherit the declaration, so a hook from another session and
+process there is a guest's, read as declaring no place (`agent/guest`, #644). A session resumed in another pane keeps its
 handle, and its record moves to the pane it reports from under the same rule (`mail/moved`); one
 resumed outside helm keeps its handle and mail, and its old pane stops answering for it. An
 idle agent is started through its own channel instead: benchd posts the notice to a Claude
@@ -205,8 +207,18 @@ pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`,
 boundary: an agent's close of a terminal where something runs needs `force` (the refusal names the
 live session, or the job a shell is running), and so does its close of a workspace holding such a
 pane (#608), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
-now puts the agent in a pane: the document's terminal surface names the session
-(`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
+now puts the agent in a pane, in its project's workspace: the operator's rule (#645) is that an
+agent spawns into existing workspaces, and isolation is in worktrees, not workspaces. So a cwd in a
+linked worktree or anywhere in a repository resolves to the repository's main checkout
+(`project.rs`, reading git's common dir as the Worktrees drawer does), the workspace open for that
+folder under any spelling (case, symlinks) is found, and one is opened only when the project has
+none. `pane/move` to another workspace takes even a workspace's last pane, removing the emptied
+workspace, so a stray one folds into its project's. `sessions/all` scopes a session's cwd by the
+same on-disk comparison when its spelling misses (`scope.rs`), so a workspace's list holds what
+its panes show.
+
+In the pane, the document's terminal surface names the session (`term:<session>`), and helm
+shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
 stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
 one per 16 ms plus a trailing one, because each is a SIGWINCH and a redraw (M5b, #359). No session outlives its daemon, so boot

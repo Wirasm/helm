@@ -6043,48 +6043,50 @@ fn wiring_prints_what_to_add_and_check_says_what_is_missing() {
     );
 }
 
-/// A killed agent reports no `SessionEnd`, so its record stays: `mail/who` must not name it over
-/// the live agent in the same pane, whichever reported last.
+/// A killed agent reports no `SessionEnd`, so its record stays, and `reconcile` keeps its last
+/// report fresh while it waits on a prompt: `mail/who` must not name it over the live agent that
+/// took the pane after it. (Two live agents never share a pane: the second is a guest, #644.)
 #[test]
 fn mail_who_skips_an_agent_whose_process_is_gone() {
     let home = TestHome::claim("whodead");
     let h = &home.dir;
     let daemon = DaemonGuard::start(h, None);
-    let (_, older) = terminal_process(h, "older");
-    let (newer_session, newer) = terminal_process(h, "newer");
-    let report = |session: &str, pid: u32| {
+    let (dead_session, dead_pid) = terminal_process(h, "older");
+    let (_, live_pid) = terminal_process(h, "newer");
+    let report = |event: &str, session: &str, pid: u32| {
         hook_verb(
             &daemon.socket,
-            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": session,
-                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE}),
-        )["handle"]
-            .as_str()
-            .unwrap()
-            .to_string()
+            serde_json::json!({"harness": "claude", "event": event, "session": session,
+                "cwd": "/Users/op/Projects/helm", "pid": pid, "pane": HOOK_PANE,
+                "messaging_socket": h.join("no-inbox.sock")}),
+        )
     };
-    let live = report("0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2", older);
-    std::thread::sleep(Duration::from_millis(20));
-    let dead = report("ffffffff-1c4d-4e5f-8a6b-7c8d9e0f0000", newer);
-    let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
-    assert_eq!(
-        json_of(&run)["handle"],
-        dead.as_str(),
-        "both alive: the later one"
+    report(
+        "SessionStart",
+        "ffffffff-1c4d-4e5f-8a6b-7c8d9e0f0000",
+        dead_pid,
     );
-    assert_eq!(bench(h, &["close", &newer_session]).code, 0);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
-        if json_of(&run)["handle"] == live.as_str() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "still naming the killed agent: {}",
-            run.stdout
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    report(
+        "PermissionRequest",
+        "ffffffff-1c4d-4e5f-8a6b-7c8d9e0f0000",
+        dead_pid,
+    );
+    assert_eq!(bench(h, &["close", &dead_session]).code, 0);
+    wait_until("the first agent exits", Duration::from_secs(5), || {
+        !libc_alive(dead_pid as i32)
+    });
+    let live = report(
+        "SessionStart",
+        "0b9e3f2a-1c4d-4e5f-8a6b-7c8d9e0fa1b2",
+        live_pid,
+    )["handle"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Lets reconcile's quiet window (5 s) pass, so the dead agent's report is the later one.
+    std::thread::sleep(Duration::from_secs(6));
+    let run = bench(h, &["mail", "who", "--pane", HOOK_PANE]);
+    assert_eq!(json_of(&run)["handle"], live.as_str(), "{}", run.stdout);
 }
 
 #[test]
@@ -8466,6 +8468,179 @@ fn an_agent_started_in_a_shell_pane_is_recorded_there_until_it_ends() {
         pane_agent(&home.dir, &pane).is_null(),
         "an agent that ended is not resumed there"
     );
+}
+
+/// The events of `kind` about conversation `session`.
+fn events_about(home: &Path, kind: &str, session: &str) -> Vec<serde_json::Value> {
+    event_kinds(home)
+        .into_iter()
+        .filter(|(k, data)| {
+            k == kind && (data["session"] == session || data["session"]["id"] == session)
+        })
+        .map(|(_, data)| data)
+        .collect()
+}
+
+#[test]
+fn an_agent_started_by_a_benchd_session_s_agent_does_not_take_its_pane() {
+    // #644: the operator's orchestrator ran a test suite whose agents inherited its
+    // BENCH_SESSION and reported through `bench hook`. Each was given the orchestrator's handle
+    // and its pane's record, and each one's end cleared it, so a restart restored a shell there.
+    let home = TestHome::claim("guest-bench");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let spawned = json_of(&bench(
+        h,
+        &[
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            "orch",
+        ],
+    ));
+    let session = spawned["session"].as_str().unwrap().to_string();
+    let pane = spawned["pane"].as_str().unwrap().to_string();
+    let holder = spawned["pid"].as_u64().unwrap() as u32;
+    let child = Detached::start();
+    let event = |event: &str, conversation: &str, pid: u32| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": event, "session": conversation,
+                "cwd": "/tmp/work", "pid": pid, "bench_session": session}),
+        )
+    };
+
+    assert_eq!(event("SessionStart", "c-holder", holder)["handle"], "orch");
+    let held = serde_json::json!({"command": "claude", "session": "c-holder", "cwd": "/tmp/work"});
+    assert_eq!(pane_agent(h, &pane), held);
+
+    // A test agent the holder started: same BENCH_SESSION, its own process and conversation.
+    for e in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        assert_eq!(
+            event(e, "c-test", child.0.id()),
+            serde_json::json!({}),
+            "{e}: a guest gets no mailbox"
+        );
+        assert_eq!(pane_agent(h, &pane), held, "{e} left the pane's agent");
+    }
+    event("SessionEnd", "c-test", child.0.id());
+    assert_eq!(pane_agent(h, &pane), held, "its end did not clear the pane");
+    let record = hosted_record(&h.join(".bench"));
+    assert!(
+        record["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["id"] != "c-test"),
+        "the guest is not recorded under the holder's handle: {record}"
+    );
+    for kind in ["mail/claimed", "agent/state", "agent/done"] {
+        assert!(
+            events_about(h, kind, "c-test").is_empty(),
+            "no {kind} for a guest"
+        );
+    }
+    let guests = events_about(h, "agent/guest", "c-test");
+    assert_eq!(guests.len(), 1, "logged once: {guests:?}");
+    assert_eq!(guests[0]["holder"]["session"], "c-holder");
+    assert_eq!(guests[0]["holder"]["handle"], "orch");
+
+    // A conversation with a mailbox of its own, resumed by a child of the holder: it keeps its
+    // handle, and the holder keeps its pane.
+    let (worker_session, worker) = terminal_process(h, "worker");
+    hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "claude", "event": "SessionStart", "session": "c-worker",
+            "cwd": "/tmp/work", "pid": worker, "bench_session": worker_session}),
+    );
+    assert_eq!(
+        event("SessionStart", "c-worker", child.0.id())["handle"],
+        "worker"
+    );
+    event("Stop", "c-worker", child.0.id());
+    assert_eq!(
+        pane_agent(h, &pane),
+        held,
+        "a resumed conversation left the pane"
+    );
+
+    // The holder's own process with a new conversation (`/clear`) is still the holder.
+    assert_eq!(event("SessionStart", "c-cleared", holder)["handle"], "orch");
+    assert_eq!(pane_agent(h, &pane)["session"], "c-cleared");
+}
+
+#[test]
+fn a_shell_pane_s_agent_keeps_the_pane_while_it_lives_and_the_next_one_claims_it_after() {
+    // The same rule in a pane the operator started an agent in: a child on a terminal of its own
+    // passes the tty rule, so only the holder's live process keeps the pane.
+    let home = TestHome::claim("guest-pane");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let daemon = DaemonGuard::start(h, None);
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (holder_session, holder) = terminal_process(h, "holder");
+    let (_, child) = terminal_process(h, "child");
+    let event = |event: &str, conversation: &str, pid: u32| {
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": event, "session": conversation,
+                "cwd": "/tmp/work", "pid": pid, "pane": pane}),
+        )
+    };
+    let who = || json_of(&bench(h, &["mail", "who", "--pane", &pane]))["session"].clone();
+
+    // An earlier conversation ran here and ended: the record remembers this pane for it.
+    let earlier = event("SessionStart", "c-earlier", child)["handle"].clone();
+    assert!(earlier.is_string());
+    event("SessionEnd", "c-earlier", child);
+
+    event("SessionStart", "c-holder", holder);
+    assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
+    assert_eq!(
+        event("SessionStart", "c-test", child),
+        serde_json::json!({})
+    );
+    event("SessionEnd", "c-test", child);
+    assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
+    assert_eq!(who(), "c-holder");
+
+    // The holder resumes that earlier conversation from a tool call (`claude -p --resume`): no
+    // terminal, and a pane remembered for it. It keeps its handle and leaves the pane alone.
+    let detached = Detached::start();
+    for e in ["SessionStart", "Stop"] {
+        assert_eq!(event(e, "c-earlier", detached.0.id())["handle"], earlier);
+        assert_eq!(pane_agent(h, &pane)["session"], "c-holder", "{e}");
+        assert_eq!(who(), "c-holder", "{e}");
+    }
+    event("PreToolUse", "c-holder", holder);
+    assert!(
+        events_about(h, "agent/guest", "c-holder").is_empty(),
+        "the holder is still the holder"
+    );
+    event("SessionEnd", "c-earlier", detached.0.id());
+    assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
+
+    // The holder quits; the next agent started there claims the pane as before.
+    libc_kill(holder as i32);
+    wait_until("the holder exits", Duration::from_secs(5), || {
+        session_row(h, &holder_session)["live"] == false
+    });
+    assert!(event("SessionStart", "c-next", child)["handle"].is_string());
+    assert_eq!(pane_agent(h, &pane)["session"], "c-next");
+    assert_eq!(who(), "c-next");
 }
 
 #[test]
@@ -11321,6 +11496,119 @@ fn a_codex_fork_is_a_read_only_thread_and_comes_back_read_only() {
     assert_eq!(again["restored"][0]["how"], "resumed", "{again}");
     let restored = again["restored"][0]["session"].as_str().unwrap();
     assert_codex_resumed(h, &fake, &runs, restored, &thread, "read-only");
+}
+
+/// One workspace per project (#645): an agent spawned in a worktree, or in a folder of the main
+/// checkout, shows in the repository's workspace, which the first spawn opens; it still runs where
+/// it was spawned. A cwd spelled another way (here through macOS's `/var` symlink) finds the
+/// workspace already open for that folder, whichever spelling opened it.
+#[test]
+fn agents_spawned_across_a_repositorys_worktrees_share_its_workspace() {
+    let home = TestHome::claim("one-workspace");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let worktree = git_repo_with_worktree(&home.dir, "app");
+    let repo = home.dir.join("app").canonicalize().unwrap();
+    let repo_path = repo.display().to_string();
+    fs::create_dir_all(home.dir.join("app/src")).unwrap();
+    let spawn = |cwd: &Path| {
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn",
+                "--agent",
+                "pi",
+                "--cwd",
+                &cwd.display().to_string(),
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{cwd:?}: {}", spawned.stderr);
+        json_of(&spawned)
+    };
+    let open = || -> Vec<String> {
+        document(&daemon.socket)["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let first = spawn(&worktree);
+    assert_eq!(first["workspace"], repo_path.as_str(), "{first}");
+    // Spelled as the test home is, not canonically: a second spelling of the main checkout.
+    let second = spawn(&home.dir.join("app/src"));
+    assert_eq!(second["workspace"], repo_path.as_str(), "{second}");
+    assert_eq!(open(), [repo_path.as_str()]);
+    // The workspace's session list has it too, however its cwd was spelled.
+    let listed = json_of(&bench(
+        &home.dir,
+        &["sessions", "--all", "--workspace", &repo_path],
+    ));
+    assert!(
+        listed["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == second["runtime_session"]),
+        "{listed}"
+    );
+
+    // Only placement moved: the agent runs in the worktree.
+    let pane = first["pane"].as_str().unwrap();
+    let found = json_of(&bench(&home.dir, &["get", "pane", pane]));
+    assert_eq!(found["pane"]["name"]["text"], "pi · wt", "{found}");
+
+    // Outside git a folder is its own project, found under whichever spelling opened it.
+    let notes = home.dir.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let opened = layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": notes.display().to_string() }),
+        operator(),
+        false,
+    );
+    assert_eq!(opened["status"], "ok", "{opened}");
+    let third = spawn(&notes.canonicalize().unwrap());
+    let stray = notes.display().to_string();
+    assert_eq!(third["workspace"], stray.as_str());
+    assert_eq!(open().len(), 2, "{:?}", open());
+
+    // A stray workspace folds into another: its last pane moves too, the emptied workspace goes,
+    // and the agent in it keeps running. (Asked: the operator is in it.)
+    let doc = document(&daemon.socket);
+    let ids: Vec<String> = doc["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["path"] == stray.as_str())
+        .unwrap()["bench"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["slots"].as_array().unwrap().clone())
+        .flat_map(|s| s["panes"].as_array().unwrap().clone())
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 2, "{doc}");
+    for pane in &ids {
+        let moved = bench(
+            &home.dir,
+            &["move", pane, "--workspace", &repo_path, "--asked"],
+        );
+        assert_eq!(moved.code, 0, "{}", moved.stderr);
+    }
+    assert_eq!(open(), [repo_path.as_str()]);
+    let session = third["session"].as_str().unwrap();
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    assert!(
+        listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == session && s["live"] == true),
+        "{listed}"
+    );
 }
 
 /// `<home>/<name>`, a git repository with one commit and a linked worktree at
