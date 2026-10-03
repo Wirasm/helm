@@ -13,6 +13,11 @@ The standing rule benchd gives goes into the system prompt of every run. The mai
 address and the cap are benchd's; this holds none of them. With no `bench` on `PATH` (or at
 `$BENCH`), or no daemon, it says nothing and pi works as before.
 
+Only pi's own TUI reports. A print, json or rpc session is a program driving pi, such as an
+Archon workflow node, so it gets no mailbox and mail never starts a turn inside it. Nothing the
+extension does may throw into pi's host, which can run many sessions in one process: when a
+session is replaced, its old inbox watch stops instead of using the stale ctx.
+
 ## Install
 
 ```bash
