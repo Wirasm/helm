@@ -119,12 +119,12 @@ Files are in `~/.prp/helm-3ec376fc/`.
 | `--model` | alias or full name | model slug | `provider/id` |
 | models (2026-10-03) | `opus` → claude-opus-5-5, `sonnet` → claude-sonnet-5-5, `haiku` → claude-haiku-4-5, `fable` → claude-fable-5-1 | `gpt-6.1-sol` (latest workhorse), `gpt-6-astra` (frontier), `gpt-6-sol` (previous workhorse), `gpt-6-luna` (fast); `gpt-5.6-*` is what Archon's codex config runs | `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6-astra`, `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7-highspeed`, `pi --list-models` for the rest |
 | default with no `--model` | the operator's Claude Code setting | `~/.codex/config.toml` (`gpt-6-astra`, medium) | `~/.pi/agent/settings.json` (`openai-codex/gpt-5.6-sol`, a generation old) |
-| `--effort` | `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh`, plus `max` and `ultra` on some models; sent as `-c model_reasoning_effort=` | `off` `minimal` `low` `medium` `high` `xhigh` `max`; appended to the model as `:<level>` |
+| `--effort` | `low` `medium` `high` `xhigh` `max` | `low` `medium` `high` `xhigh`, plus `max` and `ultra` on some models; set on the thread benchd creates | `off` `minimal` `low` `medium` `high` `xhigh` `max`; appended to the model as `:<level>` |
 | `--resume <id>` | yes | yes, by its thread id | yes |
 | `--fork <id>` | yes, read-only (plan mode), its own new id | yes, read-only (read-only sandbox), its own new thread | yes, read-only (`--tools read,grep,find,ls`), its own new id |
-| posture | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approve` |
+| posture | `--dangerously-skip-permissions` | full access and approvals `never`, set on the thread; an `--arg` reaches only the TUI | `--approve` |
 | mail wake when idle | yes (inbox socket) | yes when benchd spawned it (benchd's codex app-server) | yes (`bench` extension) |
-| activity in `bench sessions` | busy, shell, idle, waiting with its own words | busy, idle, waiting, from its hooks | busy, idle, waiting, from its hooks |
+| activity in `bench sessions` | busy, shell, idle, waiting with its own words | busy, idle, waiting, from its thread's events on benchd's app-server | busy, idle, waiting, from its hooks |
 | `bench log` | yes | yes | yes |
 
 `runtime_session` in the spawn answer is the id `--resume` and `--fork` take, for codex too:

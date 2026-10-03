@@ -159,7 +159,7 @@ The skills are the guides: `bench-panes`, `bench-mail`, `bench-browser`, `bench-
 - **A spawn's prompt is a file that outlives the spawn**: `ps` shows its path, never its text
   (#93). Claude Code must already trust `--cwd`; run `cd <dir> && claude` once by hand. codex
   must trust `--cwd` or the git repository it is a subfolder or worktree of (no other parent
-  counts), or it stops at "Trust this folder?"; run `cd <dir> && codex` once. Trust is the
+  counts), or benchd refuses the spawn; run `cd <dir> && codex` once. Trust is the
   operator's call either way. `bench status` names the binary and version each agent spawns with (`agents`).
 - **Artifacts go to the project's `~/.prp/<key>/` store, never the repo**, and reach the bench
   through `bench open`. `notes/` is the operator's directory: never write there. He can edit any

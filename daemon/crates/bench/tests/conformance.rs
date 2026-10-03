@@ -11012,7 +11012,7 @@ fn fake_transcript(home: &Path, id: &str) {
 fn a_fork_is_its_own_read_only_conversation_so_the_author_restores_beside_it() {
     // #531: the operator asks an agent about its work in a fork of its conversation. Before, a
     // fork (`--resume <id> --arg --fork-session`) was recorded under the author's id, and while it
-    // ran the author's pane would not restore: "already live in another session".
+    // ran the author's pane would not restore: "conversation <id> is already live in <session>".
     let home = TestHome::claim("fork");
     let ws = workspace(&home.dir).display().to_string();
     let (author_pane, author) = {

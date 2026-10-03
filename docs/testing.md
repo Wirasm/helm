@@ -29,6 +29,7 @@ one (that is how #192 was settled).
 | --- | --- | --- |
 | `daemon` | `bash daemon/test.sh` | Rust only. Read `daemon/AGENTS.md` and `daemon/direction.md` first. It also runs the `bash` blocks in the `bench-*`, `helm-canvas` and `helm-orchestrate` skills' `SKILL.md` against a real benchd. |
 | `pi` | `bash .claude/skills/pi-extensions/scripts/test.sh` | Needs node and `npm install` in `pi/`. See `pi/AGENTS.md`. |
+| `ios` | `bash scripts/check.sh ios` | Builds Pocket for the iOS simulator. Needs Xcode with its iOS platform installed, and xcodegen. |
 | `helm-board` (in `skills`) | `bash .claude/skills/helm-board/test.sh` | Executes `board-core.js` in node (ownership diff, overlap resolution, state report), checks `new-board.sh`'s refusals and re-hashes the vendored `@quickdrawjs/core` against its pin. |
 | `post-canvas` (in `skills`) | `bash .claude/skills/post-canvas/test.sh` | Builds stored runs in a temp `ARCHON_HOME`, runs the driver with `--no-push`, and runs the `SKILL.md` snippet under zsh with `PRP_HOME` redirected. |
 | merge queue | `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .archon/workflows/helm/.shared` then `archon validate workflows helm-merge-queue` | Only when `.archon/workflows/helm/` changed. Its README says how to run the queue. The rest of `.archon/` is gitignored. |
@@ -38,9 +39,9 @@ and one is Swift (`CanvasSurface`, `CanvasSurfaceTests`).
 
 ## CI and the local gate differ
 
-CI's jobs are `build · test · format` (`lint`, then `swift`), `skill gates` (`skills`) and
-`fmt · clippy · build · test` (`daemon`). The first and last pass without running when
-`scripts/check.sh --needs` says nothing they cover changed. `skills` runs on every PR. There is no
+CI's jobs are `build · test · format` (`lint`, then `swift`), `skill gates` (`skills`),
+`fmt · clippy · build · test` (`daemon`) and `pocket · ios build` (`ios`). All but `skill gates`
+pass without running when `scripts/check.sh --needs` says nothing they cover changed. `skills` runs on every PR. There is no
 `pi` job.
 
 - CI sets `HELM_CHECK_HEADLESS=1`, which skips `TerminalKeyboardTests` and
