@@ -13077,3 +13077,40 @@ fn a_tcp_daemon_whose_port_was_taken_starts_on_another() {
     );
     assert_eq!(status.code, 0, "{}", status.stderr);
 }
+
+/// `BENCH_LISTEN` is benchd's own: a session it spawns never inherits it, or a test benchd an
+/// agent starts from that session would try to bind the operator's address (and refuse to start).
+#[test]
+fn a_spawned_session_does_not_inherit_bench_listen() {
+    let home = TestHome::claim("m5c-listen");
+    let out = home.dir.join("agent-env.txt");
+    let bin = write_agent_script(
+        &home.dir,
+        "pi",
+        &format!(
+            "env > '{}.tmp' && mv '{0}.tmp' '{0}'\nexec sleep 60",
+            out.display()
+        ),
+    );
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (_daemon, port) = tcp_daemon_from(&home.dir, None, |cmd| {
+        cmd.env("PATH", format!("{}:{path}", bin.display()));
+    });
+    let ws = workspace(&home.dir).display().to_string();
+    let run = bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    wait_until(
+        "the agent wrote its environment",
+        Duration::from_secs(10),
+        || out.exists(),
+    );
+    let env = fs::read_to_string(&out).unwrap();
+    assert!(
+        env.contains("BENCH_SESSION="),
+        "the agent's own variables are there: {env}"
+    );
+    assert!(
+        !env.lines().any(|l| l.starts_with("BENCH_LISTEN=")),
+        "benchd's tcp address 127.0.0.1:{port} reached its child: {env}"
+    );
+}
