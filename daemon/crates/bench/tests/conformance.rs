@@ -13366,6 +13366,80 @@ fn a_tcp_daemon_whose_port_was_taken_starts_on_another() {
     assert_eq!(status.code, 0, "{}", status.stderr);
 }
 
+/// `sessions/log` (#625): one session's transcript, read as `bench log` reads it, in pages a client
+/// with no disk on this machine can follow: the last entries, the ones after a cursor, the ones
+/// before. A path is refused, so a client over TCP cannot point it at a file.
+#[test]
+fn sessions_log_pages_a_transcript_by_index_and_refuses_a_path() {
+    let home = TestHome::claim("session-log");
+    let daemon = DaemonGuard::start(&home.dir, None);
+    let projects = home.dir.join(".claude/projects/-ws");
+    fs::create_dir_all(&projects).unwrap();
+    let line = |kind: &str, content: serde_json::Value| {
+        serde_json::json!({"type": kind, "timestamp": "2026-10-03T12:00:00.000Z",
+            "message": {"role": kind, "content": content}})
+        .to_string()
+    };
+    let mut lines = vec![line("user", serde_json::json!("run the gate"))];
+    lines.push(line(
+        "assistant",
+        serde_json::json!([{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "just check"}}]),
+    ));
+    lines.push(line(
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "green"}]),
+    ));
+    let transcript = projects.join("c-7e2d.jsonl");
+    fs::write(&transcript, lines.join("\n") + "\n").unwrap();
+    let ask = |args: serde_json::Value| raw_request(&daemon.socket, "sessions/log", args).0;
+
+    let last = ask(serde_json::json!({"id": "c-7e2d", "limit": 2}));
+    assert_eq!(last["status"], "ok", "{last}");
+    assert_eq!(last["data"]["total"], 3);
+    let kinds: Vec<_> = last["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["index"].as_u64().unwrap(),
+                e["kind"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(kinds, [(1, "tool".to_string()), (2, "agent".to_string())]);
+    assert_eq!(last["data"]["entries"][0]["at_ms"], 1_791_028_800_000u64);
+
+    let back = ask(serde_json::json!({"id": "c-7e2d", "before": 1}));
+    assert_eq!(back["data"]["entries"][0]["text"], "run the gate", "{back}");
+
+    // A reply written after the client last read is what `after` its cursor brings.
+    let nothing = ask(serde_json::json!({"id": "c-7e2d", "after": 2}));
+    assert_eq!(
+        nothing["data"]["entries"],
+        serde_json::json!([]),
+        "{nothing}"
+    );
+    let more = line(
+        "assistant",
+        serde_json::json!([{"type": "text", "text": "and pushed"}]),
+    );
+    fs::write(&transcript, lines.join("\n") + "\n" + &more + "\n").unwrap();
+    let new = ask(serde_json::json!({"id": "c-7e2d", "after": 2}));
+    assert_eq!(new["data"]["entries"][0]["index"], 3, "{new}");
+    assert_eq!(new["data"]["entries"][0]["text"], "and pushed");
+
+    let path = ask(serde_json::json!({"id": transcript.display().to_string()}));
+    assert_eq!(path["status"], "refused", "{path}");
+    let both = ask(serde_json::json!({"id": "c-7e2d", "before": 2, "after": 0}));
+    assert_eq!(both["status"], "refused", "{both}");
+    // A refusal names the id, never where benchd looked: the client is over TCP.
+    let unknown = ask(serde_json::json!({"id": "nobody"}));
+    assert_eq!(unknown["status"], "refused", "{unknown}");
+    let home_dir = home.dir.display().to_string();
+    assert!(!unknown.to_string().contains(&home_dir), "{unknown}");
+}
+
 /// `BENCH_LISTEN` is benchd's own: a session it spawns never inherits it, or a test benchd an
 /// agent starts from that session would try to bind the operator's address (and refuse to start).
 #[test]

@@ -61,9 +61,10 @@ pub use just::{
 mod sessions;
 pub use sessions::{
     Activity, AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal,
-    DismissedRecord, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord,
-    HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionRow,
-    SessionState, SessionsArgs, Spawner, Unreadable, dismissed_path, hosted_path, sessions_dir,
+    DismissedRecord, EntryKind, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host,
+    HostedRecord, HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList,
+    SessionLog, SessionLogArgs, SessionLogEntry, SessionRow, SessionState, SessionsArgs, Spawner,
+    Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
 /// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
@@ -186,6 +187,8 @@ pub const KNOWN_VERBS: &[&str] = &[
     "sessions/dismiss",
     // M1 (#357): the operator has seen a session's finished turn.
     "sessions/seen",
+    // #625: one session's transcript, for Pocket's chat.
+    "sessions/log",
     "attach",
     "close",
     "mail/send",
@@ -261,6 +264,8 @@ pub enum Verb {
     SessionsDismiss,
     /// Mark a session's finished turn seen (`SessionKey`): what focusing its pane does.
     SessionsSeen,
+    /// One session's transcript entries (`SessionLogArgs`).
+    SessionsLog,
     Attach,
     Close,
     MailSend,
@@ -331,6 +336,7 @@ impl Verb {
             "sessions/all" => Some(Verb::SessionsAll),
             "sessions/dismiss" => Some(Verb::SessionsDismiss),
             "sessions/seen" => Some(Verb::SessionsSeen),
+            "sessions/log" => Some(Verb::SessionsLog),
             "attach" => Some(Verb::Attach),
             "close" => Some(Verb::Close),
             "mail/send" => Some(Verb::MailSend),
@@ -1316,6 +1322,38 @@ mod tests {
         assert_eq!(serde_json::to_value(&sent).unwrap(), value["send_reply"]);
     }
 
+    /// `fixtures/session-log.json` holds Pocket's read of a session's transcript (#625): the
+    /// request parses into `SessionLogArgs` and the reply round-trips through `SessionLog`.
+    /// helm's `BenchSessionLogWireTests` encodes the same request and decodes the reply.
+    #[test]
+    fn the_session_log_fixture_is_what_the_daemon_reads_and_answers() {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/session-log.json");
+        let text = std::fs::read_to_string(&path).expect("the shared fixture is checked in");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let request: Request = serde_json::from_value(value["request"].clone()).unwrap();
+        assert_eq!(Verb::parse(&request.verb), Some(Verb::SessionsLog));
+        let args: SessionLogArgs = serde_json::from_value(request.args.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&args).unwrap(), request.args);
+        let reply: SessionLog = serde_json::from_value(value["reply"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(&reply).unwrap(), value["reply"]);
+        assert!(
+            reply.entries.iter().any(|e| e.tool.is_some()),
+            "a tool entry pins `tool`"
+        );
+        let kinds: Vec<EntryKind> = reply.entries.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                EntryKind::User,
+                EntryKind::Tool,
+                EntryKind::Error,
+                EntryKind::Agent
+            ],
+            "every kind crosses the wire, so a rename on one side fails the other"
+        );
+    }
+
     /// `fixtures/spawn-verbs.json` holds the fork helm asks for from a canvas mark (#535) and the
     /// resume the sessions drawer asks for (#621): `SpawnArgs` reads each whole, and helm's
     /// `BenchWireConformanceTests` encodes the same requests and decodes the reply.
@@ -1487,7 +1525,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            56,
+            57,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

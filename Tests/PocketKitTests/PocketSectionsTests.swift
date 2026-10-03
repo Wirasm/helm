@@ -86,4 +86,46 @@ final class PocketSectionsTests: XCTestCase {
             PocketHome.sections(workspaces: ["/w/helm"], sessions: sessions, query: "opus")
                 .first?.running.map(\.id), ["b"])
     }
+
+    /// In a section, a chat that asks for him floats to the top, then the orchestrators, then the
+    /// rest, each in benchd's order.
+    func testAskingChatsFloatAboveOrchestratorsWithinASection() throws {
+        let sessions = [
+            "/w/helm": [
+                row("worker", running()), row("lead", running(), spawner: .operator),
+                row("asks", running("waiting")),
+            ]
+        ]
+        let section = try XCTUnwrap(
+            PocketHome.sections(workspaces: ["/w/helm"], sessions: sessions, query: "").first)
+        XCTAssertEqual(section.running.map(\.id), ["asks", "lead", "worker"])
+    }
+
+    /// A workspace with a chat asking for him tops the list, above one whose agent only finished
+    /// a turn, however recent: one tap from the list to the chat that waits.
+    func testAWorkspaceWithAnAskingChatComesFirst() {
+        var done = row("d", running("idle"), at: 900)
+        done.done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
+        let sessions = ["/w/finished": [done], "/w/asking": [row("a", running("waiting"), at: 10)]]
+        let order = PocketHome.sections(
+            workspaces: ["/w/finished", "/w/asking"], sessions: sessions, query: ""
+        ).map(\.path)
+        XCTAssertEqual(order, ["/w/asking", "/w/finished"])
+    }
+
+    /// Swiping in a chat moves to the previous or next chat of its own section, and stops at
+    /// either end.
+    func testTheNeighbourOfAChatIsInItsOwnSection() throws {
+        let sessions = [
+            "/w/helm": [row("a", running()), row("b", running()), row("c", running())],
+            "/w/prp": [row("p", running())],
+        ]
+        let sections = PocketHome.sections(
+            workspaces: ["/w/helm", "/w/prp"], sessions: sessions, query: "")
+        XCTAssertEqual(PocketHome.neighbor(of: "b", in: sections, step: 1)?.id, "c")
+        XCTAssertEqual(PocketHome.neighbor(of: "b", in: sections, step: -1)?.id, "a")
+        XCTAssertNil(PocketHome.neighbor(of: "c", in: sections, step: 1), "not into prp")
+        XCTAssertNil(PocketHome.neighbor(of: "a", in: sections, step: -1))
+        XCTAssertNil(PocketHome.neighbor(of: "gone", in: sections, step: 1))
+    }
 }

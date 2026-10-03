@@ -109,6 +109,16 @@ sessions — the last only from `sessions/hosted.json`, benchd's record of what 
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
 finished row. helm draws the list in its Sessions drawer.
 
+**And one session's conversation, for a client that cannot read the files (#625).**
+`sessions/log { id, before?, after?, limit? }` answers a session's transcript entries (`user`,
+`agent`, `tool`, `error`) as `bench log` reads them, by the same reader against benchd's HOME, so
+Pocket's chat on the phone and `bench log` at the desk never disagree. Each entry carries its
+index in the whole transcript, which only grows, so the index is the cursor: no cursor is the last
+`limit` (50, at most 200), `after` follows new ones, `before` pages back. It takes a session id as
+`sessions/all` lists it, never a path: it answers over TCP, and a path would read any file; a
+refusal names the id, not where benchd looked. benchd keeps each transcript it read while the
+file's length and mtime hold, since the phone asks every second or two.
+
 **And the sensor (#358, first half of M2 finish).** `bench hook <claude|codex|pi>` is one
 command wired into an agent's own hooks. On every event it reports the agent's state over the
 socket (the `hook` verb), and the reply carries the agent's unread mail as pointer lines, which

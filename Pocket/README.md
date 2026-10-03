@@ -1,9 +1,14 @@
 # Pocket
 
 helm's iPhone app (#625): a third client of benchd, over TCP, for steering agents away from the
-desk. It lists each workspace's agents (● asking, ✓ finished, ○ working), and opens one agent's
-screen live, with a message box and keys (⏎ esc ^c 1 2 3 ⇥ and arrows) that reach it as keys.
-It is never a remote for helm's window.
+desk. It works like a messaging app. The chats list holds each workspace's running agents (●
+asking, ✓ finished, ○ working), a workspace with one asking first and, in each, the asking ones,
+then the orchestrators; a row shows the last message and a dot when a reply came past what you
+last read. A chat is the agent's own transcript (`sessions/log`): your prompts on the right, its
+replies as simple markdown, a tool call as one line. The field below types into the agent with
+Return; while it asks, the prompt's choices are buttons. `screen` shows its terminal live, with
+keys (⏎ esc ^c 1 2 3 ⇥ and arrows). Swipe left or right for the next or previous chat of the
+workspace; the name opens a searchable switcher. It is never a remote for helm's window.
 
 It shares helm's code rather than copying it:
 
@@ -55,7 +60,7 @@ session (`just resume-all` brings the panes back).
    profile trusted (Settings › General › VPN & Device Management). If Xcode says the bundle ID is
    taken, change `com.wirasm.pocket` there to one of your own.
 4. **The URL.** Pocket opens on its connect sheet: type the `tcp://100.x.y.z:4519` URL step 2
-   printed, the Mac's tailnet address. Pocket keeps that URL and nothing else; tap the state at the top right to change
+   printed, the Mac's tailnet address. Pocket keeps that URL, and per chat an unsent draft and how far you have read; tap the state at the top right to change
    it. iOS may ask once for Local Network access.
 
 **A free personal team's install lasts seven days.** After that Pocket will not open: connect the

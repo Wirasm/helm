@@ -1,0 +1,45 @@
+{
+  "request": {
+    "id": "pocket-1",
+    "verb": "sessions/log",
+    "args": {
+      "id": "c-7e2d",
+      "after": 0,
+      "limit": 50
+    }
+  },
+  "reply": {
+    "harness": "claude",
+    "id": "c-7e2d",
+    "total": 5,
+    "entries": [
+      {
+        "index": 1,
+        "at_ms": 1791028800000,
+        "kind": "user",
+        "text": "run the gate"
+      },
+      {
+        "index": 2,
+        "at_ms": 1791028830000,
+        "kind": "tool",
+        "tool": "Bash",
+        "text": "just check"
+      },
+      {
+        "index": 3,
+        "at_ms": 1791028845000,
+        "kind": "error",
+        "tool": "Bash",
+        "text": "exit 1: daemon FAIL"
+      },
+      {
+        "index": 4,
+        "at_ms": 1791028860000,
+        "kind": "agent",
+        "text": "The gate is **green**.\n\n- lint PASS\n- swift PASS"
+      }
+    ],
+    "unreadable": 0
+  }
+}

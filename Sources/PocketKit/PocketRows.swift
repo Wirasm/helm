@@ -38,6 +38,12 @@ package enum Attention: Comparable, Sendable {
 }
 
 extension BenchSessionRow {
+    /// The agent itself says it waits on a prompt, not merely that mail to him is unread: when a
+    /// chat reads the prompt's choices off its screen.
+    package var waitsAtPrompt: Bool {
+        if case let .running(activity, _) = state { activity == "waiting" } else { false }
+    }
+
     /// What Pocket calls a session: its mailbox handle, the name agents and the operator address
     /// it by, else its pane name, its branch, or the start of its id.
     package var title: String {

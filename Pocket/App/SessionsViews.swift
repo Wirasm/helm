@@ -2,10 +2,10 @@ import HelmWire
 import PocketKit
 import SwiftUI
 
-/// home: a search field, then each workspace as a section that collapses, the ones that need him
-/// first. A section shows its running sessions, orchestrators (the sessions he started) first and
-/// the rest dimmed under them, and its finished ones behind a disclosure.
-struct HomeView: View {
+/// chats: a search field, then each workspace as a section that collapses, the ones that need him
+/// first. A section shows its running sessions as chats (the ones asking first, then the
+/// orchestrators he started, the rest dimmed), and its finished ones behind a disclosure.
+struct ChatsView: View {
     @EnvironmentObject private var model: PocketModel
     let talk: (String) -> Void
     @State private var query = ""
@@ -83,9 +83,9 @@ struct SectionView: View {
                 Text("nothing running").font(Mono.small).foregroundStyle(Palette.faint)
             }
             ForEach(section.running) { row in
-                SessionRowView(row: row, detail: "\(row.harness) · \(row.model ?? "?")")
-                    .opacity(row.isOrchestrator ? 1 : 0.6)
-                    .onTapGesture { row.screen.map(talk) }
+                ChatRowView(row: row)
+                    .opacity(row.isOrchestrator || Attention(row) == .asking ? 1 : 0.6)
+                    .onTapGesture { talk(row.id) }
             }
             if section.finishedCount > 0 {
                 Button(action: toggleFinished) {
@@ -121,7 +121,7 @@ struct AgentsView: View {
                         age: BenchSessionRow.age(sinceMs: row.lastMs, now: Date())
                     )
                     .opacity(row.screen == nil ? 0.6 : 1)
-                    .onTapGesture { row.screen.map(talk) }
+                    .onTapGesture { if row.screen != nil { talk(row.id) } }
                 }
                 Failure()
             }
@@ -135,6 +135,47 @@ struct AgentsView: View {
         }
         if case let .running(_, detail?) = row.state { return detail }
         return "\(row.harness) · \(row.model ?? "?")"
+    }
+}
+
+/// One chat in the list: its glyph and name, harness and model, the last message's first line and
+/// its age, and a dot when the agent replied after he last opened it.
+struct ChatRowView: View {
+    @EnvironmentObject private var model: PocketModel
+    @EnvironmentObject private var memory: ChatMemory
+    let row: BenchSessionRow
+
+    var body: some View {
+        let attention = Attention(row)
+        let preview = model.previews[row.id]
+        let unread = preview?.isUnread(readThrough: memory.readThrough[row.id]) ?? false
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(attention.glyph).foregroundStyle(Palette.of(attention))
+            VStack(alignment: .leading, spacing: 1) {
+                HStack {
+                    Text(row.title).foregroundStyle(Palette.text).lineLimit(1)
+                    Text("\(row.harness) · \(row.model ?? "?")").font(Mono.small)
+                        .foregroundStyle(Palette.faint).lineLimit(1)
+                    Spacer()
+                    if unread { Text("●").font(Mono.small).foregroundStyle(Palette.finished) }
+                    Text(age(preview)).font(Mono.small).foregroundStyle(Palette.dim)
+                }
+                Text(
+                    MessageRow.markdown(
+                        (preview?.mine == true ? "you: " : "") + (preview?.text ?? ""))
+                )
+                .font(Mono.small)
+                .foregroundStyle(unread ? Palette.text : Palette.dim)
+                .lineLimit(1)
+            }
+        }
+        .font(Mono.body)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+
+    private func age(_ preview: ChatPreview?) -> String {
+        BenchSessionRow.age(sinceMs: preview?.atMs ?? row.updatedAtMs, now: Date())
     }
 }
 

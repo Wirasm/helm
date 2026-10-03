@@ -22,6 +22,10 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var failure: String?
     /// The plan and review pages in the workspaces' stores, newest first (`loadPages`).
     @Published package private(set) var pages: [PocketPage] = []
+    /// Each running chat's last message, by session id (`sessions/log`), for the chats list.
+    @Published package private(set) var previews: [String: ChatPreview] = [:]
+    /// When each preview was last asked for, and the row's `updatedAtMs` then (`refreshPreviews`).
+    private var previewed: [String: (updatedAtMs: UInt64, at: Date)] = [:]
     /// The canvases on the bench an agent opened, standardized: a reply to one is mailed to it.
     @Published private var opened: Set<String> = []
 
@@ -38,6 +42,8 @@ package final class PocketModel: ObservableObject {
         following = nil
         workspaces = []
         sessions = [:]
+        previews = [:]
+        previewed = [:]
         pages = []
         opened = []
         guard let endpoint = BenchEndpoint.tcp(url.trimmingCharacters(in: .whitespaces)) else {
@@ -92,6 +98,15 @@ package final class PocketModel: ObservableObject {
     package func watchSessions(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
             await refreshSessions()
+            try? await Task.sleep(for: interval)
+        }
+    }
+
+    /// The chats' previews, on a loop of their own: a slow transcript never holds up the
+    /// sessions poll, which says who is asking.
+    package func watchPreviews(every interval: Duration = .seconds(2)) async {
+        while !Task.isCancelled {
+            await refreshPreviews()
             try? await Task.sleep(for: interval)
         }
     }
@@ -216,6 +231,48 @@ package final class PocketModel: ObservableObject {
             return why
         }
         return nil
+    }
+
+    /// A page of one session's transcript (`sessions/log`).
+    package func log(
+        _ session: String, page: BenchSessionLogRequest.Page, limit: Int = 50
+    ) async
+        -> Result<BenchSessionLog, Refusal>
+    {
+        guard let endpoint else { return .failure(Refusal(Self.notConnected)) }
+        let request = BenchSessionLogRequest(
+            id: Self.id("log"), session: session, page: page, limit: limit)
+        return await Self.ask(request, at: endpoint, BenchSessionLog.self)
+    }
+
+    /// How long a preview stands before it is asked for again although its row did not change.
+    /// `updatedAtMs` is not a change signal for every row: a codex or pi agent benchd spawned keeps
+    /// its spawn time, so its replies are found this way.
+    package static let previewStanding: TimeInterval = 10
+
+    /// The last message of every running session whose row changed since it was last asked for,
+    /// or that has not been asked for in `previewStanding`. A failed read leaves the old preview,
+    /// and so does a page of tool lines only.
+    package func refreshPreviews() async {
+        let running = sessions.values.joined().filter {
+            if case .running = $0.state { true } else { false }
+        }
+        guard let asked = client else { return }
+        for row in running {
+            if let last = previewed[row.id], last.updatedAtMs == row.updatedAtMs,
+                Date().timeIntervalSince(last.at) < Self.previewStanding
+            {
+                continue
+            }
+            // A short page: the last message is near the end, behind a few tool lines at most.
+            let page = await log(row.id, page: .last, limit: 20)
+            // A reconnect to another benchd while this was asked answers for the old one.
+            guard client === asked else { return }
+            previewed[row.id] = (row.updatedAtMs, Date())
+            if case let .success(log) = page, let preview = ChatPreview(log) {
+                previews[row.id] = preview
+            }
+        }
     }
 
     private static let notConnected = "not connected to a benchd"
