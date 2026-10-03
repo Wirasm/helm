@@ -146,6 +146,29 @@ final class PocketPagesModelTests: XCTestCase {
         XCTAssertNil(server.requests.first { $0["verb"] as? String == "file/write" })
     }
 
+    /// A reply over a live file that is not UTF-8 is refused, and nothing is written: its bytes
+    /// cannot be the base a write is expected over (`CanvasText`).
+    func testAReplyOverALiveFileThatIsNotUTF8IsRefused() async throws {
+        let server = try benchd { nil }
+        defer { server.stop() }
+        let model = try await connected(to: server)
+        _ = await model.loadPages()
+        let page = try XCTUnwrap(model.pages.first)
+        let answer = server.answer
+        server.answer = { request in
+            guard request["verb"] as? String == "file/read" else { return answer(request) }
+            let bytes = Data([0x7B, 0xFF, 0xFE, 0x7D]).base64EncodedString()
+            return [
+                "id": request["id"] ?? "", "status": "ok",
+                "data": ["kind": "bytes", "base64": bytes],
+            ]
+        }
+        let refusal = await model.reply("keep it", to: page)
+        XCTAssertTrue(
+            refusal?.description.contains("UTF-8") == true, "\(String(describing: refusal))")
+        XCTAssertNil(server.requests.first { $0["verb"] as? String == "file/write" })
+    }
+
     /// Start is a spawn by helm with the first message as text, so benchd records it as the
     /// operator's and moves no focus on the Mac.
     func testStartSpawnsAnOrchestratorAsHelm() async throws {
