@@ -252,7 +252,8 @@ writes the file, since helm may be on another machine. The `bench-panes` skill i
 
 **A benchd by address (M5c, #459, first slice).** `BENCH_LISTEN=<host>:<port>` makes benchd
 listen on TCP beside its unix socket, and each connection goes to the same handler: the protocol
-is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<port>` points
+is bytes on a stream and reads no peer credentials. benchd uses the variable up at boot and passes
+it to no child, so a benchd an agent starts never tries the operator's address. `BENCH_URL=tcp://<host>:<port>` points
 `bench` and helm at it instead of `<root>/benchd.sock` (`bench_wire::Endpoint`, helm's
 `BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
 Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed
