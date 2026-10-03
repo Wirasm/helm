@@ -24,9 +24,9 @@ default (Flags below), and none of them is what this table picks.
 
 | Job | Default | Alternatives | Why | Evidence |
 |---|---|---|---|---|
-| Delivery (`prp-issue`: issue to reviewed PR) | `claude` `opus` `high` | `pi` `openai-codex/gpt-6.1-sol` `high`; `codex` `gpt-6.1-sol` `high` | Runs the whole PRP chain; the most delivery evidence | E1, E2, E3, E5 |
-| Wire format, daemon state, isolation, data loss | `claude` `opus` `high`; `xhigh` after a failed round | `codex` `gpt-6.1-sol` `xhigh`, reviewed by claude | A miss costs the most here. Daemon and wire work in E1 and E6 ran on opus; the one codex attempt was correct | E1, E4 |
-| UI: helm views, browser pane | `claude` `opus` `high` | `pi` or `codex` on `gpt-6.1-sol` `high` | All three delivered browser work; a screenshot needs a model that reads images | E5 |
+| Delivery (`prp-issue`: issue to reviewed PR) | `claude` `opus` `high` | `pi` `openai-codex/gpt-6.1-sol` `medium`; `codex` `gpt-6.1-sol` `high` | Runs the whole PRP chain; the most delivery evidence | E1, E2, E3, E5 |
+| Wire format, daemon state, isolation, data loss | `claude` `opus` `high`; `xhigh` after a failed round | `codex` `gpt-6.1-sol` `xhigh`, reviewed by claude | A miss costs the most here. Daemon and wire work in E1 and E6 ran on opus. Two codex implementers on `gpt-5.6-sol` `xhigh` (through Archon) got a wire change right; `gpt-6.1-sol` is untested on wire work | E1, E4 |
+| UI: helm views, browser pane | `claude` `opus` `high` | `pi` `openai-codex/gpt-6.1-sol` `medium`; `codex` `gpt-6.1-sol` `high` | All three delivered browser work; a screenshot needs a model that reads images | E5 |
 | Spike | `claude` `opus` `high` | `codex` `gpt-6.1-sol` `high`, when an independent model family is the point | Every spike verdict in E1 and E6 came from opus | E1, E6 |
 | Review (`prp-review`) | `claude` `opus` `high` | `codex` `gpt-6.1-sol` `high`, for a reviewer from the other model family | Claude reviewed every PR in E2. codex ran `prp-review`'s reviewer fan-out itself on #615 and #619 | E2, E4, E5 |
 | A question about an agent's work | `--fork <its runtime>`, its own harness | | Read-only copy; the author is not disturbed | E7 |
@@ -38,9 +38,10 @@ default (Flags below), and none of them is what this table picks.
 
 Notes the table cannot hold:
 
-- **pi and codex run the same `gpt-6.1-sol` with different results.** pi stayed in scope and
-  reported its evidence candidly. codex wrote stronger tests but deleted 93 comment lines outside
-  its task and twice called a finding fixed before it was (E2). A codex brief should say: keep
+- **pi and codex run the same `gpt-6.1-sol` with different results** (pi at medium, codex at
+  high). pi stayed in scope and reported its evidence candidly. codex wrote stronger tests but
+  deleted 93 comment lines outside its task and called a finding fixed before it was (R1 on #593,
+  E2). A codex brief should say: keep
   existing comments, and probe the sibling case before calling a finding closed.
 - **pi cannot run a PRP chain** (skills below). Its deliveries worked because the brief spelled out
   plan, gate, red/green proof and PR, and the orchestrator ran the review.
@@ -54,11 +55,17 @@ Read the plan windows before a fleet, and again when one agent stops for a limit
 
 ```bash
 bench sessions | python3 -c '
-import json, sys
+import json, sys, time
+now = time.time() * 1000
 for u in json.load(sys.stdin)["usage"]:
     for w in u["windows"]:
-        print(u["harness"], "%dh" % (w["minutes"] // 60), "%d%%" % w["used_percent"])'
+        print(u["harness"], "%dh window" % (w["minutes"] // 60), "%d%% used" % w["used_percent"],
+              "read %dm ago" % ((now - w["at_ms"]) / 60000),
+              "resets in %dh" % ((w["resets_at_ms"] - now) / 3600000))'
 ```
+
+Each harness publishes its own reading when it runs a turn, so a window read hours ago may
+already have reset. Weigh the age before moving work on it.
 
 | Account | Window | Hit so far | Spends it |
 |---|---|---|---|
@@ -92,8 +99,9 @@ Files are in `~/.prp/helm-3ec376fc/`.
 - **E4** `reports/delivery-baseline-2-2026-10-01.md`: a wire change across Rust and Swift on codex
   `gpt-5.6-sol`; correct, 23/25 from claude reviewers. archon-review on codex failed on an output
   schema until Archon #3560.
-- **E5** `orchestration/2026-10-02-browser-polish.md`: browser work by claude (#613), codex (#615,
-  #619) and pi (#614, #618), each to a READY review and green CI. codex's rollouts for #615 and
+- **E5** `orchestration/2026-10-02-browser-polish.md`, `reports/browser-ime-followup-report.md`
+  and `reports/oopif-pickers-report.md`: browser work by claude (#613), codex (#615, #619) and pi
+  (#614, #618), each to a READY review and green CI. codex's rollouts for #615 and
   #619 (`~/.codex/sessions/2026/10/02/`) show its review reviewers started with `spawn_agent`.
 - **E6** `orchestration/2026-10-02-attention-next.md`: opus spikes (#466 shared codex app-server
   PROVEN, the phone app CONDITIONAL) and deliveries (#620 to #629).
@@ -124,8 +132,9 @@ benchd makes every codex thread on its own codex app-server before the pane star
 codex is spawned only into a folder the operator trusts. Do not use `/new` in a benchd codex: the
 new conversation runs in the wrong folder and benchd does not own it; spawn a new agent instead.
 
-With no `--effort`, claude takes the operator's Claude Code setting and codex the model's own
-default, which is `low` for `gpt-6.1-sol` (`~/.codex/models_cache.json`). The table above names an
+With no `--effort`, claude takes the operator's Claude Code setting and codex the
+`model_reasoning_effort` in `~/.codex/config.toml` (`medium`), falling back to the model's own
+default (`low` for `gpt-6.1-sol`) only when that key is unset. The table above names an
 effort for every job; raise it one level for a round that already failed.
 
 ## Which skills each harness can see

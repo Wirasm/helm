@@ -39,7 +39,8 @@ the run file's Workstreams row. The short version, names verified 2026-10-03:
 
 | Job | Default | Alternatives |
 |---|---|---|
-| Delivery (`prp-issue`), UI, spike, review, research | `--agent claude --model opus --effort high` | `gpt-6.1-sol` `high` on codex or pi (`openai-codex/gpt-6.1-sol`) |
+| Delivery (`prp-issue`), UI | `--agent claude --model opus --effort high` | `--agent codex --model gpt-6.1-sol --effort high`, or `--agent pi --model openai-codex/gpt-6.1-sol --effort medium` with the steps in the brief |
+| Spike, review, research | `--agent claude --model opus --effort high` | `--agent codex --model gpt-6.1-sol --effort high`, for the other model family |
 | Wire formats, daemon state, isolation, data loss | `--agent claude --model opus --effort high` (`xhigh` after a failed round) | `--agent codex --model gpt-6.1-sol --effort xhigh`, reviewed by claude |
 | Hard diagnosis that failed once on opus | `--agent claude --model fable --effort xhigh` | `--model opus --effort max` |
 | Mechanical work: a rebase, conflict catch-up, a doc fix | `--agent claude --model sonnet --effort medium` | `--agent codex --model gpt-6-luna --effort medium` |
