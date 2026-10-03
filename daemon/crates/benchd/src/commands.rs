@@ -338,7 +338,7 @@ fn archon_worktrees(home: &Path) -> Result<Vec<String>, String> {
 }
 
 /// The common git directory of the checkout at `folder` or of any folder above it.
-fn common_dir_containing(folder: &Path) -> Option<String> {
+pub fn common_dir_containing(folder: &Path) -> Option<String> {
     let mut folder = PathBuf::from(StandardPath::new(&folder.to_string_lossy()).ok()?.as_str());
     loop {
         if let Some(dir) = common_dir_of(&folder) {

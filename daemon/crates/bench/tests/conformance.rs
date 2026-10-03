@@ -11323,6 +11323,119 @@ fn a_codex_fork_is_a_read_only_thread_and_comes_back_read_only() {
     assert_codex_resumed(h, &fake, &runs, restored, &thread, "read-only");
 }
 
+/// One workspace per project (#645): an agent spawned in a worktree, or in a folder of the main
+/// checkout, shows in the repository's workspace, which the first spawn opens; it still runs where
+/// it was spawned. A cwd spelled another way (here through macOS's `/var` symlink) finds the
+/// workspace already open for that folder, whichever spelling opened it.
+#[test]
+fn agents_spawned_across_a_repositorys_worktrees_share_its_workspace() {
+    let home = TestHome::claim("one-workspace");
+    let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
+    let worktree = git_repo_with_worktree(&home.dir, "app");
+    let repo = home.dir.join("app").canonicalize().unwrap();
+    let repo_path = repo.display().to_string();
+    fs::create_dir_all(home.dir.join("app/src")).unwrap();
+    let spawn = |cwd: &Path| {
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn",
+                "--agent",
+                "pi",
+                "--cwd",
+                &cwd.display().to_string(),
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{cwd:?}: {}", spawned.stderr);
+        json_of(&spawned)
+    };
+    let open = || -> Vec<String> {
+        document(&daemon.socket)["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let first = spawn(&worktree);
+    assert_eq!(first["workspace"], repo_path.as_str(), "{first}");
+    // Spelled as the test home is, not canonically: a second spelling of the main checkout.
+    let second = spawn(&home.dir.join("app/src"));
+    assert_eq!(second["workspace"], repo_path.as_str(), "{second}");
+    assert_eq!(open(), [repo_path.as_str()]);
+    // The workspace's session list has it too, however its cwd was spelled.
+    let listed = json_of(&bench(
+        &home.dir,
+        &["sessions", "--all", "--workspace", &repo_path],
+    ));
+    assert!(
+        listed["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == second["runtime_session"]),
+        "{listed}"
+    );
+
+    // Only placement moved: the agent runs in the worktree.
+    let pane = first["pane"].as_str().unwrap();
+    let found = json_of(&bench(&home.dir, &["get", "pane", pane]));
+    assert_eq!(found["pane"]["name"]["text"], "pi · wt", "{found}");
+
+    // Outside git a folder is its own project, found under whichever spelling opened it.
+    let notes = home.dir.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let opened = layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": notes.display().to_string() }),
+        operator(),
+        false,
+    );
+    assert_eq!(opened["status"], "ok", "{opened}");
+    let third = spawn(&notes.canonicalize().unwrap());
+    let stray = notes.display().to_string();
+    assert_eq!(third["workspace"], stray.as_str());
+    assert_eq!(open().len(), 2, "{:?}", open());
+
+    // A stray workspace folds into another: its last pane moves too, the emptied workspace goes,
+    // and the agent in it keeps running. (Asked: the operator is in it.)
+    let doc = document(&daemon.socket);
+    let ids: Vec<String> = doc["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["path"] == stray.as_str())
+        .unwrap()["bench"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["slots"].as_array().unwrap().clone())
+        .flat_map(|s| s["panes"].as_array().unwrap().clone())
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 2, "{doc}");
+    for pane in &ids {
+        let moved = bench(
+            &home.dir,
+            &["move", pane, "--workspace", &repo_path, "--asked"],
+        );
+        assert_eq!(moved.code, 0, "{}", moved.stderr);
+    }
+    assert_eq!(open(), [repo_path.as_str()]);
+    let session = third["session"].as_str().unwrap();
+    let listed = json_of(&bench(&home.dir, &["sessions"]));
+    assert!(
+        listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == session && s["live"] == true),
+        "{listed}"
+    );
+}
+
 /// `<home>/<name>`, a git repository with one commit and a linked worktree at
 /// `.worktrees/wt`, made by git itself; answers the worktree.
 fn git_repo_with_worktree(home: &Path, name: &str) -> PathBuf {

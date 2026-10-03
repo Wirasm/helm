@@ -10,8 +10,8 @@ import SwiftUI
 enum WorkspaceDrop {
     /// What the pointer at `point`, over the bar, would do with `item`. nil wherever the drop
     /// would change nothing or benchd would refuse it: a workspace in its own place, a pane over
-    /// its own workspace or a gap, a pane its bench cannot give up (a workspace's last pane), a
-    /// pane whose surface the target already shows, a workspace anywhere but the bar, and files.
+    /// its own workspace or a gap, a pane whose surface the target already shows, a workspace
+    /// anywhere but the bar, and files. A workspace's last pane may go: its workspace goes with it.
     ///
     /// The bar draws its tabs in the document's order, so that is the order read here.
     static func resolve(
@@ -27,7 +27,7 @@ enum WorkspaceDrop {
         case let .pane(pane):
             guard let over = tabs.first(where: { $0.frame.contains(point) }),
                 let from = document.workspaces.first(where: { $0.path == document.active }),
-                over.workspace.path != from.path, from.bench.panes.count > 1,
+                over.workspace.path != from.path,
                 let surface = from.bench.panes.first(where: { $0.id == pane })?.surface,
                 !over.workspace.bench.panes.contains(where: { $0.surface.alreadyShows(surface) })
             else { return nil }
