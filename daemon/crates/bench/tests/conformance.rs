@@ -11364,6 +11364,19 @@ fn agents_spawned_across_a_repositorys_worktrees_share_its_workspace() {
     let second = spawn(&home.dir.join("app/src"));
     assert_eq!(second["workspace"], repo_path.as_str(), "{second}");
     assert_eq!(open(), [repo_path.as_str()]);
+    // The workspace's session list has it too, however its cwd was spelled.
+    let listed = json_of(&bench(
+        &home.dir,
+        &["sessions", "--all", "--workspace", &repo_path],
+    ));
+    assert!(
+        listed["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == second["runtime_session"]),
+        "{listed}"
+    );
 
     // Only placement moved: the agent runs in the worktree.
     let pane = first["pane"].as_str().unwrap();

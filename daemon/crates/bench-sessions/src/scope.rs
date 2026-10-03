@@ -12,6 +12,9 @@ pub struct Workspace {
     pub root: String,
     /// `root` plus every linked worktree, each in one lexical spelling.
     pub roots: Vec<String>,
+    /// Each of `roots` as the disk spells it, where it still exists: what a cwd spelled another
+    /// way is compared with.
+    real: Vec<Option<PathBuf>>,
 }
 
 impl Workspace {
@@ -37,10 +40,12 @@ impl Workspace {
             dir = d.parent();
         }
         let only = path.as_str().to_string();
-        Workspace {
-            root: only.clone(),
-            roots: vec![only],
-        }
+        Workspace::new(only.clone(), vec![only])
+    }
+
+    fn new(root: String, roots: Vec<String>) -> Workspace {
+        let real = roots.iter().map(|r| fs::canonicalize(r).ok()).collect();
+        Workspace { root, roots, real }
     }
 
     fn from_common(repo: &Path, common: &Path) -> Workspace {
@@ -62,17 +67,33 @@ impl Workspace {
                 roots.push(p.as_str().to_string());
             }
         }
-        Workspace { root, roots }
+        Workspace::new(root, roots)
     }
 
     /// The root `cwd` is in — the most specific one, since a worktree under `.worktrees/`
-    /// is also under the repo root.
+    /// is also under the repo root. A cwd in none by its spelling is compared on disk: benchd
+    /// puts a pane in the workspace that is its project's folder under any spelling (case,
+    /// symlinks, #645), so its session belongs to that workspace's list too.
     pub fn root_of(&self, cwd: &str) -> Option<&str> {
-        self.roots
+        let lexical = self
+            .roots
             .iter()
             .filter(|r| within(cwd, r))
-            .max_by_key(|r| r.len())
+            .max_by_key(|r| r.len());
+        lexical
+            .or_else(|| self.root_on_disk(cwd))
             .map(String::as_str)
+    }
+
+    fn root_on_disk(&self, cwd: &str) -> Option<&String> {
+        let cwd = fs::canonicalize(cwd).ok()?;
+        self.roots
+            .iter()
+            .zip(&self.real)
+            .filter_map(|(root, real)| Some((root, real.as_ref()?)))
+            .filter(|(_, real)| cwd.starts_with(real))
+            .max_by_key(|(_, real)| real.as_os_str().len())
+            .map(|(root, _)| root)
     }
 }
 
@@ -134,10 +155,10 @@ mod tests {
 
     #[test]
     fn a_cwd_is_in_the_most_specific_root_and_a_sibling_prefix_is_not_in_scope() {
-        let ws = Workspace {
-            root: "/r/helm".into(),
-            roots: vec!["/r/helm".into(), "/r/helm/.worktrees/a".into()],
-        };
+        let ws = Workspace::new(
+            "/r/helm".into(),
+            vec!["/r/helm".into(), "/r/helm/.worktrees/a".into()],
+        );
         assert_eq!(
             ws.root_of("/r/helm/.worktrees/a/src"),
             Some("/r/helm/.worktrees/a")
@@ -149,5 +170,30 @@ mod tests {
             "a name prefix is not a path prefix"
         );
         assert_eq!(ws.root_of("/r"), None);
+    }
+
+    /// A cwd spelled through a symlink (and, where the volume folds case, in another case) is in
+    /// the root that is that folder on disk, as benchd's placement puts its pane (#645).
+    #[test]
+    fn a_cwd_spelled_another_way_is_in_the_root_that_is_its_folder() {
+        let dir = std::env::temp_dir().join(format!("bench-scope-{}", std::process::id()));
+        let repo = dir.join("App");
+        fs::create_dir_all(repo.join("src")).unwrap();
+        let repo = fs::canonicalize(&repo).unwrap();
+        std::os::unix::fs::symlink(&repo, dir.join("link")).unwrap();
+        let root = repo.display().to_string();
+        let ws = Workspace::new(root.clone(), vec![root.clone()]);
+
+        let linked = dir.join("link/src").display().to_string();
+        assert_eq!(ws.root_of(&linked), Some(root.as_str()));
+        let other_case = dir.join("app/src");
+        if other_case.is_dir() {
+            assert_eq!(
+                ws.root_of(&other_case.display().to_string()),
+                Some(root.as_str())
+            );
+        }
+        assert_eq!(ws.root_of(&dir.display().to_string()), None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -201,8 +201,12 @@ linked worktree or anywhere in a repository resolves to the repository's main ch
 (`project.rs`, reading git's common dir as the Worktrees drawer does), the workspace open for that
 folder under any spelling (case, symlinks) is found, and one is opened only when the project has
 none. `pane/move` to another workspace takes even a workspace's last pane, removing the emptied
-workspace, so a stray one folds into its project's. In the pane: the document's terminal surface names the session
-(`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
+workspace, so a stray one folds into its project's. `sessions/all` scopes a session's cwd by the
+same on-disk comparison when its spelling misses (`scope.rs`), so a workspace's list holds what
+its panes show.
+
+In the pane, the document's terminal surface names the session (`term:<session>`), and helm
+shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
 stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
 one per 16 ms plus a trailing one, because each is a SIGWINCH and a redraw (M5b, #359). No session outlives its daemon, so boot

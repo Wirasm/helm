@@ -60,7 +60,8 @@ const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --versi
      \x20     get                                 the bench document and the seq it reflects\n\
      \x20     stop                                log the stop, kill sessions, exit\n\
      \x20     spawn --agent <a> --cwd <dir>       an agent in a bench pty, shown in a pane of\n\
-     \x20           [--name <handle>]             <dir>'s workspace; --resume <id> re-enters a\n\
+     \x20           [--name <handle>]             <dir>'s project's workspace (a worktree's is\n\
+     \x20                                         its main checkout's); --resume <id> re-enters a\n\
      \x20           [--prompt-file <p>]           conversation, --fork <id> copies one to run\n\
      \x20           [--model <m>] [--effort <e>]  read-only (a harness that cannot says so),\n\
      \x20           [--resume <id> | --fork <id>] [--arg <flag>]... [--asked]\n\

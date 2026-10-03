@@ -172,9 +172,12 @@ the operator has said the run may.
 ## 8. Close
 
 After a workstream's PR merges, or a spike's verdict is read, end its agent: `bench close <pane>
---force` (it ends the agent's session; the folder and branch stay). A workspace left at a worktree
-by an older benchd folds into its project's: `bench move <pane> --workspace <repo>` takes even its
-last pane, and the emptied workspace goes. Then remove its worktree and add a terminal line to the run file. The merge queue
+--force` (it ends the agent's session; the folder and branch stay). A workspace's last pane is
+never closed, so when the agent is all its workspace holds (a spawn opened the project's workspace
+because none was open), close the workspace: `bench workspace close <repo> --force`, which leaves
+the folder alone. A workspace left at a worktree by an older benchd folds into its project's:
+`bench move <pane> --workspace <repo>` takes even its last pane, and the emptied workspace goes.
+Then remove its worktree and add a terminal line to the run file. The merge queue
 removed the worktrees of the PRs it merged that nobody was still working in (its report's `pruned`
 says which it kept and why; an agent still in its pane keeps its worktree); run `just
 prune-worktrees` after every batch for the rest, and `git worktree remove --force
