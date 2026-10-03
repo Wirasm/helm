@@ -104,7 +104,6 @@ git -C <repo> branch -d <branch>
 ```
 
 It never removes a worktree with a process in it, a tracked change, untracked files or commits
-`development` lacks. Close the workstream's workspace (`bench workspace close <worktree path>
---force`, or `bench close <pane> --force` for a pane in a shared workspace) once nothing more is
-needed from that agent; it closes whether or not the worktree is still there. Each worktree holds 3-4 GB of builds, and about sixty of them
+`development` lacks. Close the workstream's pane (`bench close <pane> --force`) once nothing more is needed from that
+agent; it closes whether or not the worktree is still there. Each worktree holds 3-4 GB of builds, and about sixty of them
 filled the disk on 2026-10-01.

@@ -338,10 +338,7 @@ impl Document {
     pub fn close_workspace(&mut self, path: &StandardPath, focus: Focus) -> Result<(), Refusal> {
         self.commit(focus, |doc| {
             let index = doc.index_of(path)?;
-            doc.workspaces.remove(index);
-            if doc.active.as_ref() == Some(path) {
-                doc.active = doc.workspaces.first().map(|w| w.path.clone());
-            }
+            doc.remove_workspace(index);
             Ok(())
         })
     }
@@ -387,8 +384,10 @@ impl Document {
     /// Move a pane to another workspace's bench (#178, a tab dropped on a workspace tab), as a
     /// tab of that bench's focused slot: the drop said "put it there", which is not the question
     /// the placement rules answer about a new pane. Its own bench gives it up by `close`'s rule,
-    /// so a workspace's last pane cannot leave, and a bench that already shows its surface refuses
-    /// it, the one `pane/open` would bring forward instead (`Surface::already_shows`).
+    /// except that a workspace's last pane takes the workspace with it, closed as
+    /// `close_workspace` closes one (#645): a workspace is never empty. A bench that already shows
+    /// its surface refuses it, the one `pane/open` would bring forward instead
+    /// (`Surface::already_shows`).
     ///
     /// With `Take` focus follows the pane, as it does every move: that workspace becomes the one
     /// on screen with the pane focused. `Ok(false)` when it is already there.
@@ -415,7 +414,18 @@ impl Document {
             });
         }
         self.commit(focus, |doc| {
-            let moved = doc.workspaces[from].bench.remove(pane)?;
+            let bench = &mut doc.workspaces[from].bench;
+            let moved = if bench.can_close(pane) {
+                bench.remove(pane)?
+            } else {
+                let last = bench
+                    .pane(pane)
+                    .cloned()
+                    .ok_or(Refusal::UnknownPane(pane))?;
+                doc.remove_workspace(from);
+                last
+            };
+            let to = doc.index_of(path)?;
             let bench = &mut doc.workspaces[to].bench;
             let slot = bench.focused_slot();
             bench.place(moved, Placement::Tab(slot), focus)?;
@@ -720,6 +730,15 @@ impl Document {
                 self.reveal(name);
             }
             Focus::Leave => self.drawers[d].badged = true,
+        }
+    }
+
+    /// Take a workspace off the document. Removing the active one activates the first that
+    /// remains; removing the last leaves nothing open.
+    fn remove_workspace(&mut self, index: usize) {
+        let gone = self.workspaces.remove(index);
+        if self.active.as_ref() == Some(&gone.path) {
+            self.active = self.workspaces.first().map(|w| w.path.clone());
         }
     }
 

@@ -90,7 +90,9 @@ tail -1 "$RUN"
 - The answer carries `handle`, `agent`, `session`, `pid`, `runtime_session`, `pane` and
   `workspace`. `runtime_session` is the conversation id `--resume` and `--fork` take later; for a
   codex it is its thread id.
-- The pane lands in the background of `$WORKTREE`'s workspace. A few seconds after the spawn, read
+- The pane lands in the background of the project's workspace, the one the repository's main
+  checkout has open: isolation is in worktrees, not workspaces (#645), so a fleet adds panes, not
+  workspace tabs. The agent still runs in `$WORKTREE`. A few seconds after the spawn, read
   it once with `bench get screen <pane>`: an agent stopped at a trust question or an unknown
   model shows there, not in the spawn's exit code.
 
@@ -169,11 +171,10 @@ the operator has said the run may.
 
 ## 8. Close
 
-After a workstream's PR merges, or a spike's verdict is read, end its agent. An agent spawned
-into a worktree has a workspace tab of its own, and `bench close` never closes a workspace's last
-pane, so close the tab: `bench workspace close <worktree path> --force` (it ends the agent's
-session; the folder and branch stay). An agent in a pane of a shared workspace: `bench close
-<pane> --force`. Then remove its worktree and add a terminal line to the run file. The merge queue
+After a workstream's PR merges, or a spike's verdict is read, end its agent: `bench close <pane>
+--force` (it ends the agent's session; the folder and branch stay). A workspace left at a worktree
+by an older benchd folds into its project's: `bench move <pane> --workspace <repo>` takes even its
+last pane, and the emptied workspace goes. Then remove its worktree and add a terminal line to the run file. The merge queue
 removed the worktrees of the PRs it merged that nobody was still working in (its report's `pruned`
 says which it kept and why; an agent still in its pane keeps its worktree); run `just
 prune-worktrees` after every batch for the rest, and `git worktree remove --force

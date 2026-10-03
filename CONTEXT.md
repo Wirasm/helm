@@ -332,5 +332,6 @@ _Avoid_: kill, destroy, cleanup (cleanup is the Worktrees drawer's word)
 Git's word, unmodified. Agents create and discard worktrees to isolate their own work; the
 operator rarely opens one. A worktree opened as a workspace is a workspace of **equal
 standing** to its main checkout — helm models no parent above either, and no worktree level
-beneath a workspace.
+beneath a workspace. Only the operator opens one, though: an agent spawned in a worktree shows in
+its project's workspace, the main checkout's (#645). Isolation is in worktrees, not workspaces.
 _Avoid_: treating a worktree as a child of a workspace, or as what a workbench is bound to

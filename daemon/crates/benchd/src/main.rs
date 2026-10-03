@@ -38,6 +38,7 @@ mod hook;
 mod just;
 mod layout;
 mod live;
+mod project;
 mod prompts;
 mod prp;
 mod restore;

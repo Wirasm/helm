@@ -82,13 +82,18 @@ final class WorkspaceDropTests: XCTestCase {
         XCTAssertNil(target.seam)
     }
 
-    func testNoZoneForAPaneOverItsOwnWorkspaceAGapOrWhenItIsTheLastPane() {
+    func testNoZoneForAPaneOverItsOwnWorkspaceOrAGap() {
         XCTAssertNil(resolve(.pane(pane), 50), "its own workspace")
         XCTAssertNil(resolve(.pane(pane), 110), "the gap between two tabs")
         XCTAssertNil(resolve(.pane(pane), 600), "the bar past the tabs")
-        XCTAssertNil(
-            resolve(.pane(pane), 160, in: document([ToyBench.terminal(pane)])),
-            "a workspace's last pane cannot leave it")
+    }
+
+    /// A workspace's last pane leaves with its workspace (#645): benchd removes the emptied one,
+    /// so the drop that folds a stray workspace into another is offered.
+    func testAWorkspacesLastPaneMovesToo() {
+        XCTAssertEqual(
+            resolve(.pane(pane), 160, in: document([ToyBench.terminal(pane)]))?.to,
+            .workspace(b.value))
     }
 
     /// A bench holds one pane per canvas file (benchd's `already_shows`), so a canvas dropped on a

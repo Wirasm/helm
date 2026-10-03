@@ -195,7 +195,13 @@ pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`,
 boundary: an agent's close of a terminal where something runs needs `force` (the refusal names the
 live session, or the job a shell is running), and so does its close of a workspace holding such a
 pane (#608), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
-now puts the agent in a pane: the document's terminal surface names the session
+now puts the agent in a pane, in its project's workspace: the operator's rule (#645) is that an
+agent spawns into existing workspaces, and isolation is in worktrees, not workspaces. So a cwd in a
+linked worktree or anywhere in a repository resolves to the repository's main checkout
+(`project.rs`, reading git's common dir as the Worktrees drawer does), the workspace open for that
+folder under any spelling (case, symlinks) is found, and one is opened only when the project has
+none. `pane/move` to another workspace takes even a workspace's last pane, removing the emptied
+workspace, so a stray one folds into its project's. In the pane: the document's terminal surface names the session
 (`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
 stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
