@@ -38,6 +38,7 @@ mod hook;
 mod just;
 mod layout;
 mod live;
+mod log;
 mod prompts;
 mod prp;
 mod restore;
@@ -1247,6 +1248,7 @@ fn dispatch(
         Some(Verb::Hook) => settled(req, hook::answer(core, &req.args)),
 
         Some(Verb::SessionsSeen) => settled(req, attention::answer_seen(core, req)),
+        Some(Verb::SessionsLog) => settled(req, log::answer(core, &req.args)),
 
         Some(Verb::SessionsDismiss) => settled(req, sessions::answer_dismiss(core, &req.args)),
 

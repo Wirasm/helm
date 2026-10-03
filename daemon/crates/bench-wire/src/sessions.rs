@@ -201,6 +201,49 @@ pub enum OpenAction {
     },
 }
 
+/// `sessions/log`: one session's transcript, as `bench log` reads it (Pocket's chat, #625).
+/// `id` is a session id as a `sessions/all` row carries it (a Claude session, a codex thread, a
+/// pi session), never a path: the verb answers a client over TCP, which must not be able to point
+/// it at any file. The transcript only grows, so an entry's `index` in it is the cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLogArgs {
+    pub id: String,
+    /// Up to `limit` entries before this index: paging back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<usize>,
+    /// Up to `limit` entries after this index: following new ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<usize>,
+    /// How many entries at most; 50 when absent, never more than 200. With no cursor, the last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// `sessions/log`'s answer: entries in transcript order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLog {
+    pub harness: Harness,
+    pub id: String,
+    /// How many entries the transcript has: the next one's index.
+    pub total: usize,
+    pub entries: Vec<SessionLogEntry>,
+    /// Lines the reader skipped because it did not know their shape.
+    pub unreadable: usize,
+}
+
+/// One entry of a transcript (`bench_sessions::transcript::Entry`) and its place in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLogEntry {
+    pub index: usize,
+    /// The record's own timestamp, as written.
+    pub at: String,
+    /// `user` (a prompt), `agent` (a reply), `tool` (one tool call) or `error`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    pub text: String,
+}
+
 /// A file a reader could not read as the shape it knows. The row it would have produced is
 /// skipped; benchd logs each one once as `sessions/unreadable` and lists them in every reply
 /// until the file changes. Every Claude source is internal and undocumented, so this is how

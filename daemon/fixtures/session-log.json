@@ -1,0 +1,32 @@
+{
+  "request": {
+    "id": "pocket-1",
+    "verb": "sessions/log",
+    "args": {
+      "id": "c-7e2d",
+      "after": 1,
+      "limit": 50
+    }
+  },
+  "reply": {
+    "harness": "claude",
+    "id": "c-7e2d",
+    "total": 4,
+    "entries": [
+      {
+        "index": 2,
+        "at": "2026-10-03T12:01:00.000Z",
+        "kind": "tool",
+        "tool": "Bash",
+        "text": "just check"
+      },
+      {
+        "index": 3,
+        "at": "2026-10-03T12:02:00.000Z",
+        "kind": "agent",
+        "text": "The gate is **green**.\n\n- lint PASS\n- swift PASS"
+      }
+    ],
+    "unreadable": 0
+  }
+}
