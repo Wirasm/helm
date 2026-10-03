@@ -833,6 +833,14 @@ fn hook(harness: Option<&str>) -> i32 {
         pane: env("HELM_PANE"),
         bench_session: env("BENCH_SESSION"),
         messaging_socket: env("CLAUDE_CODE_MESSAGING_SOCKET"),
+        account: match harness {
+            Harness::Claude => {
+                bench_wire::ConfigDir::from_env(std::env::var_os("CLAUDE_CONFIG_DIR"))
+                    .ok()
+                    .flatten()
+            }
+            Harness::Codex | Harness::Pi => None,
+        },
         usage: usage::codex_hook(harness, &event, field("transcript_path").as_deref()),
     };
     let Some(reply) = quiet_request("hook", json!(args))

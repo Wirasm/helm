@@ -37,6 +37,10 @@ pub struct HookArgs {
     /// inbox, which Claude exports to its hooks. Where benchd starts a turn when it is idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messaging_socket: Option<String>,
+    /// claude: the login it runs on, from `CLAUDE_CONFIG_DIR` in the hook's environment; absent
+    /// for the default login. What a conversation claimed by its hook is recorded on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<crate::ConfigDir>,
     /// codex only: its plan limits (#143), the newest the rollout named by the payload's
     /// `transcript_path` holds. Read by `bench hook`, which runs on the agent's machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]

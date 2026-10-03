@@ -211,7 +211,8 @@ pub enum Refusal {
 /// daemon restarts before anyone asks for the list. Only a session whose id is known at spawn
 /// can be recorded: every one benchd starts, codex's included, whose thread benchd creates.
 /// `spawner` is who asked for it: a conversation spawned again (`--resume`) is the new asker's
-/// from then on, logged as `sessions/spawner`.
+/// from then on, logged as `sessions/spawner`. Its Claude login is the one it ran on this time
+/// ([`record_account`]).
 pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Result<(), String> {
     let spec = &session.spec;
     let (Some(harness), Some(id)) = (Harness::parse(spec.agent.name()), spec.conversation.id())
@@ -229,6 +230,7 @@ pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Re
         .iter()
         .position(|h| h.key() == key)
     {
+        record_account(core, spec)?;
         if core.session_records.hosted[i].attention.spawner == spawner {
             return Ok(());
         }
@@ -251,12 +253,41 @@ pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Re
             },
             recorded_at: now_rfc3339(),
             forked_from: spec.conversation.forked_from().map(str::to_string),
+            account: spec.account.clone(),
             attention: AttentionRecord {
                 spawner,
                 ..AttentionRecord::default()
             },
         }],
     )
+}
+
+/// A recorded conversation started again on another Claude login (its own was spent, or no
+/// longer listed): the record follows it there, logged as `sessions/account`, so the next resume
+/// finds its prompt cache. A conversation the record does not hold is left to its first record.
+pub fn record_account(core: &mut Core, spec: &bench_session::SpawnSpec) -> Result<(), String> {
+    let (Some(harness), Some(id)) = (Harness::parse(spec.agent.name()), spec.conversation.id())
+    else {
+        return Ok(());
+    };
+    let key = SessionKey {
+        harness,
+        id: id.to_string(),
+    };
+    let Some(i) = core
+        .session_records
+        .hosted
+        .iter()
+        .position(|h| h.key() == key && h.account != spec.account)
+    else {
+        return Ok(());
+    };
+    core.append(
+        "sessions/account",
+        json!({ "harness": harness, "id": id, "account": spec.account }),
+    )?;
+    core.session_records.hosted[i].account = spec.account.clone();
+    save_hosted(&core.root, &core.session_records.hosted)
 }
 
 /// The record's entry for conversation `id` of the runtime `agent` names, if it holds one.

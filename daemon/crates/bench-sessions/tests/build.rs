@@ -208,6 +208,7 @@ impl Fixture {
             },
             recorded_at: "2026-09-25T10:00:00Z".into(),
             forked_from: None,
+            account: None,
             attention: Default::default(),
         });
     }
@@ -870,6 +871,7 @@ fn a_bench_session_carries_its_mail_address_and_a_pane_agent_carries_the_one_its
         },
         recorded_at: "2026-09-26T10:00:00Z".into(),
         forked_from: None,
+        account: None,
         attention: Default::default(),
     });
     f.unread.insert("ws-pane".into(), 1);
@@ -912,6 +914,7 @@ fn a_finished_row_keeps_the_mailbox_its_session_was_spawned_with() {
             },
             recorded_at: "2026-09-25T10:00:00Z".into(),
             forked_from: None,
+            account: None,
             attention: Default::default(),
         });
     }
@@ -1191,6 +1194,7 @@ fn a_finished_codex_session_is_listed_from_its_rollout() {
             },
             recorded_at: "2026-10-01T07:35:00Z".into(),
             forked_from: None,
+            account: None,
             attention: Default::default(),
         });
     }

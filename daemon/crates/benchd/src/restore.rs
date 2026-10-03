@@ -256,7 +256,9 @@ fn waiting(
 
 /// Whether Claude has written a transcript for conversation `id`:
 /// `~/.claude/projects/<dir>/<id>.jsonl`. Always the default profile under HOME (#491): benchd
-/// strips `CLAUDE_CONFIG_DIR` from every session it spawns, so the resumed claude reads here too.
+/// strips any `CLAUDE_CONFIG_DIR` a session would inherit, and a second login it chooses
+/// links its `projects` here (`accounts::configured` refuses one that does not), so the resumed
+/// claude reads here too.
 fn has_transcript(id: &str) -> bool {
     let Some(home) = std::env::var_os("HOME") else {
         return false;
@@ -375,17 +377,20 @@ fn reserve(
         .and_then(|h| h.handle().map(str::to_string))
         .filter(|h| !core.sessions.values().any(|s| &s.handle == h))
         .unwrap_or_else(|| id.clone());
+    let conversation = Conversation::Resume(agent.session.clone());
+    let account = crate::accounts::for_spawn(core, kind, &conversation)?;
     let mut spec = SpawnSpec {
         agent: kind,
         cwd: at.cwd.clone(),
         model: None,
         effort: None,
-        conversation: Conversation::Resume(agent.session.clone()),
+        conversation,
         posture,
         prompt_file: None,
         extra_args: Vec::new(),
         settings: None,
         codex: None,
+        account,
     };
     spawn::wire(&mut spec, &core.root, at.note.as_deref())?;
     Ok(Reserved { id, handle, spec })
@@ -409,6 +414,12 @@ fn start(
         core.notices.clone(),
     )?;
     core.sessions.insert(id.clone(), Arc::clone(&session));
+    if let Err(why) = sessions::record_account(core, &spec) {
+        let _ = core.append(
+            "sessions/unrecorded",
+            json!({ "session": id, "account": spec.account, "why": why }),
+        );
+    }
     hook::serve_codex(core, &session);
     let _ = core.append(
         "session/spawned",
@@ -420,6 +431,7 @@ fn start(
             "pid": session.pid,
             "runtime_session": agent.session,
             "resumed": true,
+            "account": spec.account,
             "pane": pane,
         }),
     );
