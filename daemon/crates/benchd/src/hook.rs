@@ -10,7 +10,8 @@
 //! session with a mailbox, `None` for one that was asked once and gets none. The address is
 //! written to the hosted-sessions record, so the same session gets the same handle after a
 //! daemon restart. What is logged: the claim, each change of activity (never every tool
-//! call), each hand-out and push, and an event name this build does not know, once.
+//! call), each hand-out and push, and, once each, an event name this build does not know and a
+//! guest: a session reporting from a place another live agent holds ([`unplace_guest`]).
 
 use crate::layout::{Change, Committed, commit};
 use crate::sessions::{self, Refusal};
@@ -252,6 +253,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         if let Some(usage) = args.usage.take().filter(|u| u.harness == args.harness) {
             crate::usage::record(&mut c, usage);
         }
+        unplace_guest(&mut c, &mut args, &key).map_err(Refusal::Failed)?;
         if transition.is_none()
             && c.unknown_hook_events
                 .insert((args.harness.name(), args.event.clone()))
@@ -263,14 +265,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             .map_err(Refusal::Failed)?;
         }
         if transition == Some(Transition::Ended) {
-            forget_in_pane(&mut c, &args, &key).map_err(Refusal::Failed)?;
-            if let Some(Some(agent)) = c.agents.remove(&key) {
-                c.append(
-                    "agent/ended",
-                    json!({ "harness": args.harness.name(), "session": args.session, "handle": agent.handle }),
-                )
-                .map_err(Refusal::Failed)?;
-            }
+            ended(&mut c, &args, &key).map_err(Refusal::Failed)?;
             return Ok(json!(HookReply::default()));
         }
         if args.harness == Harness::Codex && !served {
@@ -333,6 +328,19 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     reply.inbox = inbox;
     reply.rule = pi_rule;
     Ok(json!(reply))
+}
+
+/// The session ended: benchd forgets it, and its pane no longer holds it.
+fn ended(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+    forget_in_pane(c, args, key)?;
+    c.guests.remove(key);
+    if let Some(Some(agent)) = c.agents.remove(key) {
+        c.append(
+            "agent/ended",
+            json!({ "harness": args.harness.name(), "session": args.session, "handle": agent.handle }),
+        )?;
+    }
+    Ok(())
 }
 
 /// A codex hook runs in benchd's app-server, with the server's environment, so it never says
@@ -663,6 +671,59 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         args.pid,
     )?;
     Ok(Some(handle))
+}
+
+/// A hook from a guest is read as declaring no place (#644). A guest is a session reporting from
+/// another process in a place a live agent holds: the benchd session it declares (whose handle
+/// that agent has, as `waiting` finds a session's agents), else the helm pane. An agent's children
+/// inherit both, so one it starts (a test suite's, a workflow's, a conversation it resumes) would
+/// otherwise take its handle, its pane's record and the pane's attention. Without a place, a new
+/// session claims no mailbox and an addressed one keeps its own, outside the pane. The holder's own
+/// process reporting a new conversation (`/clear`) is not a guest, and once its process is gone the
+/// next agent there claims the place. Logged once per guest session.
+fn unplace_guest(c: &mut Core, args: &mut HookArgs, key: &SessionKey) -> Result<(), String> {
+    let Some((holder, agent)) = holder(c, args, key) else {
+        return Ok(());
+    };
+    let held = json!({ "harness": holder.harness.name(), "session": holder.id, "handle": agent.handle, "pid": agent.pid });
+    let place = json!({ "pane": args.pane, "bench_session": args.bench_session });
+    args.pane = None;
+    args.bench_session = None;
+    if c.guests.insert(key.clone()) {
+        c.append(
+            "agent/guest",
+            json!({ "harness": args.harness.name(), "session": args.session, "pid": args.pid, "cwd": args.cwd, "event": args.event, "place": place, "holder": held }),
+        )?;
+    }
+    Ok(())
+}
+
+/// The live agent of another session and process in the place `args` declares ([`unplace_guest`]).
+fn holder<'a>(
+    c: &'a Core,
+    args: &HookArgs,
+    key: &SessionKey,
+) -> Option<(&'a SessionKey, &'a Agent)> {
+    let session_handle = args
+        .bench_session
+        .as_deref()
+        .and_then(|id| c.sessions.get(id.trim()))
+        .map(|s| s.handle.as_str());
+    let pane = args
+        .pane
+        .as_deref()
+        .and_then(|p| PaneId::parse(p.trim()).ok());
+    c.agents
+        .iter()
+        .filter_map(|(k, agent)| Some((k, agent.as_ref()?)))
+        .filter(|(k, a)| {
+            *k != key
+                && match session_handle {
+                    Some(handle) => a.pane.is_none() && a.handle == handle,
+                    None => pane.is_some() && a.pane == pane,
+                }
+        })
+        .find(|(_, a)| a.pid != args.pid && a.is_running())
 }
 
 /// How long a pushed notice has to start a turn. Measured on Claude 2.1.283: an accepted
