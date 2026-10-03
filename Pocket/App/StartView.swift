@@ -85,11 +85,13 @@ struct StartView: View {
         guard !starting else { return }
         starting = true
         Task {
-            refused = await model.start(
+            let refusal = await model.start(
                 agent, in: workspace, model: modelName.isEmpty ? nil : modelName,
-                effort: effort.isEmpty ? nil : effort, prompt: task)?.description
+                effort: effort.isEmpty ? nil : effort, prompt: task)
+            refused = refusal?.description
             starting = false
-            if refused == nil { dismiss() }
+            // One benchd may have started is on home, or will be: not a second press away.
+            if refusal == nil || refusal?.maybeSent == true { dismiss() }
         }
     }
 }

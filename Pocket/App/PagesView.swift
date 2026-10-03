@@ -114,6 +114,7 @@ struct PageView: View {
         Task {
             if let refused = await model.reply(text, to: page) {
                 said = refused.description
+                if refused.maybeSent, reply == text { reply = "" }
             } else {
                 said = "replied"
                 if reply == text { reply = "" }

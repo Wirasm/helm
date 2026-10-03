@@ -106,6 +106,13 @@ package final class BenchClient: ObservableObject {
         follower = nil
     }
 
+    /// Drop the follower's connection and connect again at once, rather than wait for a socket
+    /// a sleep or a network change killed to be noticed dead. Pocket calls it on coming back to
+    /// the foreground.
+    package func reconnect() {
+        follower?.reconnect()
+    }
+
     private func receive(_ event: BenchFollower.Event) {
         switch event {
         case .connected(let at):
@@ -156,8 +163,11 @@ package final class BenchClient: ObservableObject {
         let socket = try BenchSocket(endpoint: endpoint, timeout: timeout)
         defer { socket.close() }
         try socket.writeLine(JSONEncoder().encode(request))
-        guard let line = try socket.readLine() else {
-            throw BenchSocket.Failure(description: "benchd closed the connection without answering")
+        // Written whole, so benchd may have carried it out: from here a failure is unanswered.
+        let line: Data?
+        do { line = try socket.readLine() } catch { throw BenchUnanswered(description: "\(error)") }
+        guard let line else {
+            throw BenchUnanswered(description: "benchd closed the connection without answering")
         }
         return try JSONDecoder().decode(BenchResponse<Payload>.self, from: line)
     }
@@ -175,6 +185,12 @@ package final class BenchClient: ObservableObject {
         receive(.frame(at))
         return at
     }
+}
+
+/// A request benchd was sent whole and never answered: benchd may have carried it out, so a
+/// caller must not send it again as if it had not.
+package struct BenchUnanswered: Error, Equatable, CustomStringConvertible {
+    package let description: String
 }
 
 /// The newest document the follower has read, shared between its thread and the main actor.
@@ -247,6 +263,32 @@ final class BenchFollower: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// End the current connection, or the wait before the next attempt: `run` connects again at
+    /// once, and backs off from the shortest wait if that fails too.
+    func reconnect() {
+        lock.lock()
+        socket?.interrupt()
+        woken = true
+        // Under the lock, so a wait ending now cannot read `woken` before the signal it spends.
+        wake.signal()
+        lock.unlock()
+    }
+
+    private var woken = false
+    private let wake = DispatchSemaphore(value: 0)
+
+    /// Sleep `seconds` between attempts. false when `reconnect` cut it short.
+    private func wait(_ seconds: TimeInterval) -> Bool {
+        let slept = wake.wait(timeout: .now() + seconds) == .timedOut
+        lock.lock()
+        defer { lock.unlock() }
+        let cut = woken
+        woken = false
+        // A signal for a connection already ended, not a wait, is spent here, unread.
+        while wake.wait(timeout: .now()) == .success {}
+        return slept && !cut
+    }
+
     private var isStopped: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -259,8 +301,8 @@ final class BenchFollower: @unchecked Sendable {
             let why = follow { attempt = 0 }
             guard !isStopped else { return }
             emit(.disconnected(why))
-            Thread.sleep(forTimeInterval: Self.backoff[min(attempt, Self.backoff.count - 1)])
-            attempt += 1
+            // Cut short by `reconnect`: the next failure backs off from the start again.
+            attempt = wait(Self.backoff[min(attempt, Self.backoff.count - 1)]) ? attempt + 1 : 0
         }
     }
 

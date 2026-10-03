@@ -54,6 +54,7 @@ final class BenchdAgentScriptTests: XCTestCase {
             case "$1" in
             print) [ -e \(state)/hung ] && exit 124; [ -e \(state)/loaded ] || exit 113 ;;
             kickstart) echo $(( $(cat \(state)/pid) + 1 )) > \(state)/pid ;;
+            bootstrap) touch \(state)/up ;;
             esac
             """,
             // The scripts bound every step with `timeout`, which macOS does not ship (CI has none;
@@ -201,14 +202,15 @@ final class BenchdAgentScriptTests: XCTestCase {
                 atPath: scratch.appendingPathComponent("Library/LaunchAgents").path))
     }
 
-    private func plist(suite: String?) throws -> [String: Any] {
+    private func plist(suite: String?, listen: String? = nil) throws -> [String: Any] {
         let path = scratch.appendingPathComponent("agent.plist")
         var args = [
             "-c", "source \"$1\"; shift; write_plist \"$@\"", "test",
             scripts.appendingPathComponent("benchd-agent.sh").path,
             path.path, "com.wirasm.benchd.probe", "/opt/bench/benchd", "/tmp/benchd-probe.log",
         ]
-        if let suite { args.append(suite) }
+        if suite != nil || listen != nil { args.append(suite ?? "") }
+        if let listen { args.append(listen) }
         let run = try bash(args)
         XCTAssertEqual(run.status, 0, run.stderr)
         let data = try Data(contentsOf: path)
@@ -253,5 +255,170 @@ final class BenchdAgentScriptTests: XCTestCase {
         XCTAssertEqual(
             env["PATH"], "\(local):\(bin.path):/opt/homebrew/bin:/usr/bin:/bin",
             "~/.local/bin first, once, and the rest in the installer's order")
+    }
+
+    /// Pocket reaches benchd over TCP (#625): the agent's benchd listens where `--listen` said,
+    /// and only then.
+    func testThePlistCarriesTheListenAddressOnlyWhenGiven() throws {
+        let listening = try plist(suite: nil, listen: "100.101.102.103:4519")
+        let env = try XCTUnwrap(listening["EnvironmentVariables"] as? [String: String])
+        XCTAssertEqual(env["BENCH_LISTEN"], "100.101.102.103:4519")
+        XCTAssertNil(env["BENCH_SUITE"], "an empty suite is the live root's agent")
+
+        let suite = try plist(suite: "probe", listen: "127.0.0.1:52230")
+        let suiteEnv = try XCTUnwrap(suite["EnvironmentVariables"] as? [String: String])
+        XCTAssertEqual(suiteEnv["BENCH_SUITE"], "probe")
+        XCTAssertEqual(suiteEnv["BENCH_LISTEN"], "127.0.0.1:52230")
+
+        let quiet = try plist(suite: nil)
+        XCTAssertNil((quiet["EnvironmentVariables"] as? [String: String])?["BENCH_LISTEN"])
+    }
+
+    /// `resolve_listen <spec>` with `tailscale` answering `tailscale ip -4` as `answer` (nil: it
+    /// fails as a stopped Tailscale does), and `ifconfig` listing `interfaces` as this Mac's
+    /// addresses. It prints the address benchd binds, then the URL Pocket uses.
+    private func resolve(
+        _ spec: String, tailscale answer: String?, interfaces: [String] = [], socket: Bool = false
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let expected =
+            socket ? "--socket \(scratch.path)/.tailscale/tailscaled.sock ip -4" : "ip -4"
+        let body =
+            answer.map { "[ \"$*\" = \"\(expected)\" ] || exit 9\necho '\($0)'" }
+            ?? "echo 'Tailscale is stopped.' >&2\nexit 1"
+        let fakes = [
+            // macOS ships no `timeout`, and CI's runner has none: as `writeFakes` has it.
+            "timeout": #"shift; exec "$@""#,
+            "tailscale": body,
+            "ifconfig": interfaces.map { "echo '\tinet \($0) netmask 0xffffffff'" }
+                .joined(separator: "\n"),
+        ]
+        for (name, body) in fakes {
+            let path = bin.appendingPathComponent(name)
+            try "#!/bin/bash\n\(body)\n".write(to: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: path.path)
+        }
+        let sock = scratch.appendingPathComponent(".tailscale")
+        if socket {
+            try FileManager.default.createDirectory(at: sock, withIntermediateDirectories: true)
+            FileManager.default.createFile(
+                atPath: sock.appendingPathComponent("tailscaled.sock").path, contents: nil)
+        } else {
+            try? FileManager.default.removeItem(at: sock)
+        }
+        return try bash([
+            "-c", "source \"$1\"; resolve_listen \"$2\"", "test",
+            scripts.appendingPathComponent("benchd-agent.sh").path, spec,
+        ])
+    }
+
+    /// The port has no login, so the tailnet is the trust boundary: `tailscale` is the Mac's
+    /// tailnet address or a refusal, never 0.0.0.0 or a LAN address in its place. Where an
+    /// interface carries that address, benchd binds it.
+    func testListenTailscaleIsTheTailnetAddressOrARefusal() throws {
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let tailnet = try resolve(
+            "tailscale", tailscale: "100.101.102.103", interfaces: ["127.0.0.1", "100.101.102.103"])
+        XCTAssertEqual(tailnet.status, 0, tailnet.stderr)
+        XCTAssertEqual(tailnet.stdout, "100.101.102.103:4519 tcp://100.101.102.103:4519\n")
+        let port = try resolve(
+            "tailscale:5000", tailscale: "100.101.102.103", interfaces: ["100.101.102.103"])
+        XCTAssertEqual(
+            port.stdout, "100.101.102.103:5000 tcp://100.101.102.103:5000\n", port.stderr)
+
+        let stopped = try resolve("tailscale", tailscale: nil)
+        XCTAssertNotEqual(stopped.status, 0)
+        XCTAssertEqual(stopped.stdout, "")
+        XCTAssertTrue(stopped.stderr.contains("Tailscale"), stopped.stderr)
+        for lan in ["192.168.1.5", "10.0.0.7", "", "100.200.1.1"] {
+            let refused = try resolve("tailscale", tailscale: lan, interfaces: [lan])
+            XCTAssertNotEqual(refused.status, 0, "\(lan) was taken for a tailnet address")
+            XCTAssertEqual(refused.stdout, "", lan)
+        }
+    }
+
+    /// Tailscale in userspace mode (a tailscaled with `--tun=userspace-networking`, as on the
+    /// operator's Mac) gives no interface the tailnet address, and forwards tailnet connections to
+    /// 127.0.0.1 on the same port: benchd binds loopback, Pocket dials the tailnet address, and
+    /// the installer says that every loopback port is now the tailnet's. A user tailscaled's own
+    /// socket is the one asked.
+    func testListenTailscaleInUserspaceModeBindsLoopbackAndNamesTheTailnetURL() throws {
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let userspace = try resolve(
+            "tailscale", tailscale: "100.98.232.17", interfaces: ["127.0.0.1", "192.168.1.5"],
+            socket: true)
+        XCTAssertEqual(userspace.status, 0, userspace.stderr)
+        XCTAssertEqual(userspace.stdout, "127.0.0.1:4519 tcp://100.98.232.17:4519\n")
+        XCTAssertTrue(userspace.stderr.contains("userspace"), userspace.stderr)
+    }
+
+    /// An address the operator names is his, except one that listens on every interface.
+    func testAnExplicitListenIsTakenUnlessItIsEveryInterface() throws {
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let loopback = try resolve("127.0.0.1:52230", tailscale: nil)
+        XCTAssertEqual(loopback.stdout, "127.0.0.1:52230 tcp://127.0.0.1:52230\n", loopback.stderr)
+        let named = try resolve("rasmus-mac.tail1234.ts.net:4519", tailscale: nil)
+        XCTAssertEqual(named.status, 0, named.stderr)
+        let v6 = try resolve("[fd7a:115c:a1e0::1]:4519", tailscale: nil)
+        XCTAssertEqual(v6.status, 0, v6.stderr)
+        for spec in [
+            "0.0.0.0:4519", "[::]:4519", "[::0]:4519", "*:4519", ":4519", "0.0:4519",
+            "0x0:4519", "::1:4519", "100.101.102.103",
+            "no-port:",
+        ] {
+            let refused = try resolve(spec, tailscale: nil)
+            XCTAssertNotEqual(refused.status, 0, spec)
+            XCTAssertEqual(refused.stdout, "", spec)
+        }
+    }
+
+    /// A `--listen` that cannot be resolved stops the install before it builds or loads anything.
+    func testAnInstallWhoseListenCannotResolveTouchesNothing() throws {
+        try writeFakes()
+        let path = bin.appendingPathComponent("tailscale")
+        try "#!/bin/bash\necho 'Tailscale is stopped.' >&2\nexit 1\n".write(
+            to: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        let run = try bash([
+            scripts.appendingPathComponent("benchd-agent.sh").path, "install", "--listen",
+            "tailscale",
+        ])
+        XCTAssertNotEqual(run.status, 0)
+        XCTAssertTrue(run.stderr.contains("Tailscale"), run.stderr)
+        XCTAssertEqual(recorded(), "", "a refused install called launchctl, cargo or bench")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: scratch.appendingPathComponent("Library/LaunchAgents").path))
+    }
+
+    /// The whole install with `--listen tailscale` in userspace mode: the plist listens on
+    /// loopback, the installer prints the tailnet URL to type into Pocket, and installing again
+    /// without `--listen` says that it stops listening rather than doing it silently.
+    func testAnInstallListensWhereTailscaleForwardsAndSaysSoWhenItStops() throws {
+        try writeFakes()
+        _ = try resolve("tailscale", tailscale: "100.98.232.17", interfaces: ["127.0.0.1"])
+        let install = [
+            scripts.appendingPathComponent("benchd-agent.sh").path, "install", "--no-build",
+        ]
+        let cargo = ["CARGO_INSTALL_ROOT": scratch.path]
+        let first = try bash(install + ["--listen", "tailscale"], environment: cargo)
+        XCTAssertEqual(first.status, 0, first.stderr)
+        XCTAssertTrue(
+            first.stdout.contains("type tcp://100.98.232.17:4519 into Pocket"), first.stdout)
+        let plist = scratch.appendingPathComponent("Library/LaunchAgents/com.wirasm.benchd.plist")
+        func listen() throws -> String? {
+            let agent = try XCTUnwrap(
+                PropertyListSerialization.propertyList(
+                    from: Data(contentsOf: plist), format: nil) as? [String: Any])
+            return (agent["EnvironmentVariables"] as? [String: String])?["BENCH_LISTEN"]
+        }
+        XCTAssertEqual(try listen(), "127.0.0.1:4519")
+
+        let again = try bash(install, environment: cargo)
+        XCTAssertEqual(again.status, 0, again.stderr)
+        XCTAssertNil(try listen())
+        XCTAssertTrue(
+            again.stdout.contains("no longer listens on 127.0.0.1:4519"),
+            "a reinstall without --listen says Pocket loses benchd: \(again.stdout)")
     }
 }

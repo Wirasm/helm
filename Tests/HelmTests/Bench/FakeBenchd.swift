@@ -222,6 +222,11 @@ final class FakeBenchd: @unchecked Sendable {
             return
         }
         let reply = answer(request)
+        // An answer of nothing drops the connection unanswered, as a benchd dying mid-verb does.
+        guard !reply.isEmpty else {
+            close(fd)
+            return
+        }
         write(fd, try! JSONSerialization.data(withJSONObject: reply) + Data([0x0A]))
         if request["verb"] as? String == "browser/connect", reply["status"] as? String == "ok",
             let relay
