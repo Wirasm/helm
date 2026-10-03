@@ -165,7 +165,19 @@ impl DaemonGuard {
         DaemonGuard::start_with(home, None, cmd)
     }
 
-    fn start_with(home: &Path, suite: Option<&str>, mut cmd: std::process::Command) -> DaemonGuard {
+    fn start_with(home: &Path, suite: Option<&str>, cmd: std::process::Command) -> DaemonGuard {
+        DaemonGuard::try_start_with(home, suite, cmd)
+            .unwrap_or_else(|why| panic!("benchd did not start: {why}"))
+    }
+
+    /// Start benchd and wait for its socket; `Err` with how it ended when it exits first (a
+    /// refused start, such as a TCP address it could not bind), rather than waiting out the
+    /// deadline for a socket that will never come.
+    fn try_start_with(
+        home: &Path,
+        suite: Option<&str>,
+        mut cmd: std::process::Command,
+    ) -> Result<DaemonGuard, String> {
         // Every terminal pane runs a login shell (M5b): a known one, reading nothing of the
         // operator's configuration.
         cmd.env("BENCH_SESSION_TEST_AGENT", "1")
@@ -182,16 +194,19 @@ impl DaemonGuard {
         };
         let child = cmd.spawn().expect("spawn benchd");
         let socket = root.join("benchd.sock");
-        let guard = DaemonGuard { child, socket };
-        guard.await_socket();
-        guard
+        let mut guard = DaemonGuard { child, socket };
+        guard.await_socket()?;
+        Ok(guard)
     }
 
-    fn await_socket(&self) {
+    fn await_socket(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if UnixStream::connect(&self.socket).is_ok() {
-                return;
+                return Ok(());
+            }
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Err(format!("benchd exited ({status}) before it answered"));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -10138,11 +10153,34 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A daemon that also listens on TCP at `port`.
-fn tcp_daemon(home: &Path, port: u16) -> DaemonGuard {
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"));
-    DaemonGuard::start_with(home, None, cmd)
+/// A daemon that also listens on TCP, and the port it holds.
+fn tcp_daemon(home: &Path) -> (DaemonGuard, u16) {
+    tcp_daemon_from(home, None, |_| {})
+}
+
+/// A port `free_port` found is let go of before benchd binds it, and under the full gate another
+/// test can take it in between; benchd then refuses to start (`serve_tcp`). So each try starts
+/// benchd on a fresh port until one holds, beginning at `first` when given.
+fn tcp_daemon_from(
+    home: &Path,
+    first: Option<u16>,
+    configure: impl Fn(&mut std::process::Command),
+) -> (DaemonGuard, u16) {
+    let mut refused = Vec::new();
+    for port in first
+        .into_iter()
+        .chain(std::iter::repeat_with(free_port))
+        .take(10)
+    {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"));
+        configure(&mut cmd);
+        match DaemonGuard::try_start_with(home, None, cmd) {
+            Ok(guard) => return (guard, port),
+            Err(why) => refused.push(format!("{port}: {why}")),
+        }
+    }
+    panic!("benchd could not hold a TCP port: {refused:?}");
 }
 
 /// A TCP link between clients and benchd's listener that the test can cut, the way a Wi-Fi
@@ -10220,8 +10258,7 @@ impl Link {
 #[test]
 fn a_client_with_only_a_url_reaches_benchd_over_tcp() {
     let home = TestHome::claim("m5c-tcp");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let url = format!("tcp://127.0.0.1:{port}");
     // A root of its own with no socket in it: whatever answers came over TCP.
     let elsewhere = home.dir.join("elsewhere");
@@ -10287,14 +10324,13 @@ fn a_url_that_is_wrong_or_unanswered_is_named_and_a_listen_that_cannot_bind_stop
         malformed.stderr
     );
 
-    let port = free_port();
-    let url = format!("tcp://127.0.0.1:{port}");
+    let url = format!("tcp://127.0.0.1:{}", free_port());
     let unanswered = bench_as(&home.dir, &["status"], &[("BENCH_URL", &url)]);
     assert_eq!(unanswered.code, 2, "{}", unanswered.stderr);
     assert!(unanswered.stderr.contains(&url), "{}", unanswered.stderr);
 
     // Two benchds, one address: the second is told why, and does not start.
-    let _first = tcp_daemon(&home.dir, port);
+    let (_first, port) = tcp_daemon(&home.dir);
     let other = TestHome::claim("m5c-bad-2");
     let mut second = isolated(benchd_bin());
     second
@@ -10317,8 +10353,7 @@ fn a_pane_whose_link_drops_reconnects_and_shows_the_session_as_it_is() {
     // with its session still live (the M5c spike, attach.rs:240). Sleep, a Wi-Fi change and a
     // benchd restart all drop the link; only benchd saying the session ended may end the pane.
     let home = TestHome::claim("m5c-drop");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let link = Link::start(port);
     let run = bench(
         &home.dir,
@@ -10443,8 +10478,7 @@ fn decoded(answer: &serde_json::Value) -> Vec<u8> {
 /// A benchd on TCP and a canvas folder holding `plan.md` (`# Plan\n`), canonical.
 fn canvas_over_tcp(name: &str) -> (TestHome, u16, PathBuf, PathBuf, DaemonGuard) {
     let home = TestHome::claim(name);
-    let port = free_port();
-    let daemon = tcp_daemon(&home.dir, port);
+    let (daemon, port) = tcp_daemon(&home.dir);
     let dir = home.dir.join("canvas");
     fs::create_dir_all(dir.join("img")).unwrap();
     let dir = dir.canonicalize().unwrap();
@@ -11457,8 +11491,7 @@ fn browser_over_tcp(name: &str, debugger: u16) -> (TestHome, u16, DaemonGuard) {
         &home.dir,
         serde_json::json!({ "binary": fake, "args": [format!("--fake-port={debugger}")] }),
     );
-    let port = free_port();
-    let daemon = tcp_daemon(&home.dir, port);
+    let (daemon, port) = tcp_daemon(&home.dir);
     let started = bench(&home.dir, &["browser", "start"]);
     assert_eq!(started.code, 0, "{}", started.stderr);
     (home, port, daemon)
@@ -11605,11 +11638,10 @@ fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
 
 /// A TCP daemon whose PATH holds only the system's and Homebrew's folders: never the operator's
 /// `~/.bun/bin`, so the only `archon` it can find is a test's stub in its own `HOME`.
-fn tcp_daemon_with_system_path(home: &Path, port: u16) -> DaemonGuard {
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"))
-        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
-    DaemonGuard::start_with(home, None, cmd)
+fn tcp_daemon_with_system_path(home: &Path) -> (DaemonGuard, u16) {
+    tcp_daemon_from(home, None, |cmd| {
+        cmd.env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
+    })
 }
 
 fn command_run(port: u16, command: serde_json::Value, timeout_ms: u64) -> serde_json::Value {
@@ -11700,8 +11732,7 @@ fn repo_with_worktrees(home: &Path) -> PathBuf {
 #[test]
 fn command_run_over_tcp_answers_gits_own_status_and_output() {
     let home = TestHome::claim("m5c-git");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let app = repo_with_worktrees(&home.dir);
     let common = app.join(".git").display().to_string();
     let git = |args: &[&str]| {
@@ -11772,8 +11803,7 @@ fn command_run_over_tcp_answers_gits_own_status_and_output() {
 #[test]
 fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
     let home = TestHome::claim("m5c-archon");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let work = home.dir.join("work");
     fs::create_dir_all(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -11860,8 +11890,7 @@ fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
 #[test]
 fn path_exists_and_git_repositories_over_tcp_read_benchds_disk() {
     let home = TestHome::claim("m5c-repos");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let app = repo_with_worktrees(&home.dir);
     let feature = app.join(".worktrees/feature").display().to_string();
     let gone = app.join(".worktrees/gone").display().to_string();
@@ -11991,8 +12020,7 @@ fn note(port: u16, workspace: &Path) -> PathBuf {
 #[test]
 fn prp_note_lands_in_the_store_the_canonical_resolver_picks() {
     let home = TestHome::claim("m5c-prp-note");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, plain) = prp_folders(&home.dir);
     let prp_home = home.dir.join(".prp");
     let sub = main.join("sub");
@@ -12029,8 +12057,7 @@ fn prp_note_lands_in_the_store_the_canonical_resolver_picks() {
 #[test]
 fn prp_note_adopts_a_registration_and_refuses_what_it_cannot_key() {
     let home = TestHome::claim("m5c-prp-adopt");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, _) = prp_folders(&home.dir);
     let custom = home.dir.join(".prp/custom-name");
     fs::create_dir_all(&custom).unwrap();
@@ -12063,8 +12090,7 @@ fn prp_note_adopts_a_registration_and_refuses_what_it_cannot_key() {
 #[test]
 fn prp_stores_and_artifacts_list_benchds_home() {
     let home = TestHome::claim("m5c-prp-list");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, plain) = prp_folders(&home.dir);
     let prp = home.dir.join(".prp");
     let store = |key: &str, json: &str| {
@@ -12158,8 +12184,7 @@ fn prp_stores_and_artifacts_list_benchds_home() {
 #[test]
 fn path_resolve_expands_against_benchds_home() {
     let home = TestHome::claim("m5c-path");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     fs::create_dir_all(home.dir.join("proj/sub")).unwrap();
     fs::write(home.dir.join("proj/plan.md"), "x").unwrap();
     let resolve = |path: &str| tcp_verb(port, "path/resolve", serde_json::json!({ "path": path }));
@@ -12942,4 +12967,26 @@ fn focus_waiting_walks_asking_then_finished_then_mail() {
         visited,
         [finished_pane, mail_pane.clone(), asking_pane, mail_pane]
     );
+}
+
+/// The flake in `a_client_with_only_a_url_reaches_benchd_over_tcp`, with the race lost on purpose:
+/// `free_port` lets go of the port it found, and under the full gate another test can take it
+/// before benchd binds. benchd then rightly refuses to start (`serve_tcp`), so a helper that hands
+/// it a port it no longer holds must try another.
+#[test]
+fn a_tcp_daemon_whose_port_was_taken_starts_on_another() {
+    let home = TestHome::claim("m5c-taken");
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let held = taken.local_addr().unwrap().port();
+    let (_daemon, port) = tcp_daemon_from(&home.dir, Some(held), |_| {});
+    assert_ne!(
+        port, held,
+        "it moved on rather than waiting out its deadline"
+    );
+    let status = bench_as(
+        &home.dir,
+        &["status"],
+        &[("BENCH_URL", format!("tcp://127.0.0.1:{port}").as_str())],
+    );
+    assert_eq!(status.code, 0, "{}", status.stderr);
 }
