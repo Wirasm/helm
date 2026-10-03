@@ -107,7 +107,7 @@ process of the session each terminal pane in the document shows, or by the pane 
 report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
 sessions — the last only from `sessions/hosted.json`, benchd's record of what it and helm
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
-finished row. helm's drawer is the next step.
+finished row. helm draws the list in its Sessions drawer.
 
 **And the sensor (#358, first half of M2 finish).** `bench hook <claude|codex|pi>` is one
 command wired into an agent's own hooks. On every event it reports the agent's state over the

@@ -133,8 +133,8 @@ BUSY = (
 
 
 def settle(bench, handles, want, after_seq, wait):
-    """Wait until every agent's hooks, since `after_seq`, have said busy and last said `want`:
-    a turn that started and, for `idle`, ended."""
+    """Wait until every agent's reported activity (`agent/state`), since `after_seq`, has said busy
+    and last said `want`: a turn that started and, for `idle`, ended."""
     deadline = time.time() + wait
     while True:
         state, worked = {}, set()
