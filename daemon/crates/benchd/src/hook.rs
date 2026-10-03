@@ -253,7 +253,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
         if let Some(usage) = args.usage.take().filter(|u| u.harness == args.harness) {
             crate::usage::record(&mut c, usage);
         }
-        unplace_guest(&mut c, &mut args, &key).map_err(Refusal::Failed)?;
+        let guest = unplace_guest(&mut c, &mut args, &key).map_err(Refusal::Failed)?;
         if transition.is_none()
             && c.unknown_hook_events
                 .insert((args.harness.name(), args.event.clone()))
@@ -265,7 +265,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             .map_err(Refusal::Failed)?;
         }
         if transition == Some(Transition::Ended) {
-            ended(&mut c, &args, &key).map_err(Refusal::Failed)?;
+            ended(&mut c, &args, &key, guest).map_err(Refusal::Failed)?;
             return Ok(json!(HookReply::default()));
         }
         if args.harness == Harness::Codex && !served {
@@ -278,7 +278,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
                 .map(|handle| Agent::new(handle, channel, args.pid, recorded_pane(&c, &key)));
             c.agents.insert(key.clone(), agent);
         }
-        locate(&mut c, &args, &key).map_err(Refusal::Failed)?;
+        locate(&mut c, &args, &key, guest).map_err(Refusal::Failed)?;
         record_in_pane(&mut c, &args, &key).map_err(Refusal::Failed)?;
         let Some(Some(agent)) = c.agents.get_mut(&key) else {
             return Ok(json!(HookReply::default()));
@@ -330,9 +330,12 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
     Ok(json!(reply))
 }
 
-/// The session ended: benchd forgets it, and its pane no longer holds it.
-fn ended(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
-    forget_in_pane(c, args, key)?;
+/// The session ended: benchd forgets it, and its pane no longer holds it. A guest's pane is
+/// another agent's ([`unplace_guest`]).
+fn ended(c: &mut Core, args: &HookArgs, key: &SessionKey, guest: bool) -> Result<(), String> {
+    if !guest {
+        forget_in_pane(c, args, key)?;
+    }
     c.guests.remove(key);
     if let Some(Some(agent)) = c.agents.remove(key) {
         c.append(
@@ -433,11 +436,12 @@ fn hand_out(
 /// app) or declares a benchd session. A report with no terminal says nothing about where the
 /// session is: a detached child inherits `HELM_PANE` (#417), so it moves and drops nothing.
 /// Runs on every event, because a session resumed while this daemon holds it never reaches
-/// [`address`]; the terminal is probed only when the answer would change.
+/// [`address`]; the terminal is probed only when the answer would change. A guest's report says
+/// it is not in the pane, terminal or not ([`unplace_guest`]): it leaves the pane remembered for it.
 ///
 /// A change is logged as `mail/moved`, `to` null when it left helm. The record keeps the last
 /// pane it was in (the handle never changes), which seeds [`Agent::pane`] after a restart.
-fn locate(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String> {
+fn locate(c: &mut Core, args: &HookArgs, key: &SessionKey, guest: bool) -> Result<(), String> {
     let Some(Some(agent)) = c.agents.get(key) else {
         return Ok(());
     };
@@ -452,7 +456,7 @@ fn locate(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<(), String>
             .as_deref()
             .and_then(|p| PaneId::parse(p.trim()).ok())
     };
-    if now == agent.pane || !bench_sessions::process::has_terminal(args.pid) {
+    if now == agent.pane || !guest && !bench_sessions::process::has_terminal(args.pid) {
         return Ok(());
     }
     let (from, handle) = (agent.pane, agent.handle.clone());
@@ -678,12 +682,15 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
 /// that agent has, as `waiting` finds a session's agents), else the helm pane. An agent's children
 /// inherit both, so one it starts (a test suite's, a workflow's, a conversation it resumes) would
 /// otherwise take its handle, its pane's record and the pane's attention. Without a place, a new
-/// session claims no mailbox and an addressed one keeps its own, outside the pane. The holder's own
-/// process reporting a new conversation (`/clear`) is not a guest, and once its process is gone the
-/// next agent there claims the place. Logged once per guest session.
-fn unplace_guest(c: &mut Core, args: &mut HookArgs, key: &SessionKey) -> Result<(), String> {
+/// session claims no mailbox, and an addressed one keeps its own and leaves any pane remembered for
+/// it ([`locate`]). The holder's own process reporting a new conversation (`/clear`) is not a guest.
+/// Once the holder's process is gone, the next agent started there claims the place; a new session
+/// that was a guest keeps no mailbox for its life (`Core::agents` holds `None` for it), so a child
+/// that outlives its agent never takes the pane it was started in. Logged once per guest session.
+/// Answers whether this hook is a guest's.
+fn unplace_guest(c: &mut Core, args: &mut HookArgs, key: &SessionKey) -> Result<bool, String> {
     let Some((holder, agent)) = holder(c, args, key) else {
-        return Ok(());
+        return Ok(false);
     };
     let held = json!({ "harness": holder.harness.name(), "session": holder.id, "handle": agent.handle, "pid": agent.pid });
     let place = json!({ "pane": args.pane, "bench_session": args.bench_session });
@@ -695,7 +702,7 @@ fn unplace_guest(c: &mut Core, args: &mut HookArgs, key: &SessionKey) -> Result<
             json!({ "harness": args.harness.name(), "session": args.session, "pid": args.pid, "cwd": args.cwd, "event": args.event, "place": place, "holder": held }),
         )?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// The live agent of another session and process in the place `args` declares ([`unplace_guest`]).

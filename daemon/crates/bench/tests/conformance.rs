@@ -8602,6 +8602,11 @@ fn a_shell_pane_s_agent_keeps_the_pane_while_it_lives_and_the_next_one_claims_it
     };
     let who = || json_of(&bench(h, &["mail", "who", "--pane", &pane]))["session"].clone();
 
+    // An earlier conversation ran here and ended: the record remembers this pane for it.
+    let earlier = event("SessionStart", "c-earlier", child)["handle"].clone();
+    assert!(earlier.is_string());
+    event("SessionEnd", "c-earlier", child);
+
     event("SessionStart", "c-holder", holder);
     assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
     assert_eq!(
@@ -8611,6 +8616,22 @@ fn a_shell_pane_s_agent_keeps_the_pane_while_it_lives_and_the_next_one_claims_it
     event("SessionEnd", "c-test", child);
     assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
     assert_eq!(who(), "c-holder");
+
+    // The holder resumes that earlier conversation from a tool call (`claude -p --resume`): no
+    // terminal, and a pane remembered for it. It keeps its handle and leaves the pane alone.
+    let detached = Detached::start();
+    for e in ["SessionStart", "Stop"] {
+        assert_eq!(event(e, "c-earlier", detached.0.id())["handle"], earlier);
+        assert_eq!(pane_agent(h, &pane)["session"], "c-holder", "{e}");
+        assert_eq!(who(), "c-holder", "{e}");
+    }
+    event("PreToolUse", "c-holder", holder);
+    assert!(
+        events_about(h, "agent/guest", "c-holder").is_empty(),
+        "the holder is still the holder"
+    );
+    event("SessionEnd", "c-earlier", detached.0.id());
+    assert_eq!(pane_agent(h, &pane)["session"], "c-holder");
 
     // The holder quits; the next agent started there claims the pane as before.
     libc_kill(holder as i32);
