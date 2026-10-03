@@ -69,7 +69,11 @@ package struct ChatLog: Equatable, Sendable {
     /// A page whose transcript holds no more entries than the newest read means the file was
     /// rewritten under the cursor: what was read is dropped, and the next ask starts over.
     package mutating func merge(_ page: BenchSessionLog) {
-        if let newest, page.total <= newest { entries = [] }
+        if let newest, page.total <= newest {
+            entries = []
+        } else if page.entries.isEmpty {
+            return
+        }
         var byIndex = Dictionary(entries.map { ($0.index, $0) }, uniquingKeysWith: { a, _ in a })
         for entry in page.entries { byIndex[entry.index] = entry }
         entries = byIndex.values.sorted { $0.index < $1.index }

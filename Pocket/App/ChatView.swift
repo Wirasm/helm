@@ -27,7 +27,7 @@ struct ChatView: View {
             case .chat:
                 // A pane per chat: a switch leaves the last one's state, and any answer still on
                 // its way to it, behind.
-                ChatPane(chat: chat).id(chat).simultaneousGesture(swipe)
+                ChatPane(chat: chat, swipe: swipe).id(chat)
             case .screen:
                 if let target = row?.screen { ScreenPane(target: target) }
             }
@@ -71,20 +71,11 @@ struct ChatView: View {
         }
     }
 
-    /// Left for the next chat of this workspace, right for the previous. Not from the left edge,
-    /// which is the back swipe to the list.
-    private var swipe: some Gesture {
-        DragGesture(minimumDistance: 40).onEnded { drag in
-            let dx = drag.translation.width
-            guard drag.startLocation.x > 40, abs(dx) > 90,
-                abs(dx) > 2 * abs(drag.translation.height)
-            else { return }
-            let sections = PocketHome.sections(
-                workspaces: model.workspaces, sessions: model.sessions, query: "")
-            if let next = PocketHome.neighbor(of: chat, in: sections, step: dx < 0 ? 1 : -1) {
-                chat = next.id
-            }
-        }
+    /// The chat `step` places from this one in its workspace (1 the next, -1 the previous).
+    private func swipe(_ step: Int) {
+        let sections = PocketHome.sections(
+            workspaces: model.workspaces, sessions: model.sessions, query: "")
+        if let next = PocketHome.neighbor(of: chat, in: sections, step: step) { chat = next.id }
     }
 
 }
@@ -95,6 +86,8 @@ struct ChatPane: View {
     @EnvironmentObject private var model: PocketModel
     @EnvironmentObject private var memory: ChatMemory
     let chat: String
+    /// Moves to the chat a step away: a swipe on the messages, never on the field or the choices.
+    let swipe: (Int) -> Void
     @State private var log = ChatLog()
     @State private var prompt: PromptChoices?
     @State private var failure: String?
@@ -106,13 +99,25 @@ struct ChatPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let failure { Text(failure).font(Mono.small).foregroundStyle(Palette.asking) }
-            MessagesView(log: $log, chat: chat)
+            MessagesView(log: $log, chat: chat).simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
             }
             Composer(chat: chat, target: row?.screen)
         }
         .task { await follow() }
+    }
+
+    /// Left for the next chat of this workspace, right for the previous. Not from the left edge,
+    /// which is the back swipe to the list.
+    private var swiping: some Gesture {
+        DragGesture(minimumDistance: 40).onEnded { drag in
+            let dx = drag.translation.width
+            guard drag.startLocation.x > 40, abs(dx) > 90,
+                abs(dx) > 2 * abs(drag.translation.height)
+            else { return }
+            swipe(dx < 0 ? 1 : -1)
+        }
     }
 
     /// The last page, then every second and a half whatever came after it; and, while the agent
@@ -134,7 +139,7 @@ struct ChatPane: View {
         case let .success(next):
             failure = nil
             log.merge(next)
-            if let newest = log.newest { memory.read(chat, through: newest) }
+            if let newest = log.newest { memory.read(chat, through: newest, of: next.total) }
         case let .failure(why):
             failure = why.description
         }

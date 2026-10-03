@@ -23,9 +23,11 @@ final class ChatMemory: ObservableObject {
         defaults.set(drafts, forKey: "drafts")
     }
 
-    /// He has the chat open with entry `index` on screen: everything up to it is read.
-    func read(_ chat: String, through index: Int) {
-        guard index > readThrough[chat] ?? -1 else { return }
+    /// He has the chat open with entry `index` of `total` on screen: everything up to it is read.
+    /// A transcript now shorter than what he read was rewritten, and the mark starts over with it.
+    func read(_ chat: String, through index: Int, of total: Int) {
+        let read = readThrough[chat] ?? -1
+        guard index > read || total <= read, index != read else { return }
         readThrough[chat] = index
         defaults.set(readThrough, forKey: "readThrough")
     }

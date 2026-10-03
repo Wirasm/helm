@@ -59,6 +59,7 @@ struct RootView: View {
         // Back from the background or a sleep: the old socket may be dead without knowing it.
         .onChange(of: phase) { if phase == .active { model.resume() } }
         .task { await model.watchSessions() }
+        .task { await model.watchPreviews() }
     }
 
     private var header: some View {

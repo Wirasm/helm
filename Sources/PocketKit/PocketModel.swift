@@ -98,6 +98,14 @@ package final class PocketModel: ObservableObject {
     package func watchSessions(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
             await refreshSessions()
+            try? await Task.sleep(for: interval)
+        }
+    }
+
+    /// The chats' previews, on a loop of their own: a slow transcript never holds up the
+    /// sessions poll, which says who is asking.
+    package func watchPreviews(every interval: Duration = .seconds(2)) async {
+        while !Task.isCancelled {
             await refreshPreviews()
             try? await Task.sleep(for: interval)
         }
@@ -245,14 +253,14 @@ package final class PocketModel: ObservableObject {
     /// The last message of every running session whose row changed since it was last asked for,
     /// or that has not been asked for in `previewStanding`. A failed read leaves the old preview,
     /// and so does a page of tool lines only.
-    package func refreshPreviews(now: Date = Date()) async {
+    package func refreshPreviews() async {
         let running = sessions.values.joined().filter {
             if case .running = $0.state { true } else { false }
         }
         guard let asked = client else { return }
         for row in running {
             if let last = previewed[row.id], last.updatedAtMs == row.updatedAtMs,
-                now.timeIntervalSince(last.at) < Self.previewStanding
+                Date().timeIntervalSince(last.at) < Self.previewStanding
             {
                 continue
             }
@@ -260,7 +268,7 @@ package final class PocketModel: ObservableObject {
             let page = await log(row.id, page: .last, limit: 20)
             // A reconnect to another benchd while this was asked answers for the old one.
             guard client === asked else { return }
-            previewed[row.id] = (row.updatedAtMs, now)
+            previewed[row.id] = (row.updatedAtMs, Date())
             if case let .success(log) = page, let preview = ChatPreview(log) {
                 previews[row.id] = preview
             }
