@@ -21,8 +21,8 @@ impl Workspace {
     /// Resolve any path inside a workspace. Walks up to the nearest `.git`: a directory
     /// names the repo root; a file (a linked worktree) is followed through `gitdir` and
     /// `commondir` to the repo it belongs to. No `.git` at all is a workspace of one
-    /// directory. Paths stay lexical — symlinks are not resolved, because the cwds they are
-    /// compared with were not resolved either.
+    /// directory. The roots keep their lexical spelling, which is what rows report;
+    /// [`Workspace::root_of`] compares on disk only when a cwd's spelling matches none.
     pub fn resolve(path: &StandardPath) -> Workspace {
         let start = PathBuf::from(path.as_str());
         let mut dir: Option<&Path> = Some(&start);
@@ -176,7 +176,15 @@ mod tests {
     /// the root that is that folder on disk, as benchd's placement puts its pane (#645).
     #[test]
     fn a_cwd_spelled_another_way_is_in_the_root_that_is_its_folder() {
-        let dir = std::env::temp_dir().join(format!("bench-scope-{}", std::process::id()));
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("bench-scope-{}", std::process::id())));
+        let dir = &scratch.0;
         let repo = dir.join("App");
         fs::create_dir_all(repo.join("src")).unwrap();
         let repo = fs::canonicalize(&repo).unwrap();
@@ -194,6 +202,5 @@ mod tests {
             );
         }
         assert_eq!(ws.root_of(&dir.display().to_string()), None);
-        fs::remove_dir_all(&dir).unwrap();
     }
 }
