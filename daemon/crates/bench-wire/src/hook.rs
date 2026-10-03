@@ -496,7 +496,9 @@ pub fn codex_session_trust(hooks_list: &serde_json::Value) -> Option<String> {
 /// a declaration alone claimed a mailbox for every one of them (12,497 mailboxes, #417).
 /// What does not survive is the terminal: the pane's agent is on the pane's tty, while a
 /// session started from its tool call has none (measured on #427). The terminal alone is
-/// not enough either: every Claude session the operator opens in any terminal has one.
+/// not enough either: every Claude session the operator opens in any terminal has one. A
+/// child on a terminal of its own passes both, so benchd also reads a hook from a place another
+/// live agent holds as declaring none (#644, `unplace_guest` in benchd's `hook.rs`).
 pub fn claims_a_mailbox(declared: bool, has_terminal: bool) -> bool {
     declared && has_terminal
 }

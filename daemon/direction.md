@@ -115,7 +115,9 @@ socket (the `hook` verb), and the reply carries the agent's unread mail as point
 Claude and codex put in front of the model as hook context: a busy agent gets its mail at the
 next tool call, with nothing typed into a pty. The first event of a session helm or benchd
 declared (`HELM_PANE`, `BENCH_SESSION`) and that runs on a terminal claims its address, recorded
-in `sessions/hosted.json` so it survives a restart. A session resumed in another pane keeps its
+in `sessions/hosted.json` so it survives a restart. A place a live agent holds is its own while its
+process lives: an agent's children inherit the declaration, so a hook from another session and
+process there is a guest's, read as declaring no place (`agent/guest`, #644). A session resumed in another pane keeps its
 handle, and its record moves to the pane it reports from under the same rule (`mail/moved`); one
 resumed outside helm keeps its handle and mail, and its old pane stops answering for it. An
 idle agent is started through its own channel instead: benchd posts the notice to a Claude

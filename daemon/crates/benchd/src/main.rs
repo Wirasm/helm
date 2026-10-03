@@ -327,6 +327,9 @@ struct Core {
     asks: ask::Waiting,
     /// Hook event names this build does not know, already logged once.
     unknown_hook_events: HashSet<(&'static str, String)>,
+    /// Sessions whose hooks report from a place another agent holds (`hook::unplace_guest`),
+    /// already logged once; forgotten when the session ends.
+    guests: HashSet<bench_wire::SessionKey>,
     /// `events --follow` connections, each with its own bounded queue and writer thread.
     /// A frame is handed over here and written there, **never under this mutex**: a 16 KB
     /// frame is larger than a unix socket's send buffer, so one follower that stopped
@@ -606,6 +609,7 @@ fn boot(
         agents: HashMap::new(),
         screen_waits: HashMap::new(),
         unknown_hook_events: HashSet::new(),
+        guests: HashSet::new(),
         followers: Vec::new(),
         asks: ask::Waiting::default(),
         unflushed: Arc::new(AtomicBool::new(false)),
