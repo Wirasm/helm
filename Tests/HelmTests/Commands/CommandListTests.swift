@@ -70,6 +70,23 @@ final class CommandListTests: XCTestCase {
         XCTAssertNil(line("Show Tab 1", in: commands), "tabs are listed as the panes they are")
     }
 
+    /// ⌘⇧J has one name: an operator row that rebinds it with no menu title is titled by its
+    /// action, and reads as the menu item does.
+    func testRebindingTheWaitingKeyKeepsItsName() throws {
+        let table = try KeymapFile.parse(
+            """
+            unbind = ["cmd+shift+j"]
+
+            [[bind]]
+            key = "cmd+ctrl+j"
+            action = "focus-waiting"
+            """
+        ).overlay(on: KeyBindings.all)
+        XCTAssertEqual(
+            list(table).first { $0.run == .action(.verb(.focusWaiting)) }?.title,
+            "Go to Next Agent That Needs You")
+    }
+
     /// A key the operator's file adds is a line with no code change.
     func testAnOperatorKeyIsALine() throws {
         let table = try KeymapFile.parse(

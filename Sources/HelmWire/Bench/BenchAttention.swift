@@ -1,7 +1,7 @@
 import Foundation
 
-/// `bench_wire::Done` (M1, #357): an agent whose turn ended (Claude's and codex's `Stop`, pi's
-/// `agent_settled`) and that has not started another. Present whether or not anybody looked;
+/// `bench_wire::Done` (M1, #357): an agent whose turn ended (Claude's `Stop`, a codex thread's
+/// completed turn on benchd's app-server, pi's `agent_settled`) and that has not started another. Present whether or not anybody looked;
 /// `seen` says whether the operator did.
 package struct BenchDone: Decodable, Equatable, Sendable {
     /// When the turn ended.

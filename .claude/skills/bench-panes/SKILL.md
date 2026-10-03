@@ -67,11 +67,13 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
 - The brief is a **file**, and the file must outlive the spawn: the agent reads it as its first
   act, and `ps` shows the path, not the brief. Its role arrives in the brief; nothing else tells
   it where it stands.
-- Each agent runs unattended: claude with `--dangerously-skip-permissions`, codex with
-  `--dangerously-bypass-approvals-and-sandbox`, pi with `--approve`. `--model` and `--effort`
-  pick the model. `--arg <flag>` adds a flag after the posture; it never replaces it.
+- Each agent runs unattended: claude with `--dangerously-skip-permissions`, codex on a thread
+  benchd creates with full access and no approvals, pi with `--approve`. `--model` and `--effort`
+  pick the model; a codex's are set on its thread. `--arg <flag>` adds a flag after the posture;
+  it never replaces it. A codex's `--arg` reaches only its TUI, which draws the thread, so it
+  cannot change the posture, model or effort.
 - `--resume <session-id>` re-enters a claude, codex or pi conversation instead of starting one
-  (codex's id is its thread id, which its hook records). Without `--prompt-file` its first
+  (codex's id is its thread id, the spawn answer's `runtime_session`). Without `--prompt-file` its first
   message is benchd's resume notice, which tells it its last turn was interrupted and to carry
   on; `bench restore` sends the same. A `--prompt-file` replaces the notice.
 - `--fork <session-id>` starts a new claude, codex or pi conversation that begins as a copy of
@@ -85,12 +87,11 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   the operator asked.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
-- codex must already trust `--cwd`, or it stops at "Trust this folder?". As for a `codex` he
-  starts himself, a subfolder or linked worktree of a git repository he trusts counts (benchd
-  passes that trust to the spawn); any other trusted parent does not, and `--arg` cannot skip it.
-  `bench sessions` shows the stop as `waiting_for: "trust prompt"`. Trusting a folder is the
-  operator's call: ask him to run `cd <dir> && codex` once, or to choose "Trust and continue" in
-  the spawned pane.
+- codex is spawned only into a folder the operator trusts: its own entry in
+  `~/.codex/config.toml`, or that of the git repository it is a subfolder or linked worktree of
+  (any other trusted parent does not count). Anywhere else benchd refuses the spawn, no pane
+  appears, and the refusal names the fix. Trusting a folder is the operator's call: ask him to run
+  `cd <dir> && codex` once.
 - `bench status` shows which `claude`, `codex` and `pi` a spawn runs (`agents`: path, the file it
   links to, version). That is benchd's `PATH`, not yours, so it can differ from `codex --version`
   in your shell.
@@ -143,9 +144,6 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   opens on "Hooks need review"; nothing is saved. A `~/.codex/hooks.json` changed after the
   server started brings the dialog back until benchd restarts, and `bench sessions` reports it
   as `hook review`.
-- codex is spawned only into a folder the operator trusts (its own entry in
-  `~/.codex/config.toml`, or its git repository's). Anywhere else the spawn is refused with the
-  fix: run `cd <dir> && codex` once.
 - `/new` inside a codex pane benchd spawned starts a conversation benchd does not own: it runs
   in the wrong folder, gets no mailbox and is not restored. Spawn a new agent instead.
 
