@@ -355,8 +355,13 @@ final class BenchdAgentScriptTests: XCTestCase {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let loopback = try resolve("127.0.0.1:52230", tailscale: nil)
         XCTAssertEqual(loopback.stdout, "127.0.0.1:52230 tcp://127.0.0.1:52230\n", loopback.stderr)
+        let named = try resolve("rasmus-mac.tail1234.ts.net:4519", tailscale: nil)
+        XCTAssertEqual(named.status, 0, named.stderr)
+        let v6 = try resolve("[fd7a:115c:a1e0::1]:4519", tailscale: nil)
+        XCTAssertEqual(v6.status, 0, v6.stderr)
         for spec in [
-            "0.0.0.0:4519", "[::]:4519", "[::0]:4519", "*:4519", ":4519", "100.101.102.103",
+            "0.0.0.0:4519", "[::]:4519", "[::0]:4519", "*:4519", ":4519", "0.0:4519",
+            "0x0:4519", "::1:4519", "100.101.102.103",
             "no-port:",
         ] {
             let refused = try resolve(spec, tailscale: nil)

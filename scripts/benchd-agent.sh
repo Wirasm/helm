@@ -116,10 +116,12 @@ resolve_listen() {
   *:*)
     host="${spec%:*}"
     port="${spec##*:}"
-    # Every spelling of every interface: 0.0.0.0, ::, [::0], *, and none at all.
+    # A dotted IPv4 address, a bracketed IPv6 one or a hostname, and never all zeros: whatever
+    # else the resolver would read (0.0, 0x0, *, nothing) can mean every interface.
     local bare="${host#[}"
     bare="${bare%]}"
-    if [ -z "$bare" ] || [ "$bare" = "*" ] || [[ "$bare" =~ ^0+(\.0+){3}$ ]] || [[ "$bare" =~ ^[0:]+$ ]]; then
+    if ! [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$host" =~ ^\[[0-9A-Fa-f:.]+\]$ ||
+      "$host" =~ ^[A-Za-z][A-Za-z0-9.-]*$ ]] || [[ "$bare" =~ ^[0.:]+$ ]]; then
       echo "benchd-agent: --listen $spec listens on every interface, and the port has no login; name the tailnet address, or use --listen tailscale" >&2
       return 2
     fi

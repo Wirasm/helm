@@ -269,8 +269,9 @@ final class BenchFollower: @unchecked Sendable {
         lock.lock()
         socket?.interrupt()
         woken = true
-        lock.unlock()
+        // Under the lock, so a wait ending now cannot read `woken` before the signal it spends.
         wake.signal()
+        lock.unlock()
     }
 
     private var woken = false
