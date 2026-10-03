@@ -68,12 +68,14 @@ pub struct Env {
     pub remove: Vec<String>,
 }
 
-/// The foreground process group of the pty `master` belongs to, as the kernel has it.
+/// The foreground process group of the pty `master` belongs to, as the kernel has it. Once the
+/// child has exited macOS answers 0, no group, which `rustix::termios::tcgetpgrp` would turn
+/// into a zero `Pid` (it checks only on Linux), so the call is libc's.
 pub(crate) fn foreground(master: &File) -> Option<i32> {
-    rustix::termios::tcgetpgrp(master)
-        .ok()
-        .map(rustix::process::Pid::as_raw_nonzero)
-        .map(|pid| pid.get())
+    use std::os::fd::AsRawFd;
+    // SAFETY: tcgetpgrp reads the terminal state of an open descriptor and nothing else.
+    let group = unsafe { libc::tcgetpgrp(master.as_raw_fd()) };
+    (group > 0).then_some(group)
 }
 
 /// A process's short name: what `ps -o comm` shows.
@@ -274,6 +276,27 @@ mod tests {
             .find(|cols| cols.first() == Some(&pid.as_str()))
             .unwrap_or_else(|| panic!("no row for {pid} in {out:?}"));
         assert_eq!(row, vec![pid.as_str(); 3], "pid pgid tpgid");
+    }
+
+    /// Once the child has exited, macOS answers 0 for the pty's foreground group: no group, not
+    /// a pid. It reached a zero `Pid` (rustix checks only on Linux), which panics a debug benchd
+    /// in `sessions` and is undefined behaviour in a release one.
+    #[test]
+    fn a_pty_whose_child_has_exited_has_no_foreground_group() {
+        let (master, mut child) = spawn(
+            "/bin/sh",
+            &["-c".into(), "exit 0".into()],
+            "/tmp",
+            &Env::default(),
+            24,
+            80,
+        )
+        .unwrap();
+        let _ = child.wait();
+        for _ in 0..20 {
+            assert_ne!(foreground(&master), Some(0));
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
