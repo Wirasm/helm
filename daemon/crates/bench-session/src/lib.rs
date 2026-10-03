@@ -654,6 +654,15 @@ impl Session {
         Ok(())
     }
 
+    /// Put a line of benchd's own on the session's screen, as if the program had printed it:
+    /// it reaches the viewer and stays in the screen an attach redraws. The program never sees it.
+    /// A session whose engine has stopped has ended, and nobody sees its screen.
+    pub fn print(&self, line: &str) {
+        let _ = self
+            .engine
+            .send(engine::Msg::Output(format!("{line}\r\n").into_bytes()));
+    }
+
     /// Attach: resize to the viewer, redraw the session's screen in it, then hand live output to
     /// this stream. Replaces any previous attachment — the old stream is shut down, which its
     /// client sees as EOF. Returns the generation this attachment owns; the pump hands it back

@@ -23,6 +23,7 @@ struct RootView: View {
     enum Tab: String, CaseIterable { case home, agents, pages }
 
     @EnvironmentObject private var model: PocketModel
+    @Environment(\.scenePhase) private var phase
     @Binding var benchURL: String
     @State private var tab = Tab.home
     @State private var talking: String?
@@ -51,6 +52,8 @@ struct RootView: View {
             connecting = benchURL.isEmpty
         }
         .onChange(of: benchURL) { model.connect(benchURL) }
+        // Back from the background or a sleep: the old socket may be dead without knowing it.
+        .onChange(of: phase) { if phase == .active { model.resume() } }
         .task { await model.watchSessions() }
     }
 

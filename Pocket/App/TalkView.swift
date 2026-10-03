@@ -18,6 +18,10 @@ struct TalkView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // The connection, here too: the root's header is not on screen while talking.
+            if model.state != .connected {
+                Text(model.state.word).font(Mono.small).foregroundStyle(model.state.color)
+            }
             pills
             // Top-left as a terminal draws, at least the viewport's size so a short screen does
             // not float in the middle; a wider or taller one scrolls, showing its bottom first.
@@ -98,7 +102,8 @@ struct TalkView: View {
         .overlay(alignment: .top) { Palette.line.frame(height: 1) }
     }
 
-    /// The message stays in the box until benchd has taken it, so a refused one can be sent again.
+    /// The message stays in the box until benchd has taken it, or may have, so one that never
+    /// left can be sent again and one that did is not.
     /// One at a time: a second tap while the first is on its way would type it into the agent twice.
     private func sendMessage() {
         let sent = message
@@ -117,8 +122,11 @@ struct TalkView: View {
     ) {
         let target = target
         Task {
-            refused = await model.send(input, to: target)?.description
-            if refused == nil { delivered() }
+            let refusal = await model.send(input, to: target)
+            refused = refusal?.description
+            // A send benchd may have carried out counts as sent: the box is cleared, never
+            // offered a second time (it says to look at the screen instead).
+            if refusal == nil || refusal?.maybeSent == true { delivered() }
             answered()
         }
     }

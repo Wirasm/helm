@@ -281,9 +281,15 @@ launchd-proof:
     }
     trap cleanup EXIT
     [ -e "$ROOT" ] && { echo "launchd-proof: $ROOT already exists"; exit 1; }
-    write_plist "$PLIST" "$LABEL" "$DIR/target/debug/benchd" "$LOG" "$SUITE"
+    # The agent listens on loopback as `install --listen` has it listen for Pocket (#625).
+    PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    write_plist "$PLIST" "$LABEL" "$DIR/target/debug/benchd" "$LOG" "$SUITE" "127.0.0.1:$PORT"
     timeout 30 launchctl bootstrap "$DOMAIN" "$PLIST"
     await_bench "$BENCH" 20 || { echo "launchd-proof: benchd never came up"; cat "$LOG"; exit 1; }
+    tcp=$(env -u BENCH_SUITE BENCH_URL="tcp://127.0.0.1:$PORT" timeout 5 "$BENCH" status | plutil -extract pid raw -) ||
+        { echo "launchd-proof: FAILED — the agent's benchd does not answer on 127.0.0.1:$PORT"; exit 1; }
+    [ "$tcp" = "$(bench_pid "$BENCH")" ] || { echo "launchd-proof: FAILED — another benchd answers on $PORT"; exit 1; }
+    echo "launchd-proof: the agent's BENCH_LISTEN reached benchd: pid $tcp answers on 127.0.0.1:$PORT"
     first=$(bench_pid "$BENCH")
     [ "$(timeout 10 launchctl print "$DOMAIN/$LABEL" | awk '/^\tpid =/{print $3}')" = "$first" ] ||
         { echo "launchd-proof: the benchd answering is not launchd's"; exit 1; }

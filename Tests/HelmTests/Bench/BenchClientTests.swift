@@ -1,8 +1,8 @@
-import BenchKit
 import Foundation
 import HelmWire
 import XCTest
 
+@testable import BenchKit
 @testable import Helm
 
 /// The client against a benchd stand-in on a real unix socket (`FakeBenchd`): what goes out, what
@@ -203,6 +203,71 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual(asked, [1, 2], "the drawing after a reconnect asked benchd again")
     }
 
+    /// A request benchd read and never answered may have been carried out, so it fails as
+    /// unanswered; one that never reached benchd fails as anything else. A caller that would
+    /// retry has to tell the two apart (#625: Pocket never sends a message twice).
+    func testARequestBenchdTookButNeverAnsweredFailsAsUnanswered() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        server.answer = { _ in [:] }
+        let request = BenchRequest(
+            id: "r", verb: .paneSplit(direction: .down), by: .operatorGesture)
+        XCTAssertThrowsError(
+            try BenchClient.request(
+                request, at: .unix(path: server.path), answering: LayoutReport.self)
+        ) { error in
+            XCTAssertTrue(error is BenchUnanswered, "\(error)")
+        }
+        XCTAssertThrowsError(
+            try BenchClient.request(
+                request, at: .unix(path: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock"),
+                answering: LayoutReport.self)
+        ) { error in
+            XCTAssertFalse(error is BenchUnanswered, "nothing was sent: \(error)")
+        }
+    }
+
+    /// `reconnect` drops the follower's connection and connects again at once, as a phone
+    /// coming back from sleep wants rather than waiting on a socket the network change killed.
+    func testReconnectConnectsTheFollowerAgainAtOnce() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        let client = BenchClient(endpoint: .unix(path: server.path))
+        client.start()
+        defer { client.stop() }
+        XCTAssertTrue(Eventually.holds { client.connections == 1 })
+        client.reconnect()
+        XCTAssertTrue(
+            Eventually.holds(within: 2) { client.connections == 2 }, "\(client.connections)")
+        XCTAssertEqual(client.state, .connected)
+    }
+
+    /// `reconnect` also cuts a wait between attempts short: a phone back from a long sleep tries
+    /// at once, not after the capped backoff of up to four seconds.
+    func testReconnectCutsTheBackoffShort() throws {
+        let attempts = Attempts()
+        let follower = BenchFollower(
+            endpoint: .unix(path: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock"),
+            latest: LatestDocument()
+        ) { event in
+            if case .disconnected = event { attempts.add() }
+        }
+        follower.start()
+        defer { follower.stop() }
+        // 0.1 + 0.25 + 0.5 + 1 + 2: the next wait is the four-second cap.
+        XCTAssertTrue(Eventually.holds(within: 8) { attempts.count >= 6 })
+        let before = attempts.count
+        Thread.sleep(forTimeInterval: 0.2)
+        follower.reconnect()
+        XCTAssertTrue(
+            Eventually.holds(within: 1) { attempts.count > before },
+            "tried again at once, not after the backoff")
+    }
+
     /// No daemon at all: the state names the socket's failure, and a verb throws rather than
     /// hanging.
     func testNoDaemonIsDisconnectedAndAVerbFails() throws {
@@ -242,5 +307,21 @@ final class BenchClientTests: XCTestCase {
             model.verbFailure?.contains("no pane 1234 on the bench"), true,
             "\(model.verbFailure ?? "nil")")
         XCTAssertEqual(model.bench, before)
+    }
+}
+
+/// Disconnections a follower reported, counted from its own thread.
+private final class Attempts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+    func add() {
+        lock.lock()
+        value += 1
+        lock.unlock()
     }
 }

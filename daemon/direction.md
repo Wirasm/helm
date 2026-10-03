@@ -216,7 +216,14 @@ gone (the merge queue prunes a worktree after its merge) comes back as a worktre
 branch the harness last recorded, when git ignores that folder (`.worktrees/`) and its parent is
 still there; else a claude or codex starts in the repository root, and the notice
 says which; pi re-enters a conversation only where it ran, so its resume is refused instead. The
-sessions drawer resumes a finished row through `spawn --resume` for the same reason. benchd writes both: which agent is in a pane from that agent's own hook
+sessions drawer resumes a finished row through `spawn --resume` for the same reason. None of
+them re-enters a conversation a live process holds, since two processes on one conversation fork
+it (`restore::refusal`): a benchd session, an agent whose hook reported since benchd started, or
+a claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which is what catches one
+in another terminal after a restart. A registry row of a live process that cannot be read refuses
+too, saying so: it could be the holder. codex refuses a thread another process writes by itself; pi
+records no holder, so a pi outside benchd is seen only once its hook reports. `restore` gives that
+pane a shell that says why, `spawn --resume` and `bench resume` refuse. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 
@@ -240,7 +247,10 @@ is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<por
 `bench` and helm at it instead of `<root>/benchd.sock` (`bench_wire::Endpoint`, helm's
 `BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
 Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed
-in seconds. There is no auth: bind a tailnet address, never a public one. With `BENCH_URL` set
+in seconds. There is no auth: bind a tailnet address, never a public one.
+`scripts/benchd-agent.sh install --listen tailscale` writes it into the login agent: the Mac's
+tailnet address, or 127.0.0.1 where Tailscale runs in userspace mode and forwards the tailnet
+there, which makes every loopback port reachable from the tailnet (`Pocket/README.md`). With `BENCH_URL` set
 helm runs its own `bench` for a pane, since the one `status` names is on benchd's machine. And
 `bench attach --in-pane` no longer reads "no answer" as "the session ended": it says it cannot
 reach benchd and asks again with a capped backoff until benchd answers, then attaches and

@@ -399,10 +399,8 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
             let forked_from = {
                 let c = core.lock().unwrap();
                 // Two processes on one conversation fork it, as `restore` says too.
-                if restore::held(&c, id) {
-                    return Err(format!(
-                        "conversation {id} is already live in another session — attach to that one"
-                    ));
+                if let Some(why) = restore::refusal(&c, agent.name(), id) {
+                    return Err(why);
                 }
                 sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.clone())
             };

@@ -13,8 +13,8 @@
 //!   working in (`Surface::Terminal::cwd`), else the pane's workspace.
 //!
 //! A pane that already shows a live session is left alone, so a second run changes nothing; and a
-//! recorded conversation a live session already holds (resumed elsewhere) gets a shell instead of a
-//! second, forking resume.
+//! recorded conversation a live process already holds (resumed elsewhere, inside benchd or not)
+//! gets a shell instead of a second, forking resume ([`refusal`]).
 
 use crate::resume_dir::{self, Start};
 use crate::{Core, hook, sessions, shells, spawn};
@@ -42,7 +42,7 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
         Some(p) => Some(PaneId::parse(p.trim()).map_err(|why| format!("restore: {why}"))?),
         None => None,
     };
-    let Prepared { starts, mut codex } = prepare(core, only);
+    let mut prepared = prepare(core, only);
     let mut abandoned: Vec<SpawnSpec> = Vec::new();
     let mut c = core.lock().unwrap();
     let mut next = c.bench.document.clone();
@@ -52,7 +52,12 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     {
         drop(c);
         // The pane changed while its thread was being re-entered: that thread goes too.
-        for spec in codex.into_values().filter_map(Result::ok).map(|r| r.spec) {
+        for spec in prepared
+            .codex
+            .into_values()
+            .filter_map(Result::ok)
+            .map(|r| r.spec)
+        {
             crate::codex::abandon(core, &spec);
         }
         let c = core.lock().unwrap();
@@ -72,47 +77,17 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
             }
             .map(|s| (s, "shell", note))
         };
-        // A conversation a live session already holds is not resumed a second time: two
-        // processes on one conversation fork it. `just release-resume` resumes its caller's
-        // session in a pane of its own before it restores the rest.
-        let resumed = match agent {
-            Some(a) if held(&c, &a.session) => Err(Some(format!(
-                "conversation {} is already live in another session",
-                a.session
-            ))),
-            // Claude reports its id at start, before anything is said: a conversation nobody
-            // wrote in has no transcript, and `claude --resume` of it exits at once.
-            Some(a) if a.command == "claude" && !has_transcript(&a.session) => Err(Some(format!(
-                "claude conversation {} was never written in: nothing to resume",
-                a.session
-            ))),
-            Some(a) => match (codex.remove(&pane), starts.get(&pane)) {
-                (Some(prepared), _) => prepared
-                    .and_then(|r| {
-                        let spec = r.spec.clone();
-                        start(&mut c, pane, &a, r).inspect_err(|_| abandoned.push(spec))
-                    })
-                    .map_err(Some),
-                // A codex runs only on a thread `prepare` re-entered on benchd's server; one it
-                // did not prepare (held then, free now) waits for the next restore.
-                (None, Some(Ok(_))) if a.command == AgentKind::Codex.name() => Err(Some(format!(
-                    "codex conversation {} was held when this restore began",
-                    a.session
-                ))),
-                (None, Some(Ok(at))) => reserve(&mut c, &a, at)
-                    .and_then(|r| start(&mut c, pane, &a, r))
-                    .map_err(Some),
-                (None, Some(Err(why))) => Err(Some(why.clone())),
-                // A pane that ended while the lock was let go: the next restore takes it.
-                (None, None) => Err(Some("its session ended during this restore".to_string())),
-            },
-            None => Err(None),
-        };
+        let resumed = resume(&mut c, pane, agent, &mut prepared, &mut abandoned);
         let one = match resumed {
             Ok(session) => Some((session, "resumed", None)),
             Err(note) => shell(&mut c, note),
         };
         if let Some((session, how, note)) = one {
+            // The pane says why its agent did not come back, not only the answer to `restore`,
+            // which a release's log swallows.
+            if let Some(why) = &note {
+                session.print(&format!("bench restore: a shell, not the agent: {why}"));
+            }
             next.show_session(pane, &session.id);
             restored.push(Restored {
                 pane,
@@ -139,13 +114,65 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value, by: Option<Actor>) -> Resul
     drop(c);
     // A thread re-entered for a pane that did not get it (its session failed to start, or the
     // pane turned out held): its first turn is stopped, so nothing runs that no pane shows.
-    let unused = codex.into_values().filter_map(Result::ok).map(|r| r.spec);
+    let unused = prepared
+        .codex
+        .into_values()
+        .filter_map(Result::ok)
+        .map(|r| r.spec);
     for spec in abandoned.into_iter().chain(unused) {
         crate::codex::abandon(core, &spec);
     }
     match committed {
         crate::layout::Committed::Failed(why) => Err(why),
         _ => Ok(json!({ "restored": list })),
+    }
+}
+
+/// Resume `pane`'s recorded agent, or why not: `Err(None)` when it records none.
+fn resume(
+    c: &mut Core,
+    pane: PaneId,
+    agent: Option<ResumableAgent>,
+    prepared: &mut Prepared,
+    abandoned: &mut Vec<SpawnSpec>,
+) -> Result<Arc<Session>, Option<String>> {
+    // A conversation a live process already holds is not resumed a second time: two
+    // processes on one conversation fork it. `just release-resume` resumes its caller's
+    // session in a pane of its own before it restores the rest.
+    let refused = agent
+        .as_ref()
+        .and_then(|a| refusal(c, &a.command, &a.session));
+    match (agent, refused) {
+        (Some(_), Some(why)) => Err(Some(why)),
+        // Claude reports its id at start, before anything is said: a conversation nobody
+        // wrote in has no transcript, and `claude --resume` of it exits at once.
+        (Some(a), None) if a.command == "claude" && !has_transcript(&a.session) => {
+            Err(Some(format!(
+                "claude conversation {} was never written in: nothing to resume",
+                a.session
+            )))
+        }
+        (Some(a), None) => match (prepared.codex.remove(&pane), prepared.starts.get(&pane)) {
+            (Some(ready), _) => ready
+                .and_then(|r| {
+                    let spec = r.spec.clone();
+                    start(c, pane, &a, r).inspect_err(|_| abandoned.push(spec))
+                })
+                .map_err(Some),
+            // A codex runs only on a thread `prepare` re-entered on benchd's server; one it
+            // did not prepare (held then, free now) waits for the next restore.
+            (None, Some(Ok(_))) if a.command == AgentKind::Codex.name() => Err(Some(format!(
+                "codex conversation {} was held when this restore began",
+                a.session
+            ))),
+            (None, Some(Ok(at))) => reserve(c, &a, at)
+                .and_then(|r| start(c, pane, &a, r))
+                .map_err(Some),
+            (None, Some(Err(why))) => Err(Some(why.clone())),
+            // A pane that ended while the lock was let go: the next restore takes it.
+            (None, None) => Err(Some("its session ended during this restore".to_string())),
+        },
+        (None, _) => Err(None),
     }
 }
 
@@ -175,7 +202,10 @@ fn prepare(core: &Arc<Mutex<Core>>, only: Option<PaneId>) -> Prepared {
         let mut c = core.lock().unwrap();
         let codex: Vec<&(PaneId, ResumableAgent)> = agents
             .iter()
-            .filter(|(_, a)| a.command == AgentKind::Codex.name() && !held(&c, &a.session))
+            .filter(|(_, a)| {
+                a.command == AgentKind::Codex.name()
+                    && refusal(&c, &a.command, &a.session).is_none()
+            })
             .collect();
         codex
             .into_iter()
@@ -247,21 +277,56 @@ fn has_transcript(id: &str) -> bool {
         .any(|project| project.path().join(&file).is_file())
 }
 
-/// Whether a live session already holds conversation `runtime`: by the id it was started with,
-/// or by the id its hook recorded; or a live agent whose hook reported it, which is how a codex
-/// the operator started in a pane is seen.
-pub fn held(core: &Core, runtime: &str) -> bool {
+/// Why conversation `runtime`, run by `agent`, must not be resumed now: a live process holds it,
+/// and two processes on one conversation fork it; or benchd cannot tell whether one does. Every
+/// resume route asks this. A holder is a benchd session, by the id it was started with or the id
+/// its hook recorded; an agent whose hook reported it, which is how a codex the operator started
+/// in a pane is seen; or a claude benchd never started, by Claude's own registry. The registry is
+/// what catches a holder after a benchd restart: hooks are heard only from then on, and an idle
+/// claude in another terminal says nothing (2026-10-02). codex refuses a thread another process
+/// writes by itself ("already has an active writer", 0.160); pi records no holder.
+pub fn refusal(core: &Core, agent: &str, runtime: &str) -> Option<String> {
+    let held = |by: String| Some(format!("conversation {runtime} is already live in {by}"));
     let live = |id: &str| core.sessions.get(id).is_some_and(|s| s.is_live());
-    core.sessions
+    let session = core
+        .sessions
         .values()
-        .any(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
-        || core.session_records.hosted.iter().any(|h| {
-            h.id == runtime
-                && matches!(&h.via, bench_wire::HostedVia::Bench { session, .. } if live(session))
-        })
-        || crate::hook::hooked(core)
-            .iter()
-            .any(|h| h.session == runtime && bench_sessions::process::alive(h.pid, None))
+        .find(|s| s.is_live() && s.runtime_session.as_deref() == Some(runtime))
+        .map(|s| s.id.clone())
+        .or_else(|| {
+            core.session_records
+                .hosted
+                .iter()
+                .find_map(|h| match &h.via {
+                    bench_wire::HostedVia::Bench { session, .. }
+                        if h.id == runtime && live(session) =>
+                    {
+                        Some(session.clone())
+                    }
+                    _ => None,
+                })
+        });
+    if let Some(session) = session {
+        return held(format!("session {session}"));
+    }
+    let hooked = core
+        .agents
+        .iter()
+        .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
+        .find(|(key, a)| key.id == runtime && a.is_running());
+    if let Some((_, a)) = hooked {
+        return held(format!("process {}", a.pid));
+    }
+    if agent != AgentKind::Claude.name() {
+        return None;
+    }
+    match bench_sessions::claude::holder(&core.home, runtime) {
+        Ok(Some(pid)) => held(format!("process {pid}")),
+        Ok(None) => None,
+        Err(why) => Some(format!(
+            "cannot tell whether conversation {runtime} is live elsewhere: {why}"
+        )),
+    }
 }
 
 /// Where the pane's shell was last working, if that directory is still there.

@@ -47,9 +47,16 @@ pub struct Agent {
     /// The agent's process, as its last hook reported it: how the session list tells a live
     /// agent from one that was killed (a killed session reports no `SessionEnd`).
     pub pid: u32,
+    /// When `pid` started, read when the pid was reported, so a pid the kernel has since given
+    /// another process is not taken for this agent ([`Agent::is_running`]).
+    started_ms: Option<u64>,
     /// The helm pane it runs in now, as its last report from a terminal said: what `mail/who`
     /// answers. `None` outside helm, and in a benchd session. See [`locate`].
     pub pane: Option<PaneId>,
+}
+
+fn started_ms(pid: u32) -> Option<u64> {
+    bench_sessions::process::started_at_secs(pid).map(|s| s * 1000)
 }
 
 /// The harness's own way to start a turn, per agent.
@@ -80,6 +87,7 @@ impl Agent {
         Agent {
             channel,
             pid,
+            started_ms: started_ms(pid),
             pane,
             handle,
             activity: None,
@@ -88,6 +96,12 @@ impl Agent {
             push: Push::Ready,
             seen: Instant::now(),
         }
+    }
+
+    /// Its process is alive, and is the one its hook reported.
+    pub fn is_running(&self) -> bool {
+        self.started_ms
+            .is_some_and(|ms| bench_sessions::process::alive(self.pid, Some(ms)))
     }
 
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
@@ -100,8 +114,9 @@ impl Agent {
         self.seen = Instant::now();
         // A codex on benchd's server is its session's TUI, the pid it was registered with
         // ([`serve_codex`]); a hook's process is the shared server, which outlives every pane.
-        if !matches!(self.channel, Some(Channel::Codex)) {
+        if !matches!(self.channel, Some(Channel::Codex)) && self.pid != args.pid {
             self.pid = args.pid;
+            self.started_ms = started_ms(args.pid);
         }
         if let Some(socket) = &args.messaging_socket {
             self.channel = Some(Channel::ClaudeSocket(PathBuf::from(socket)));
