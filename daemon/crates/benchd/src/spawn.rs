@@ -8,7 +8,8 @@
 //! retires helm #253 (a spawn needed an awake display) and #324 (a shell prompt ate the launch
 //! line).
 //!
-//! The pane goes in the cwd's workspace, placed by the rules as an agent's terminal, and lands
+//! The pane goes in the workspace of the cwd's project (`project::workspace`, #645: isolation
+//! is in worktrees, not workspaces), placed by the rules as an agent's terminal, and lands
 //! in the background unless the request says the operator asked. The order keeps a refusal
 //! from leaving anything behind: the pane is placed on a copy first, so a focus refusal
 //! answers before any process starts; the session is spawned outside the lock; then the pane
@@ -16,7 +17,7 @@
 //! session it would have shown.
 
 use crate::layout::{self, Change, Committed};
-use crate::{Core, attention, claude_settings, hook, resume_dir, sessions};
+use crate::{Core, attention, claude_settings, hook, project, resume_dir, sessions};
 use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
@@ -420,7 +421,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     if !PathBuf::from(&cwd).is_dir() {
         return Err(refused_cwd(&cwd));
     }
-    let workspace = StandardPath::new(&cwd)?;
+    let workspace = project::workspace(core, &cwd)?;
     if agent == AgentKind::Codex {
         crate::codex_trust::may_run(&cwd)?;
     }
@@ -541,9 +542,9 @@ fn derived_name(plan: &Plan) -> PaneName {
     }
 }
 
-/// Put the pane showing session `id` on the cwd's bench, opening the workspace with it as its
-/// only pane when it is not open. With `Take` the workspace becomes the active one and the pane
-/// is focused.
+/// Put the pane showing session `id` on its project's bench, opening the workspace with it as
+/// its only pane when it is not open. With `Take` the workspace becomes the active one and the
+/// pane is focused.
 fn place(
     doc: &mut Document,
     rules: &Rules,

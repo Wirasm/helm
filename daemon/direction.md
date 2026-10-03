@@ -197,8 +197,18 @@ pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`,
 boundary: an agent's close of a terminal where something runs needs `force` (the refusal names the
 live session, or the job a shell is running), and so does its close of a workspace holding such a
 pane (#608), a chosen name needs `rename`, and an agent's pane opens in its own workspace. `spawn`
-now puts the agent in a pane: the document's terminal surface names the session
-(`term:<session>`), and helm shows it by running `bench attach` in that pane, which follows the
+now puts the agent in a pane, in its project's workspace: the operator's rule (#645) is that an
+agent spawns into existing workspaces, and isolation is in worktrees, not workspaces. So a cwd in a
+linked worktree or anywhere in a repository resolves to the repository's main checkout
+(`project.rs`, reading git's common dir as the Worktrees drawer does), the workspace open for that
+folder under any spelling (case, symlinks) is found, and one is opened only when the project has
+none. `pane/move` to another workspace takes even a workspace's last pane, removing the emptied
+workspace, so a stray one folds into its project's. `sessions/all` scopes a session's cwd by the
+same on-disk comparison when its spelling misses (`scope.rs`), so a workspace's list holds what
+its panes show.
+
+In the pane, the document's terminal surface names the session (`term:<session>`), and helm
+shows it by running `bench attach` in that pane, which follows the
 pane's size and ends when the session does. After the attach answer the viewer's side of the
 stream is framed (`bench_wire::attach`): keys and sizes in one ordered stream, sizes coalesced to
 one per 16 ms plus a trailing one, because each is a SIGWINCH and a redraw (M5b, #359). No session outlives its daemon, so boot
@@ -246,7 +256,8 @@ writes the file, since helm may be on another machine. The `bench-panes` skill i
 
 **A benchd by address (M5c, #459, first slice).** `BENCH_LISTEN=<host>:<port>` makes benchd
 listen on TCP beside its unix socket, and each connection goes to the same handler: the protocol
-is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<port>` points
+is bytes on a stream and reads no peer credentials. benchd uses the variable up at boot and passes
+it to no child, so a benchd an agent starts never tries the operator's address. `BENCH_URL=tcp://<host>:<port>` points
 `bench` and helm at it instead of `<root>/benchd.sock` (`bench_wire::Endpoint`, helm's
 `BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
 Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed

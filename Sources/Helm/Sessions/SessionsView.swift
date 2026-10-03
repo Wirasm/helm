@@ -1,9 +1,10 @@
 import HelmWire
 import SwiftUI
 
-/// The sessions list (#384): one line per session, the running ones first and then the newest,
-/// as benchd orders them. Keyboard first: ↑↓ move, Return opens, ⌫ dismisses a finished one.
-/// A click opens too.
+/// The sessions list (#384): one line per running session, as benchd orders them, then the
+/// finished ones behind a disclosure, the newest few (`SessionsModel.listed`). Keyboard first:
+/// ↑↓ move (the finished line is a stop), Return opens a row or opens and closes the finished
+/// line, ⌫ dismisses a finished one. A click opens too.
 struct SessionsView: View {
     @ObservedObject var model: SessionsModel
     let holdsKeyboard: Bool
@@ -36,7 +37,7 @@ struct SessionsView: View {
         .focused($focused)
         .onKeyPress(.upArrow) { move(-1) }
         .onKeyPress(.downArrow) { move(1) }
-        .onKeyPress(.return) { act { await model.open($0) } }
+        .onKeyPress(.return) { open() }
         .onKeyPress(.delete) { act { await model.dismiss($0) } }
         .onAppear { focused = holdsKeyboard }
         .onChange(of: holdsKeyboard) { focused = holdsKeyboard }
@@ -47,36 +48,96 @@ struct SessionsView: View {
         ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.rows) { row in
-                        SessionRowView(
-                            row: row, isSelected: row.id == model.selected,
-                            open: { Task { await model.open(row) } },
-                            dismiss: { Task { await model.dismiss(row) } }
+                    ForEach(model.running) { row in line(row) }
+                    if !model.finished.isEmpty {
+                        FinishedDisclosure(
+                            count: model.finished.count, isOpen: model.showsFinished,
+                            isSelected: model.onFinishedLine, toggle: model.toggleFinished
                         )
-                        .id(row.id)
+                        .id(Self.finishedLine)
+                    }
+                    if model.showsFinished {
+                        ForEach(model.finished.prefix(SessionsModel.finishedListed)) { row in
+                            line(row)
+                        }
+                        let older = model.finished.count - SessionsModel.finishedListed
+                        if older > 0 {
+                            Text("\(older) older not listed")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Color.textFaint)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                        }
                     }
                 }
             }
             .onChange(of: model.selected) { _, id in
                 if let id { scroller.scrollTo(id) }
             }
+            .onChange(of: model.onFinishedLine) { _, on in
+                if on { scroller.scrollTo(Self.finishedLine) }
+            }
         }
     }
 
+    /// The finished line's scroll id: no session's.
+    private static let finishedLine = "sessions-finished-line"
+
+    private func line(_ row: BenchSessionRow) -> some View {
+        SessionRowView(
+            row: row, isSelected: row.id == model.selected,
+            open: { Task { await model.open(row) } },
+            dismiss: { Task { await model.dismiss(row) } }
+        )
+        .id(row.id)
+    }
+
     private func move(_ step: Int) -> KeyPress.Result {
-        guard !model.rows.isEmpty else { return .ignored }
-        let current = model.rows.firstIndex { $0.id == model.selected } ?? -1
-        let next = min(max(current + step, 0), model.rows.count - 1)
-        model.selected = model.rows[next].id
-        return .handled
+        model.move(step) ? .handled : .ignored
+    }
+
+    /// Return: open the row, or open or close the finished line the keyboard is on.
+    private func open() -> KeyPress.Result {
+        if model.onFinishedLine {
+            model.toggleFinished()
+            return .handled
+        }
+        return act { await model.open($0) }
     }
 
     private func act(_ action: @escaping (BenchSessionRow) async -> Void) -> KeyPress.Result {
-        guard let row = model.rows.first(where: { $0.id == model.selected }) else {
+        guard let row = model.listed.first(where: { $0.id == model.selected }) else {
             return .ignored
         }
         Task { await action(row) }
         return .handled
+    }
+}
+
+/// The line that opens or closes this workspace's finished sessions.
+private struct FinishedDisclosure: View {
+    let count: Int
+    let isOpen: Bool
+    let isSelected: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                Text("finished \(count)")
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(Color.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(isSelected ? Color.selection : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.chrome)
+        .help(isOpen ? "Hide finished sessions" : "Show the newest finished sessions")
     }
 }
 

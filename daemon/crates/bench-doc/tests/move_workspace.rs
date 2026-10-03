@@ -190,21 +190,73 @@ fn a_pane_dropped_on_its_own_workspace_changes_nothing() {
     assert_eq!(doc, before);
 }
 
-#[test]
-fn a_workspaces_last_pane_cannot_leave_it() {
-    let mut doc = three();
-    let only = doc
-        .workspace(&path("/w/b"))
+fn only_pane(doc: &Document, at: &str) -> bench_doc::PaneId {
+    doc.workspace(&path(at))
         .unwrap()
         .bench
         .panes()
         .next()
         .unwrap()
-        .id;
+        .id
+}
+
+/// A workspace is never empty, so its last pane takes the workspace with it (#645): that is
+/// how a stray workspace folds into the one it belongs in.
+#[test]
+fn a_workspaces_last_pane_leaves_and_its_workspace_goes() {
+    let mut doc = three();
+    let only = only_pane(&doc, "/w/b");
+
+    assert!(
+        doc.move_pane_to_workspace(only, &path("/w/c"), Focus::Leave)
+            .unwrap()
+    );
+
+    assert_eq!(order(&doc), ["/w/a", "/w/c"]);
+    assert!(
+        doc.workspace(&path("/w/c"))
+            .unwrap()
+            .bench
+            .pane(only)
+            .is_some()
+    );
+    assert_eq!(
+        doc.active(),
+        Some(&path("/w/a")),
+        "a background workspace went"
+    );
+}
+
+/// With `Take` the operator follows the pane, out of the workspace that went.
+#[test]
+fn the_active_workspaces_last_pane_takes_the_operator_with_it() {
+    let mut doc = three();
+    let only = only_pane(&doc, "/w/a");
+
+    doc.move_pane_to_workspace(only, &path("/w/c"), Focus::Take)
+        .unwrap();
+
+    assert_eq!(order(&doc), ["/w/b", "/w/c"]);
+    assert_eq!(doc.active(), Some(&path("/w/c")));
+    assert_eq!(
+        doc.active_workspace()
+            .unwrap()
+            .bench
+            .focused_pane()
+            .map(|p| p.id),
+        Some(only)
+    );
+}
+
+/// Removing the workspace on screen moves the operator's focus, which an agent may not do unasked.
+#[test]
+fn an_agent_may_not_take_the_last_pane_of_the_active_workspace() {
+    let mut doc = three();
+    let only = only_pane(&doc, "/w/a");
     let before = doc.clone();
     assert_eq!(
-        doc.move_pane_to_workspace(only, &path("/w/a"), Focus::Take),
-        Err(Refusal::LastPane(only))
+        doc.move_pane_to_workspace(only, &path("/w/c"), Focus::Leave),
+        Err(Refusal::WouldMoveFocus)
     );
     assert_eq!(doc, before);
 }

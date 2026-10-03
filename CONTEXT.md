@@ -123,9 +123,11 @@ _Avoid_: panel, sidebar, rail (retired with #382), scratchpad, overlay
 
 **sessions drawer**:
 The drawer on the left (⌘⇧S) listing every agent session in the active workspace, as benchd's
-`sessions/all` answers it (#384): running first, then newest. A row opens with the one action
-benchd computed for it — show its pane, attach, resume or read its transcript — and a finished
-row can be dismissed. helm adds no rule of its own about which sessions belong. On top sits
+`sessions/all` answers it (#384): the running ones, then behind a "finished" disclosure the
+newest ten finished, opened per workspace. A row opens with the one action benchd computed for
+it — show its pane, attach, resume or read its transcript — and a finished row can be dismissed.
+helm adds no rule of its own about which sessions belong; benchd's answer, which agents read
+through `bench sessions --all`, stays whole. On top sits
 **needs you**: every agent asking the operator, finished and not seen, or with mail for him (#357),
 mine or all; a row goes to its pane.
 _Avoid_: agent list, sidebar, session browser
@@ -332,5 +334,6 @@ _Avoid_: kill, destroy, cleanup (cleanup is the Worktrees drawer's word)
 Git's word, unmodified. Agents create and discard worktrees to isolate their own work; the
 operator rarely opens one. A worktree opened as a workspace is a workspace of **equal
 standing** to its main checkout — helm models no parent above either, and no worktree level
-beneath a workspace.
+beneath a workspace. Only the operator opens one, though: an agent spawned in a worktree shows in
+its project's workspace, the main checkout's (#645). Isolation is in worktrees, not workspaces.
 _Avoid_: treating a worktree as a child of a workspace, or as what a workbench is bound to

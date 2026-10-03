@@ -60,8 +60,11 @@ OUT=$("$BENCH" spawn --agent "$AGENT" --cwd "$WORKTREE" --name "$HANDLE" --promp
 printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["handle"], d["pane"])'
 ```
 
-- `--agent` is `claude`, `codex` or `pi`. It runs in a pty benchd owns, in a pane of
-  `--cwd`'s workspace, in the background. It keeps running while the pane is hidden, the screen
+- `--agent` is `claude`, `codex` or `pi`. It runs in a pty benchd owns, in `--cwd`, in a pane of
+  the workspace of `--cwd`'s project, in the background. The project of a worktree, or of any
+  folder in a repository, is the repository's main checkout: isolation is in worktrees, not
+  workspaces, so a spawn never opens a workspace for a worktree (#645). It opens the project's
+  only when none is open, and finds an open one under any spelling of its folder. It keeps running while the pane is hidden, the screen
   is locked, or helm restarts. The answer has its `handle` (mail it with `bench mail send --to`),
   `session`, `pid` and `pane`.
 - The brief is a **file**, and the file must outlive the spawn: the agent reads it as its first
@@ -117,8 +120,9 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   - `--beside <slot> --side <left|right|up|down>`: a slot of its own above or below that slot,
     or a column left or right of its column. Against the pane's own slot, a tab becomes a pane.
   - `--workspace <path>`: into that workspace, as a tab of its focused slot. A workspace's last
-    pane cannot leave it, and a workspace already showing that file (or the browser) refuses it:
-    `bench show` the pane it names instead.
+    pane takes its workspace with it, which is how a stray workspace folds into its project's
+    (the active one's needs `--asked`). A workspace already showing that file (or the browser)
+    refuses it: `bench show` the pane it names instead.
 - `bench split <right|down>` opens a new column or row. A split still halves the column he is in;
   that is a layout change, not a focus change. Moving the pane that holds his keyboard needs
   `--asked`.
@@ -129,8 +133,8 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   spawned agent's session, or the command a shell is running (the refusal names it). The pane
   holding his keyboard also needs `--asked`, and a workspace's last pane is never closed. Closing
   a canvas destroys nothing: the file and his notes beside it stay.
-- `bench workspace close <path>` takes a workspace and every pane in it off the bench, such as the
-  workspace of a worktree you are done with. It answers to `bench close`'s rules for each pane: a
+- `bench workspace close <path>` takes a workspace and every pane in it off the bench, such as a
+  workspace an older benchd opened at a worktree. It answers to `bench close`'s rules for each pane: a
   pane where something runs needs `--force`, and the workspace he is in needs `--asked`. A
   workspace whose folder is gone still closes. It never touches the folder, its files or git.
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
