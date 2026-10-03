@@ -274,18 +274,35 @@ final class BenchdAgentScriptTests: XCTestCase {
     }
 
     /// `resolve_listen <spec>` with `tailscale` answering `tailscale ip -4` as `answer` (nil: it
-    /// fails as a stopped Tailscale does).
+    /// fails as a stopped Tailscale does), and `ifconfig` listing `interfaces` as this Mac's
+    /// addresses. It prints the address benchd binds, then the URL Pocket uses.
     private func resolve(
-        _ spec: String, tailscale answer: String?
-    ) throws -> (
-        status: Int32, stdout: String, stderr: String
-    ) {
+        _ spec: String, tailscale answer: String?, interfaces: [String] = [], socket: Bool = false
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let expected =
+            socket ? "--socket \(scratch.path)/.tailscale/tailscaled.sock ip -4" : "ip -4"
         let body =
-            answer.map { "[ \"$*\" = \"ip -4\" ] || exit 9\necho '\($0)'" }
+            answer.map { "[ \"$*\" = \"\(expected)\" ] || exit 9\necho '\($0)'" }
             ?? "echo 'Tailscale is stopped.' >&2\nexit 1"
-        let path = bin.appendingPathComponent("tailscale")
-        try "#!/bin/bash\n\(body)\n".write(to: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        let fakes = [
+            "tailscale": body,
+            "ifconfig": interfaces.map { "echo '\tinet \($0) netmask 0xffffffff'" }
+                .joined(separator: "\n"),
+        ]
+        for (name, body) in fakes {
+            let path = bin.appendingPathComponent(name)
+            try "#!/bin/bash\n\(body)\n".write(to: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: path.path)
+        }
+        let sock = scratch.appendingPathComponent(".tailscale")
+        if socket {
+            try FileManager.default.createDirectory(at: sock, withIntermediateDirectories: true)
+            FileManager.default.createFile(
+                atPath: sock.appendingPathComponent("tailscaled.sock").path, contents: nil)
+        } else {
+            try? FileManager.default.removeItem(at: sock)
+        }
         return try bash([
             "-c", "source \"$1\"; resolve_listen \"$2\"", "test",
             scripts.appendingPathComponent("benchd-agent.sh").path, spec,
@@ -293,31 +310,50 @@ final class BenchdAgentScriptTests: XCTestCase {
     }
 
     /// The port has no login, so the tailnet is the trust boundary: `tailscale` is the Mac's
-    /// tailnet address or a refusal, never 0.0.0.0 or a LAN address in its place.
+    /// tailnet address or a refusal, never 0.0.0.0 or a LAN address in its place. Where an
+    /// interface carries that address, benchd binds it.
     func testListenTailscaleIsTheTailnetAddressOrARefusal() throws {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let tailnet = try resolve("tailscale", tailscale: "100.101.102.103")
+        let tailnet = try resolve(
+            "tailscale", tailscale: "100.101.102.103", interfaces: ["127.0.0.1", "100.101.102.103"])
         XCTAssertEqual(tailnet.status, 0, tailnet.stderr)
-        XCTAssertEqual(tailnet.stdout, "100.101.102.103:4519\n")
-        let port = try resolve("tailscale:5000", tailscale: "100.101.102.103")
-        XCTAssertEqual(port.stdout, "100.101.102.103:5000\n", port.stderr)
+        XCTAssertEqual(tailnet.stdout, "100.101.102.103:4519 tcp://100.101.102.103:4519\n")
+        let port = try resolve(
+            "tailscale:5000", tailscale: "100.101.102.103", interfaces: ["100.101.102.103"])
+        XCTAssertEqual(
+            port.stdout, "100.101.102.103:5000 tcp://100.101.102.103:5000\n", port.stderr)
 
         let stopped = try resolve("tailscale", tailscale: nil)
         XCTAssertNotEqual(stopped.status, 0)
         XCTAssertEqual(stopped.stdout, "")
         XCTAssertTrue(stopped.stderr.contains("Tailscale"), stopped.stderr)
         for lan in ["192.168.1.5", "10.0.0.7", "", "100.200.1.1"] {
-            let refused = try resolve("tailscale", tailscale: lan)
+            let refused = try resolve("tailscale", tailscale: lan, interfaces: [lan])
             XCTAssertNotEqual(refused.status, 0, "\(lan) was taken for a tailnet address")
             XCTAssertEqual(refused.stdout, "", lan)
         }
+    }
+
+    /// Tailscale in userspace mode (a tailscaled with `--tun=userspace-networking`, as on the
+    /// operator's Mac) gives no interface the tailnet address, and forwards tailnet connections to
+    /// 127.0.0.1 on the same port: benchd binds loopback, Pocket dials the tailnet address, and
+    /// the installer says that every loopback port is now the tailnet's. A user tailscaled's own
+    /// socket is the one asked.
+    func testListenTailscaleInUserspaceModeBindsLoopbackAndNamesTheTailnetURL() throws {
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let userspace = try resolve(
+            "tailscale", tailscale: "100.98.232.17", interfaces: ["127.0.0.1", "192.168.1.5"],
+            socket: true)
+        XCTAssertEqual(userspace.status, 0, userspace.stderr)
+        XCTAssertEqual(userspace.stdout, "127.0.0.1:4519 tcp://100.98.232.17:4519\n")
+        XCTAssertTrue(userspace.stderr.contains("userspace"), userspace.stderr)
     }
 
     /// An address the operator names is his, except one that listens on every interface.
     func testAnExplicitListenIsTakenUnlessItIsEveryInterface() throws {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let loopback = try resolve("127.0.0.1:52230", tailscale: nil)
-        XCTAssertEqual(loopback.stdout, "127.0.0.1:52230\n", loopback.stderr)
+        XCTAssertEqual(loopback.stdout, "127.0.0.1:52230 tcp://127.0.0.1:52230\n", loopback.stderr)
         for spec in ["0.0.0.0:4519", "[::]:4519", "100.101.102.103", "no-port:"] {
             let refused = try resolve(spec, tailscale: nil)
             XCTAssertNotEqual(refused.status, 0, spec)

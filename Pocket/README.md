@@ -40,19 +40,26 @@ session (`just resume-all` brings the panes back).
    just benchd-install --listen tailscale
    ```
 
-   It asks Tailscale for the Mac's tailnet address (`tailscale ip -4`) and has the login agent's
-   benchd listen there on port 4519 (`--listen tailscale:<port>` for another). It stops,
+   It asks Tailscale for the Mac's tailnet address (`tailscale ip -4`, through
+   `~/.tailscale/tailscaled.sock` when tailscaled runs as your own agent) and has the login
+   agent's benchd listen on port 4519 (`--listen tailscale:<port>` for another). It stops,
    changing nothing, if Tailscale is not running; it never listens on every interface or a LAN
-   address instead. It prints the address it chose:
-   `benchd-agent: benchd will listen on 100.x.y.z:4519`.
+   address instead. It prints the URL Pocket dials:
+   `benchd-agent: type tcp://100.x.y.z:4519 into Pocket's connect sheet`.
+
+   **In userspace mode** (tailscaled run as your own agent with `--tun=userspace-networking`) no network
+   interface carries the tailnet address; tailscaled takes tailnet connections itself and hands
+   each to `127.0.0.1` on the same port. So benchd listens on `127.0.0.1:4519`, the installer says
+   so, and Pocket still dials the tailnet address. Know what that means: in this mode **every port
+   the Mac serves on 127.0.0.1 is reachable from your tailnet devices**, not only benchd's.
 3. **Pocket on the phone, from Xcode with your personal team.** `xcodegen generate --spec
    Pocket/project.yml`, open `Pocket/Pocket.xcodeproj`, pick your team under the Pocket target's
    Signing & Capabilities, connect the phone, choose it as the destination and run. The first
    time, the phone wants Developer Mode on (Settings › Privacy & Security) and your developer
    profile trusted (Settings › General › VPN & Device Management). If Xcode says the bundle ID is
    taken, change `com.wirasm.pocket` there to one of your own.
-4. **The URL.** Pocket opens on its connect sheet: type `tcp://100.x.y.z:4519`, the address step
-   2 printed. Pocket keeps that URL and nothing else; tap the state at the top right to change
+4. **The URL.** Pocket opens on its connect sheet: type the `tcp://100.x.y.z:4519` URL step 2
+   printed, the Mac's tailnet address in either mode. Pocket keeps that URL and nothing else; tap the state at the top right to change
    it. iOS may ask once for Local Network access.
 
 **A free personal team's install lasts seven days.** After that Pocket will not open: connect the
