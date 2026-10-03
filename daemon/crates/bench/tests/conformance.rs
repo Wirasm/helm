@@ -9726,6 +9726,11 @@ fn an_alternate_profile_is_neither_read_nor_passed_on() {
     // The operator's ruling (#491): benchd and its agents always use the default profile under
     // HOME. A transcript that exists only where CLAUDE_CONFIG_DIR points is not a transcript,
     // and no session benchd spawns inherits CLAUDE_CONFIG_DIR, CODEX_HOME or PI_CODING_AGENT_DIR.
+    // Since the second Claude login, benchd itself sets CLAUDE_CONFIG_DIR for a claude it starts
+    // on a dir listed in `accounts.toml` (`claude_starts_on_the_login_with_quota_to_spend`). That
+    // keeps the ruling's point: such a dir is links into `~/.claude` for everything but the
+    // login, so the agent still runs the default profile and writes where benchd reads. What
+    // this test pins is unchanged: a config dir benchd's own launcher inherited stops here.
     let home = TestHome::claim("m5b-claudecfg");
     let ws = workspace(&home.dir).display().to_string();
     let config = home.dir.join("elsewhere-claude");
@@ -9790,6 +9795,197 @@ fn an_alternate_profile_is_neither_read_nor_passed_on() {
             "{name} reached the spawned agent:\n{env}"
         );
     }
+}
+
+/// One spawn's line from [`account_recorder`]: its `CLAUDE_CONFIG_DIR` (`unset` when absent)
+/// and its arguments.
+fn account_runs(runs: &Path, n: usize) -> Vec<(String, String)> {
+    recorded_runs(runs, n)
+        .into_iter()
+        .map(|l| {
+            let (dir, args) = l.split_once('|').unwrap();
+            (dir.to_string(), args.to_string())
+        })
+        .collect()
+}
+
+/// A claude that writes which login it was started on and its arguments, then exits, so its
+/// conversation is free to resume at once.
+fn account_recorder(home: &Path) -> (String, PathBuf) {
+    let runs = home.join("runs");
+    let body = format!(
+        "printf '%s|%s\\n' \"${{CLAUDE_CONFIG_DIR-unset}}\" \"$*\" >> '{}'",
+        runs.display()
+    );
+    (body, runs)
+}
+
+/// A second Claude login under `home`, as `just claude-account add` makes one and the operator's
+/// login leaves it: its `projects` and `sessions` the default's, and an account in its
+/// `.claude.json`. Listed in the test root's `accounts.toml`.
+fn second_login(home: &Path) -> String {
+    let dir = home.join(".claude-b");
+    fs::create_dir_all(&dir).unwrap();
+    for shared in ["projects", "sessions"] {
+        fs::create_dir_all(home.join(".claude").join(shared)).unwrap();
+        std::os::unix::fs::symlink(home.join(".claude").join(shared), dir.join(shared)).unwrap();
+    }
+    fs::write(dir.join(".claude.json"), r#"{"oauthAccount": {}}"#).unwrap();
+    let dir = dir.display().to_string();
+    fs::create_dir_all(home.join(".bench")).unwrap();
+    fs::write(
+        home.join(".bench/accounts.toml"),
+        format!("[[claude]]\ndir = {dir:?}\n"),
+    )
+    .unwrap();
+    dir
+}
+
+/// Report one Claude login's figures as its statusline would: five hours at `five_hour`, a week
+/// at 40% resetting in four days.
+fn report_claude(socket: &Path, account: Option<&str>, five_hour: f64) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut usage = serde_json::json!({ "harness": "claude", "windows": [
+        { "minutes": 300, "used_percent": five_hour, "resets_at_ms": now + 3_600_000, "at_ms": now },
+        { "minutes": 10080, "used_percent": 40.0, "resets_at_ms": now + 4 * 86_400_000, "at_ms": now },
+    ] });
+    if let Some(account) = account {
+        usage["account"] = serde_json::json!(account);
+    }
+    let (resp, _) = raw_request(socket, "usage/report", usage);
+    assert_eq!(resp["status"], "ok", "{resp}");
+}
+
+/// A second Claude login: with no `accounts.toml` every claude starts as before, with no
+/// `CLAUDE_CONFIG_DIR`. With one listed, a new conversation goes to the login with more of its
+/// five hours left, and the conversation keeps its login when resumed or forked until that login
+/// is spent. Only the login changes: the model asked for is passed through as asked. The pure
+/// ranking (the week about to reset first) is `accounts.rs`'s unit tests.
+#[test]
+fn claude_starts_on_the_login_with_quota_to_spend() {
+    let home = TestHome::claim("accounts");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let (body, runs) = account_recorder(h);
+    let daemon = DaemonGuard::start_with_script(h, "claude", &body);
+    let spawn = |extra: &[&str]| {
+        let mut args = vec![
+            "spawn", "--agent", "claude", "--cwd", &ws, "--model", "claude-x",
+        ];
+        args.extend_from_slice(extra);
+        let run = bench(h, &args);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        let spawned = json_of(&run);
+        // The recorder exits at once; its conversation is free once benchd has seen it go.
+        wait_until("the agent to end", Duration::from_secs(10), || {
+            json_of(&bench(h, &["sessions"]))["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["session"] == spawned["session"] && s["live"] == false)
+        });
+        let account = spawned["account"].as_str().map(str::to_string);
+        (
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+            account,
+        )
+    };
+    assert_eq!(spawn(&[]).1, None, "a default spawn's reply is as it was");
+    let second = second_login(h);
+    report_claude(&daemon.socket, None, 80.0);
+    report_claude(&daemon.socket, Some(&second), 10.0);
+    let (on_second, account) = spawn(&[]);
+    assert_eq!(account.as_ref(), Some(&second), "the reply names the login");
+    report_claude(&daemon.socket, None, 5.0);
+    spawn(&["--resume", &on_second]);
+    spawn(&["--fork", &on_second]);
+    report_claude(&daemon.socket, Some(&second), 100.0);
+    spawn(&["--resume", &on_second]);
+    let lines = account_runs(&runs, 5);
+    let dirs: Vec<&str> = lines.iter().map(|(d, _)| d.as_str()).collect();
+    assert_eq!(
+        dirs,
+        ["unset", &second, &second, &second, "unset"],
+        "no file; the lower five hours; its resume and its fork stay; the second is spent"
+    );
+    for (_, args) in &lines {
+        assert!(
+            args.contains("--model claude-x"),
+            "the model as asked: {args}"
+        );
+    }
+    let hosted = fs::read_to_string(h.join(".bench/sessions/hosted.json")).unwrap();
+    let hosted: serde_json::Value = serde_json::from_str(&hosted).unwrap();
+    let entry = hosted["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == on_second.as_str())
+        .unwrap();
+    assert_eq!(
+        entry.get("account"),
+        None,
+        "the record follows it to the default, where it last ran: {entry}"
+    );
+
+    fs::write(
+        h.join(".bench/accounts.toml"),
+        "[[claude]]\ndir = \"relative\"\n",
+    )
+    .unwrap();
+    let refused = bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]);
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("accounts.toml"),
+        "{}",
+        refused.stderr
+    );
+}
+
+/// `restore` asks the same policy as `spawn --resume`: a conversation recorded on the second
+/// login, here by the hook of a claude started on it by hand, comes back on it. A restarted
+/// benchd holds no figures yet, so it is the record alone that decides.
+#[test]
+fn a_restored_claude_comes_back_on_the_login_it_ran_on() {
+    let home = TestHome::claim("accounts-restore");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let second = second_login(h);
+    let pane = {
+        let daemon = DaemonGuard::start(h, None);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, pid) = terminal_process(h, "holder");
+        // A claude the operator started by hand on the second login: its hook says so.
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({"harness": "claude", "event": "SessionStart", "session": "c-5b0a",
+                "cwd": ws, "pid": pid, "pane": pane, "account": second}),
+        );
+        pane
+    };
+    let projects = h.join(".claude/projects/ws");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("c-5b0a.jsonl"), "{}\n").unwrap();
+    let (body, runs) = account_recorder(h);
+    let _daemon = DaemonGuard::start_with_script(h, "claude", &body);
+    let restored = json_of(&bench(h, &["restore", &pane]));
+    assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
+    let (dir, args) = account_runs(&runs, 1).remove(0);
+    assert_eq!(dir, second, "{args}");
+    assert!(args.contains("--resume c-5b0a"), "{args}");
 }
 
 // ---------------------------------------------------------------------------

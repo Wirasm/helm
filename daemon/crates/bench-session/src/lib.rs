@@ -176,6 +176,10 @@ pub struct SpawnSpec {
     /// the session's thread there before the TUI starts, so the thread carries the posture,
     /// model, effort, cwd and environment, and the TUI only draws it.
     pub codex: Option<CodexAttach>,
+    /// claude: the login it starts on, as the config dir [`Session::spawn`] sets as
+    /// `CLAUDE_CONFIG_DIR` (benchd's `accounts` chooses it). `None` is the operator's default
+    /// login, the variable unset.
+    pub account: Option<bench_wire::ConfigDir>,
 }
 
 impl SpawnSpec {
@@ -527,8 +531,14 @@ impl Session {
         let (program, args) = argv(spec)?;
         // `env` is how the session learns its own address and root — what lets an
         // agent inside run `bench mail send` with no flags and land in the right mailroom
-        // (the same declare-don't-derive rule as helm's PaneEnvironment).
-        let (master, child) = pty::spawn(&program, &args, &spec.cwd, env, rows, cols)
+        // (the same declare-don't-derive rule as helm's PaneEnvironment). A claude on a second
+        // login also gets its config dir, from the spec, so what runs is what is recorded.
+        let mut env = env.clone();
+        if let Some(dir) = &spec.account {
+            env.set
+                .push(("CLAUDE_CONFIG_DIR".to_string(), dir.as_str().to_string()));
+        }
+        let (master, child) = pty::spawn(&program, &args, &spec.cwd, &env, rows, cols)
             .map_err(|e| format!("spawn {program} in {}: {e}", spec.cwd))?;
         let mut reader = master
             .try_clone()
@@ -760,6 +770,7 @@ mod tests {
             settings: None,
             extra_args: Vec::new(),
             codex: None,
+            account: None,
         }
     }
 

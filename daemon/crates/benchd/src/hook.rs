@@ -605,6 +605,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
                 },
                 recorded_at: now_rfc3339(),
                 forked_from,
+                account: spawned.spec.account.clone(),
                 attention: AttentionRecord {
                     spawner,
                     ..AttentionRecord::default()
@@ -667,6 +668,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
             via,
             recorded_at: now_rfc3339(),
             forked_from: None,
+            account: args.account.clone(),
             attention: AttentionRecord {
                 spawner,
                 ..AttentionRecord::default()

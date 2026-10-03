@@ -44,6 +44,7 @@ name = "bench-session"
 version = "0.0.4"
 dependencies = [
  "bench-vt",
+ "bench-wire",
  "libc",
  "rustix",
  "serde_json",

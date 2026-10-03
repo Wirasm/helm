@@ -95,7 +95,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
     };
     register(&mut c, &plan, &session, pane, &spawner)?;
     let data = |report: &bench_wire::LayoutReport| {
-        json!({
+        let mut data = json!({
             "session": session.id,
             "handle": session.handle,
             "pid": session.pid,
@@ -106,7 +106,12 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
             "workspace": plan.workspace,
             "focused_pane_before": report.focused_pane_before,
             "focused_pane_after": report.focused_pane_after,
-        })
+        });
+        // The Claude login it went to, when not the default: absent keeps a default reply as it was.
+        if let Some(account) = &session.spec.account {
+            data["account"] = json!(account);
+        }
+        data
     };
     let change = Change {
         verb: req.verb.clone(),
@@ -307,7 +312,8 @@ pub fn codex_thread(
 }
 
 /// What an agent benchd starts learns about itself: its session, its address and this root, so
-/// `bench mail send` inside it needs no flags and lands in the right mailroom.
+/// `bench mail send` inside it needs no flags and lands in the right mailroom. Its Claude login,
+/// when not the default, comes from its spec (`SpawnSpec::account`, set by [`crate::accounts`]).
 pub fn agent_env(root: &std::path::Path, id: &str, handle: &str) -> bench_session::Env {
     bench_session::Env {
         set: vec![
@@ -347,6 +353,7 @@ fn register(
             "forked_from": spec.conversation.forked_from(),
             "model": spec.model,
             "effort": spec.effort,
+            "account": spec.account,
             "pane": pane,
             "spawner": spawner,
         }),
@@ -425,6 +432,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
     if agent == AgentKind::Codex {
         crate::codex_trust::may_run(&cwd)?;
     }
+    let account = crate::accounts::for_spawn(&core.lock().unwrap(), agent, &conversation)?;
     let spec = SpawnSpec {
         agent,
         cwd,
@@ -436,6 +444,7 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         settings: None,
         extra_args: args.args,
         codex: None,
+        account,
     };
     // `argv` is the one spelling of what each runtime can start as, so it also judges: a spec a
     // runtime cannot run (a fork of the test agent, say) is refused here, before anything is

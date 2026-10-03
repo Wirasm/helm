@@ -146,6 +146,8 @@ pub(crate) fn spawn(
     // marker, and helm's pane. A session benchd spawns reports as itself (#358), never as
     // whatever started the daemon. And an alternate profile: every agent runs the operator's
     // default one under HOME (#491), so a config dir the launcher pointed elsewhere stops here.
+    // The one CLAUDE_CONFIG_DIR an agent gets is benchd's own choice of login, in `env.set`
+    // below: a second login's dir, which links to the default profile for all but the login.
     for inherited in [
         "CLAUDE_CODE_MESSAGING_SOCKET",
         "CLAUDE_CODE_MESSAGING_TOKEN",

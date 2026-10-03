@@ -202,6 +202,27 @@ as the figure's `account` (absent for the default `~/.claude`). It is memory onl
 restarted benchd shows nothing until the next turn reports. helm greys a figure older than 15
 minutes and drops a window whose reset time has passed.
 
+**And which Claude login an agent starts on.** The operator has two Claude subscriptions, and
+benchd picks which login each claude it starts runs on; it never picks the model or the effort,
+which pass through as the caller asked. The second login is a config dir listed in
+`<root>/accounts.toml` (`[[claude]] dir = "…"`, used exactly as written, since Claude names the
+login's keychain item after that string). That dir links into `~/.claude` for everything but the
+login and `.claude.json`, so the agent runs the operator's own profile, and its transcripts and
+live-session files land where benchd reads them: #491's point, every agent on the default
+profile, still holds, and benchd still strips any `CLAUDE_CONFIG_DIR` its launcher inherited. The
+one it sets is its own choice (`accounts.rs`), carried on the spawn spec: a new conversation goes
+to the login whose week resets within a day with room left in both windows, soonest first, else
+the one with more of its five hours left; a resume or a fork goes where its conversation last ran,
+which the hosted record keeps (`account`, from the spawn, or from the hook of a claude started on
+it by hand), so its prompt cache is warm, unless that login is spent. A login that has not
+reported counts as unused. The spawn's reply names a second login. With no file there is one
+login and nothing changes. A listed dir counts once it is logged in (its `.claude.json` names an
+account); before that, which is the state between `just claude-account add` and the operator's
+`/login`, it is left out. A file benchd cannot use (unreadable, an unknown key, a dir that is not
+there or does not link its `projects` and `sessions` to the default's) refuses the claude spawn
+naming it, never
+falls back silently.
+
 **And the wire front (M3, #355): `bench` is the agent's whole surface.** The CLI speaks the
 pane verbs — `open`, `split`, `show`, `focus`, `move`, `name`, `close <pane>`, `get pane` — and
 `workspace close <path>` as the socket's own layout verbs, carrying who asked (`HELM_PANE`,

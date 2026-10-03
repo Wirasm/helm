@@ -192,6 +192,7 @@ mod tests {
                 settings: None,
                 extra_args: Vec::new(),
                 codex: None,
+                account: None,
             };
             assert_eq!(argv(&spec).unwrap().0, kind.name());
         }

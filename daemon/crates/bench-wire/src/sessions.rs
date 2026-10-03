@@ -339,6 +339,11 @@ pub struct HostedSession {
     /// was spawned. Absent for everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<String>,
+    /// The Claude login it last ran on, as the config dir benchd set (benchd's `accounts`): a
+    /// resume goes back there, where its prompt cache is. Absent for the default login, for
+    /// other harnesses, and for a session benchd did not start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<crate::ConfigDir>,
     /// What attention needs to remember about it (M1, #357), kept beside the rest of the entry.
     #[serde(flatten)]
     pub attention: AttentionRecord,

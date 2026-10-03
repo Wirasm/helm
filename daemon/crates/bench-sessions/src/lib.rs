@@ -188,7 +188,8 @@ pub fn open_action(
             parent: parent.clone(),
         }),
         (Host::None, false) => {
-            // The resume flags have one spelling, the one `bench spawn --resume` uses.
+            // The resume flags have one spelling, the one `bench spawn --resume` uses. Not its
+            // login: that is environment, which `spawn --resume` chooses and this argv cannot.
             let agent = match harness {
                 Harness::Claude => AgentKind::Claude,
                 Harness::Codex => AgentKind::Codex,
@@ -205,6 +206,7 @@ pub fn open_action(
                 settings: None,
                 extra_args: Vec::new(),
                 codex: None,
+                account: None,
             })?;
             Ok(OpenAction::Resume {
                 argv: std::iter::once(program).chain(args).collect(),
@@ -396,6 +398,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
                 via: HostedVia::Pane { pane, handle: None },
                 recorded_at: inputs.now.to_string(),
                 forked_from: None,
+                account: None,
                 attention: Default::default(),
             });
         }
