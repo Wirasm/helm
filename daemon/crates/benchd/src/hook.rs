@@ -258,14 +258,8 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
             return Ok(json!(HookReply::default()));
         }
-        // A codex the operator runs himself, in a pane, on a thread a benchd session once held:
-        // benchd's entry for it is gone with that session, and his hooks address it afresh. Only
-        // his declare a pane; benchd's server runs hooks with no `HELM_PANE`.
-        if args.harness == Harness::Codex && !served && args.pane.is_some() {
-            let benchds = matches!(c.agents.get(&key), Some(Some(a)) if matches!(a.channel, Some(Channel::Codex)));
-            if benchds {
-                c.agents.remove(&key);
-            }
+        if args.harness == Harness::Codex && !served {
+            reclaim_codex(&mut c, &args, &key);
         }
         if !c.agents.contains_key(&key) {
             let channel = channel(&c, &args);
@@ -347,6 +341,17 @@ fn own_codex_thread(c: &Core, args: &mut HookArgs) -> bool {
     args.bench_session = Some(session.id.clone());
     args.pid = session.pid;
     true
+}
+
+/// A codex the operator runs himself, in a pane, on a thread a benchd session once held: benchd's
+/// entry for it is gone with that session, and his hooks address it afresh. Only his declare a
+/// pane; benchd's server runs hooks with no `HELM_PANE`.
+fn reclaim_codex(c: &mut Core, args: &HookArgs, key: &SessionKey) {
+    let benchds =
+        matches!(c.agents.get(key), Some(Some(a)) if matches!(a.channel, Some(Channel::Codex)));
+    if args.pane.is_some() && benchds {
+        c.agents.remove(key);
+    }
 }
 
 /// The channel an agent starts with. Claude's is the socket its hooks report, on any event.
