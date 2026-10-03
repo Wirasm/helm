@@ -5,6 +5,7 @@ import SwiftUI
 @main
 struct PocketApp: App {
     @StateObject private var model = PocketModel()
+    @StateObject private var memory = ChatMemory()
     /// The benchd Pocket follows, `tcp://<host>:<port>`: the one thing kept across launches.
     @AppStorage("benchURL") private var benchURL = ""
 
@@ -12,20 +13,23 @@ struct PocketApp: App {
         WindowGroup {
             RootView(benchURL: $benchURL)
                 .environmentObject(model)
+                .environmentObject(memory)
                 .preferredColorScheme(.dark)
+                // Links in a reply and the text cursor: the palette's, not the system blue.
+                .tint(Palette.finished)
         }
     }
 }
 
-/// home, agents and pages under one bar; a session's talk screen pushed over them, the start
-/// sheet from home's `+`.
+/// chats, agents and pages under one bar; a chat pushed over them (back swipe returns to the list
+/// where it was), the start sheet from the chats' `+`.
 struct RootView: View {
-    enum Tab: String, CaseIterable { case home, agents, pages }
+    enum Tab: String, CaseIterable { case chats, agents, pages }
 
     @EnvironmentObject private var model: PocketModel
     @Environment(\.scenePhase) private var phase
     @Binding var benchURL: String
-    @State private var tab = Tab.home
+    @State private var tab = Tab.chats
     @State private var talking: String?
     @State private var connecting = false
     @State private var starting = false
@@ -35,7 +39,7 @@ struct RootView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 switch tab {
-                case .home: HomeView { talking = $0 }
+                case .chats: ChatsView { talking = $0 }
                 case .agents: AgentsView { talking = $0 }
                 case .pages: PagesView()
                 }
@@ -43,7 +47,7 @@ struct RootView: View {
             }
             .background(Palette.background)
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(item: $talking) { TalkView(target: $0) }
+            .navigationDestination(item: $talking) { ChatView(chat: $0) }
         }
         .sheet(isPresented: $connecting) { ConnectView(url: $benchURL) }
         .sheet(isPresented: $starting) { StartView() }
@@ -60,7 +64,7 @@ struct RootView: View {
     private var header: some View {
         HStack {
             Text(tab.rawValue).font(Mono.title).foregroundStyle(Palette.text)
-            if tab == .home {
+            if tab == .chats {
                 Button("+") { starting = true }.font(Mono.title).foregroundStyle(Palette.finished)
             }
             Spacer()
