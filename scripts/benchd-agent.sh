@@ -7,7 +7,8 @@
 #
 # install builds bench and benchd into cargo's bin (as release-resume does), writes
 # ~/Library/LaunchAgents/com.wirasm.benchd.plist, stops a hand-started benchd if one answers,
-# loads the agent, and starts the shared browser once. After that benchd brings the browser back
+# loads the agent, brings back the panes a stopped benchd ended (`bench restore --all`), and
+# starts the shared browser once. After that benchd brings the browser back
 # by itself: it stays wanted until `bench browser stop` (daemon/direction.md).
 #
 # --listen tailscale also has benchd listen on TCP (BENCH_LISTEN), for Pocket on the operator's
@@ -230,7 +231,10 @@ agent_install() {
   write_plist "$plist" "$label" "$bin/benchd" "$logfile" "" "$listen" ||
     { echo "benchd-agent: could not write $plist" >&2; return 4; }
 
+  # A benchd stopped here ended every session it ran; its panes come back once the new one answers.
+  local restarted=0
   if agent_loaded "$label"; then
+    restarted=1
     echo "benchd-agent: reloading $label"
     timeout 30 launchctl bootout "$domain/$label" 2>/dev/null
     await_bench "$bin/bench" 20 down || { echo "benchd-agent: the old agent's benchd did not stop" >&2; return 4; }
@@ -238,6 +242,7 @@ agent_install() {
   # Anything still answering was started by hand. One daemon per root: it goes, and launchd's
   # benchd replaces it.
   if timeout 5 "$bin/bench" status >/dev/null 2>&1; then
+    restarted=1
     echo "benchd-agent: stopping the hand-started benchd (pid $(bench_pid "$bin/bench"))"
     timeout 20 "$bin/bench" stop >/dev/null
     await_bench "$bin/bench" 20 down || { echo "benchd-agent: the running benchd did not stop; nothing loaded" >&2; return 4; }
@@ -247,11 +252,28 @@ agent_install() {
   await_bench "$bin/bench" 20 || { echo "benchd-agent: benchd did not come up; see $logfile" >&2; return 4; }
   echo "benchd-agent: $label loaded, benchd pid $(bench_pid "$bin/bench"), log $logfile"
   [ -z "$url" ] || echo "benchd-agent: type $url into Pocket's connect sheet"
+  [ "$restarted" -eq 0 ] || restore_panes "$bin/bench"
 
   # Marks the browser wanted, so every later benchd brings it back without being asked.
   timeout 90 "$bin/bench" browser start >/dev/null ||
     { echo "benchd-agent: benchd is up but bench browser start failed" >&2; return 4; }
   echo "benchd-agent: shared browser running; it comes back with benchd until \`bench browser stop\`"
+}
+
+# Every pane whose session the restart ended gets one again (`bench restore --all`, what
+# `just resume-all` runs, as release-resume does): its recorded agent resumed, else a shell.
+# A restore that fails leaves benchd running and says how to finish by hand.
+restore_panes() {
+  local bench="$1" answer count i
+  if ! answer="$(timeout 120 "$bench" restore --all)"; then
+    echo "benchd-agent: benchd is up, but bench restore --all failed; run \`just resume-all\` to bring the panes back" >&2
+    return 0
+  fi
+  count="$(plutil -extract restored raw -o - - <<<"$answer" 2>/dev/null)" || count=0
+  echo "benchd-agent: restored $count panes"
+  for ((i = 0; i < count; i++)); do
+    echo "benchd-agent:   $(plutil -extract "restored.$i.pane" raw -o - - <<<"$answer"): $(plutil -extract "restored.$i.how" raw -o - - <<<"$answer")"
+  done
 }
 
 agent_uninstall() {

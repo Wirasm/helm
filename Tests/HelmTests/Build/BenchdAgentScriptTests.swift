@@ -55,6 +55,7 @@ final class BenchdAgentScriptTests: XCTestCase {
             print) [ -e \(state)/hung ] && exit 124; [ -e \(state)/loaded ] || exit 113 ;;
             kickstart) echo $(( $(cat \(state)/pid) + 1 )) > \(state)/pid ;;
             bootstrap) touch \(state)/up ;;
+            bootout) rm -f \(state)/up ;;
             esac
             """,
             // The scripts bound every step with `timeout`, which macOS does not ship (CI has none;
@@ -67,6 +68,7 @@ final class BenchdAgentScriptTests: XCTestCase {
             case "$1" in
             status) [ -e \(state)/up ] || exit 2; printf '{"pid": %s}\\n' "$(cat \(state)/pid)" ;;
             stop) rm -f \(state)/up ;;
+            restore) echo '{"restored": [{"pane": "p1", "session": "s1", "how": "resumed"}, {"pane": "p2", "session": "s2", "how": "shell"}]}' ;;
             esac
             """,
             "benchd": """
@@ -421,5 +423,37 @@ final class BenchdAgentScriptTests: XCTestCase {
 
         let both = try bash(install + ["--listen", "tailscale", "--no-listen"], environment: cargo)
         XCTAssertNotEqual(both.status, 0, "listen and do not listen at once is refused")
+    }
+
+    /// An install that stopped a running benchd ended every session in it, as a release does: it
+    /// brings the panes back (`bench restore --all`, what `just resume-all` runs) once the new
+    /// benchd answers, and says what each got. One that started the first benchd restores nothing.
+    func testAnInstallThatRestartedBenchdBringsThePanesBack() throws {
+        try writeFakes()
+        let install = [
+            scripts.appendingPathComponent("benchd-agent.sh").path, "install", "--no-build",
+        ]
+        let cargo = ["CARGO_INSTALL_ROOT": scratch.path]
+        let restarted = try bash(install, environment: cargo)
+        XCTAssertEqual(restarted.status, 0, restarted.stderr)
+        XCTAssertTrue(lines(recorded()).contains("bench restore --all"), recorded())
+        XCTAssertTrue(restarted.stdout.contains("restored 2 panes"), restarted.stdout)
+        XCTAssertTrue(restarted.stdout.contains("p1: resumed"), restarted.stdout)
+
+        // The agent is loaded now; reinstalling reloads it, which restarts benchd again.
+        FileManager.default.createFile(
+            atPath: scratch.appendingPathComponent("loaded").path, contents: nil)
+        try "".write(to: calls, atomically: true, encoding: .utf8)
+        let reloaded = try bash(install, environment: cargo)
+        XCTAssertEqual(reloaded.status, 0, reloaded.stderr)
+        XCTAssertTrue(lines(recorded()).contains("bench restore --all"), recorded())
+
+        // Nothing was running: nothing ended, nothing to restore.
+        try FileManager.default.removeItem(at: scratch.appendingPathComponent("loaded"))
+        try FileManager.default.removeItem(at: scratch.appendingPathComponent("up"))
+        try "".write(to: calls, atomically: true, encoding: .utf8)
+        let fresh = try bash(install, environment: cargo)
+        XCTAssertEqual(fresh.status, 0, fresh.stderr)
+        XCTAssertFalse(lines(recorded()).contains("bench restore --all"), recorded())
     }
 }
