@@ -72,17 +72,50 @@ package struct CanvasDataWrite: Equatable {
         case is NSNull: base = nil
         default: return .failure(.noBase)
         }
-        // `isValidJSONObject` first: `data(withJSONObject:)` traps rather than throwing on a value
-        // it cannot write (NaN, a scalar at the top).
-        guard let data = payload["data"], JSONSerialization.isValidJSONObject(data),
-            let encoded = try? JSONSerialization.data(
-                withJSONObject: data,
-                options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
-        else { return .failure(.notJSON) }
+        guard let data = payload["data"], let text = text(of: data) else {
+            return .failure(.notJSON)
+        }
         return .success(
-            CanvasDataWrite(
-                text: String(decoding: encoded, as: UTF8.self) + "\n", base: base,
-                notify: payload["notify"] as? Bool ?? true))
+            CanvasDataWrite(text: text, base: base, notify: payload["notify"] as? Bool ?? true))
+    }
+
+    /// A live file's JSON as every writer writes it, a page or Pocket: keys sorted, pretty, a
+    /// trailing newline. nil for a value JSON cannot hold (NaN, a scalar at the top), checked
+    /// first because `data(withJSONObject:)` traps rather than throwing on one.
+    package static func text(of value: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+            let encoded = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
+        else { return nil }
+        return String(decoding: encoded, as: UTF8.self) + "\n"
+    }
+}
+
+extension CanvasFiles {
+    /// A page's write of its live file at `path`, as helm's canvas and Pocket's page both carry
+    /// it: written over exactly the page's `base` (none: over nothing), and answered with what is
+    /// in the file now. A file that changed since is handed back byte for byte
+    /// (`CanvasText.decode`, a byte-order mark kept), so it is the page's next base; one that is
+    /// not UTF-8 text cannot be a base at all and is refused by name, never handed back with its
+    /// bytes replaced, which would conflict with every later write.
+    package func writeLive(
+        _ write: CanvasDataWrite, to path: String
+    )
+        -> Result<CanvasDataAnswer, CanvasFileFailure>
+    {
+        switch self.write(
+            write.text, to: path, expect: .unchanged(write.base ?? ""), notify: write.notify)
+        {
+        case .written: return .success(.written(write.text))
+        case let .changed(now):
+            guard let text = CanvasText.decode(now) else {
+                let name = (path as NSString).lastPathComponent
+                return .failure(CanvasFileFailure(reason: "\(name) changed, and is not UTF-8 text"))
+            }
+            return .success(.changed(text))
+        case let .failed(why): return .failure(CanvasFileFailure(reason: why))
+        }
     }
 }
 
