@@ -42,6 +42,16 @@ benchd-install *args:
 benchd-uninstall:
     @bash scripts/benchd-agent.sh uninstall
 
+# `add <dir>` links <dir> into ~/.claude for everything but the login, seeds its .claude.json from
+# ~/.claude.json (never oauthAccount), and lists it in benchd's accounts.toml; benchd starts agents
+# on it once you have logged it in. `seed <dir>` brings it up to date after you trust a new
+# top-level folder or add an MCP server, and reports an entry that stopped being a link. Both are
+# safe to run again; neither logs in. Options: scripts/claude-account.sh has the details.
+#
+# A second Claude login that differs from the default only in its login
+claude-account command dir:
+    @bash scripts/claude-account.sh "$@"
+
 # Keeps any worktree that is locked, dirty, fresh or has a process working in it, and says why.
 # `--dry-run` only lists.
 #

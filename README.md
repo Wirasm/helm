@@ -12,6 +12,26 @@ Status: **rebuilding.** The kild layer was removed — see `docs/direction.md` f
 this is going, and `docs/SPIKE.md` for the terminal lifecycle contract that everything
 else rests on.
 
+## A second Claude account
+
+benchd can start each new Claude agent on whichever of two Claude subscriptions has quota to
+spend (`daemon/direction.md`, "which Claude login"). The second login is its own config dir that
+links to `~/.claude` for everything but the login, so agents on it run your settings, hooks,
+skills, plugins and `CLAUDE.md`, and their conversations stay where `bench log`, resume and
+Pocket find them. Once:
+
+1. `just claude-account add ~/.claude-b`: links the dir, seeds its `.claude.json` (trust, MCP
+   servers, onboarding; never your login), and lists it in `~/.bench/accounts.toml`.
+2. `CLAUDE_CONFIG_DIR=/Users/<you>/.claude-b claude`, exactly the path `add` printed, then
+   `/login` with the second account and `/exit`. The login goes to its own keychain item; the
+   default one is untouched.
+3. In the same session, `/mcp` to sign in to any MCP server that uses OAuth, if agents on the
+   second account need it.
+
+After you trust a new top-level folder or add an MCP server in your default login, run
+`just claude-account seed ~/.claude-b` with no claude running on it. The status bar shows the
+second login's plan as `Claude .claude-b`.
+
 ## Running
 
 - `swift run helm` (or `make run`) — fast SPM iteration loop; no bundle, no signing.

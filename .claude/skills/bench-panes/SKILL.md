@@ -90,6 +90,10 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
   the operator asked.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
   the trust question before it starts.
+- With a second Claude login set up, benchd starts each `claude` on the login with quota to spend,
+  and a `--resume` or `--fork` on its conversation's login unless that one is spent. The answer's
+  `account` names a second login (absent: the default). Only the login changes: `--model` and
+  `--effort` run as you asked. Never pass `CLAUDE_CONFIG_DIR` through `--arg` or a prompt.
 - codex is spawned only into a folder the operator trusts: its own entry in
   `~/.codex/config.toml`, or that of the git repository it is a subfolder or linked worktree of
   (any other trusted parent does not count). Anywhere else benchd refuses the spawn, no pane

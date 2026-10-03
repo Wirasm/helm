@@ -48,7 +48,9 @@ the run file's Workstreams row. The short version, names verified 2026-10-03:
 | A model only pi reaches, or work on pi itself | `--agent pi --model <provider/id>` | |
 
 When Claude's plan window is near its limit, move the next deliveries to `gpt-6.1-sol` rather
-than queue them: `bench sessions` carries each harness's windows in `usage`. Model names change.
+than queue them: `bench sessions` carries each harness's windows in `usage`, a second Claude login
+apart from the default. benchd already spreads `claude` spawns over the two logins by quota, so
+"near its limit" means both. Model names change.
 Verify a name with the one-line check in the reference before spawning a fleet on it: codex
 starts with any name and fails at its first turn, inside the pane.
 
