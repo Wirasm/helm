@@ -16,7 +16,7 @@
 //! session it would have shown.
 
 use crate::layout::{self, Change, Committed};
-use crate::{Core, attention, claude_settings, hook, restore, resume_dir, sessions};
+use crate::{Core, attention, claude_settings, hook, resume_dir, sessions};
 use bench_doc::{
     Caller, Document, Focus, PaneId, PaneName, Refusal, ResumableAgent, Rules, StandardPath,
     Surface,
@@ -176,15 +176,15 @@ fn start(core: &Arc<Mutex<Core>>, plan: &Plan, id: &str, handle: &str) -> Outcom
 }
 
 /// What an agent's session `id` needs from this root to report to benchd and be woken by it:
-/// claude's settings (its hooks). Every route that starts an agent, `spawn`, `restore` and
-/// `resume`, goes through here, and a codex then through [`codex_thread`].
+/// claude's settings (its hooks). Every route that starts an agent, `spawn` and `restore`, goes
+/// through here, and a codex then through [`codex_thread`].
 ///
 /// It also gives a resumed conversation its first message when the caller sent none: the
 /// [`resume_notice`], so the agent starts a turn rather than sitting at its prompt after its
 /// last turn was cut off. A caller's own prompt (`bench spawn --resume --prompt-file`, what
-/// `just release-resume` sends) wins. `bench resume` drops the old spawn's prompt before it
-/// gets here, so the notice is the only thing a resume ever sends that the caller did not. `note`
-/// is what the notice adds about where the resume runs ([`resume_dir::Start`]).
+/// `just release-resume` sends) wins, so the notice is the only thing a resume ever sends that the
+/// caller did not. `note` is what the notice adds about where the resume runs
+/// ([`resume_dir::Start`]).
 pub fn wire(
     spec: &mut SpawnSpec,
     root: &std::path::Path,
@@ -224,8 +224,8 @@ fn resume_notice(at: &str, note: Option<&str>) -> String {
 /// cannot attach to a thread with no turn yet (codex 0.160.0), so a new codex sent no prompt is
 /// told to wait. `spec` comes back naming the thread and the server, which is all `argv` needs.
 ///
-/// It talks to the server, so it runs outside the core lock: `spawn` and `resume` call it after
-/// [`wire`], and `restore` calls it for each codex pane before it takes the lock.
+/// It talks to the server, so it runs outside the core lock: `spawn` calls it after [`wire`], and
+/// `restore` calls it for each codex pane before it takes the lock.
 pub fn codex_thread(
     core: &Arc<Mutex<Core>>,
     spec: &mut SpawnSpec,
@@ -351,7 +351,7 @@ fn register(
         }),
     )
     .map_err(|why| (Status::Error, why))?;
-    // Recorded at spawn only: `resume` re-enters the same runtime session id
+    // Recorded at spawn only: a resume re-enters the same runtime session id
     // (bench_session::argv), which this record already holds.
     sessions::record_spawn(core, session, spawner).map_err(|why| (Status::Error, why))?;
     // After the record: a codex whose first turn already ended is done, which the record holds.
@@ -396,22 +396,11 @@ fn judge(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Plan, String> {
         // A conversation is re-entered in the posture it was spawned in: a fork's is read-only
         // (#531), whoever resumes it and by whichever route.
         (Some(id), None) => {
-            let forked_from = {
-                let c = core.lock().unwrap();
-                // Two processes on one conversation fork it, as `restore` says too.
-                if let Some(why) = restore::refusal(&c, agent.name(), id) {
-                    return Err(why);
-                }
-                sessions::recorded(&c, agent.name(), id).and_then(|h| h.forked_from.clone())
-            };
             let id = conversation_id("--resume", id)?;
-            // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
-            let start = resume_dir::start(agent, &id, &args.cwd)?;
+            // Refused while it is live elsewhere; the folder it ran in may be gone since (#621).
+            let (start, posture) = resume_dir::plan(core, agent, &id, &args.cwd)?;
             (cwd, note) = (start.cwd, start.note);
-            (
-                Conversation::Resume(id),
-                Posture::resuming(forked_from.as_deref()),
-            )
+            (Conversation::Resume(id), posture)
         }
         // A fork answers questions about the original's work in the original's worktree, so it
         // runs read-only: the operator's ruling (#531). codex mints the fork's id when benchd

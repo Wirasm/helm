@@ -208,10 +208,11 @@ shell (`shells.rs`), with the environment helm's panes gave their shells and Gho
 integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
 the panes keep their records, and `restore` (`bench restore --all`, `just resume-all`) gives
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
-pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `spawn --resume` with
-no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
+pane's last directory. Every resume benchd starts (`restore`, and `spawn --resume` with no
+prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
 interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt.
-Each of them asks `resume_dir::start` where the conversation runs first (#621): a folder that is
+Both ask `resume_dir::plan` first. It refuses a conversation a live process holds (below) before
+it looks for the folder, so a refused resume brings back nothing; then (#621) a folder that is
 gone (the merge queue prunes a worktree after its merge) comes back as a worktree on the local
 branch the harness last recorded, when git ignores that folder (`.worktrees/`) and its parent is
 still there; else a claude or codex starts in the repository root, and the notice
@@ -223,7 +224,7 @@ a claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which 
 in another terminal after a restart. A registry row of a live process that cannot be read refuses
 too, saying so: it could be the holder. codex refuses a thread another process writes by itself; pi
 records no holder, so a pi outside benchd is seen only once its hook reports. `restore` gives that
-pane a shell that says why, `spawn --resume` and `bench resume` refuse. benchd writes both: which agent is in a pane from that agent's own hook
+pane a shell that says why, and `spawn --resume` refuses. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 
@@ -384,8 +385,8 @@ gate that runs the real binaries. M5a is the pty core: `spawn` puts a real inter
 agent (claude, codex, pi — the allowlist) into a daemon-owned pty with posture, model
 and effort flags spelled once in `bench-session`, prompt by file, runtime session id
 minted at spawn; `attach` is a dtach-grade raw relay with ring replay and Ctrl-\ detach;
-`close` is drain-then-die; `resume` re-enters an exited session where the runtime mints
-its id (claude, pi — codex refuses with the reason). Nothing helm does today is owned
+`close` is drain-then-die; `resume` re-entered an exited session where the runtime mints
+its id (retired 2026-10-03: `spawn --resume` and `restore <pane>` cover it). Nothing helm does today is owned
 here yet; mail is next, waking agents by pasting into ptys this daemon now owns.
 
 ## The spine
