@@ -3,8 +3,8 @@ import HelmWire
 import XCTest
 
 /// Attention on benchd's answers (M1, #357), against the daemon's own samples, which the daemon
-/// gate holds to `bench_wire::LiveSessions` and `SessionList`. helm draws none of it yet; this
-/// pins the decoder slice 2 draws from.
+/// gate holds to `bench_wire::LiveSessions` and `SessionList`: the decoder the status bar, the
+/// Sessions drawer and the workspace tabs draw from.
 final class BenchAttentionWireTests: XCTestCase {
     private func sample(_ name: String) throws -> [String: Any] {
         let url = URL(fileURLWithPath: #filePath)

@@ -165,7 +165,19 @@ impl DaemonGuard {
         DaemonGuard::start_with(home, None, cmd)
     }
 
-    fn start_with(home: &Path, suite: Option<&str>, mut cmd: std::process::Command) -> DaemonGuard {
+    fn start_with(home: &Path, suite: Option<&str>, cmd: std::process::Command) -> DaemonGuard {
+        DaemonGuard::try_start_with(home, suite, cmd)
+            .unwrap_or_else(|why| panic!("benchd did not start: {why}"))
+    }
+
+    /// Start benchd and wait for its socket; `Err` with how it ended when it exits first (a
+    /// refused start, such as a TCP address it could not bind), rather than waiting out the
+    /// deadline for a socket that will never come.
+    fn try_start_with(
+        home: &Path,
+        suite: Option<&str>,
+        mut cmd: std::process::Command,
+    ) -> Result<DaemonGuard, String> {
         // Every terminal pane runs a login shell (M5b): a known one, reading nothing of the
         // operator's configuration.
         cmd.env("BENCH_SESSION_TEST_AGENT", "1")
@@ -182,16 +194,19 @@ impl DaemonGuard {
         };
         let child = cmd.spawn().expect("spawn benchd");
         let socket = root.join("benchd.sock");
-        let guard = DaemonGuard { child, socket };
-        guard.await_socket();
-        guard
+        let mut guard = DaemonGuard { child, socket };
+        guard.await_socket()?;
+        Ok(guard)
     }
 
-    fn await_socket(&self) {
+    fn await_socket(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if UnixStream::connect(&self.socket).is_ok() {
-                return;
+                return Ok(());
+            }
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Err(format!("benchd exited ({status}) before it answered"));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -994,15 +1009,12 @@ fn an_exited_session_refuses_attach_and_the_exit_is_logged() {
         "attach to an exited session is a refusal: {}",
         attach.stderr
     );
+    // The test agent has nothing to resume — the refusal says why.
     assert!(
-        attach.stderr.contains("resume"),
-        "the refusal names the route: {}",
+        attach.stderr.contains("no conversation to resume"),
+        "the refusal says why: {}",
         attach.stderr
     );
-
-    // The test agent has nothing to resume — the refusal says why.
-    let resume = bench(&home.dir, &["resume", &sid]);
-    assert_eq!(resume.code, 3, "stderr: {}", resume.stderr);
 }
 
 #[test]
@@ -8191,48 +8203,6 @@ fn after_a_restart_restore_resumes_the_recorded_agent_and_gives_other_panes_a_sh
 }
 
 #[test]
-fn an_id_bench_resume_took_is_not_reused_after_a_restart() {
-    // `bench resume` takes its id from the same counter as a spawn but logs `session/resumed`;
-    // the next daemon must count those ids too.
-    let home = TestHome::claim("m5b-resumeid");
-    let ws = workspace(&home.dir).display().to_string();
-    let used = {
-        let daemon = DaemonGuard::start_with_fake_pi(&home.dir);
-        ok_data(layout(
-            &daemon.socket,
-            "workspace/open",
-            serde_json::json!({ "path": ws }),
-            operator(),
-            false,
-        ));
-        let spawned = json_of(&bench(&home.dir, &["spawn", "--agent", "pi", "--cwd", &ws]));
-        let sid = spawned["session"].as_str().unwrap().to_string();
-        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while session_row(&home.dir, &sid)["live"] != false {
-            assert!(
-                Instant::now() < deadline,
-                "the killed agent's session stayed live"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let resumed = bench(&home.dir, &["resume", &sid]);
-        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
-        let resumed = json_of(&resumed)["session"].as_str().unwrap().to_string();
-        vec![sid, resumed]
-    };
-    let _daemon = DaemonGuard::start_with_fake_pi(&home.dir);
-    let opened = bench(&home.dir, &["open", "terminal"]);
-    assert_eq!(opened.code, 0, "{}", opened.stderr);
-    let pane = json_of(&opened)["pane"].as_str().unwrap().to_string();
-    let id = pane_session(&home.dir, &pane).expect("a new terminal pane has a session");
-    assert!(
-        !used.contains(&id),
-        "{id} was used before the restart: {used:?}"
-    );
-}
-
-#[test]
 fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
     // `just release-resume` resumes its caller's conversation in a pane of its own, then restores
     // the rest: the caller's old pane must not resume it a second time, which would fork it.
@@ -8358,15 +8328,14 @@ fn restore_never_resumes_a_claude_conversation_a_process_outside_benchd_holds() 
 }
 
 #[test]
-fn no_resume_route_re_enters_a_claude_conversation_a_process_outside_benchd_holds() {
-    // `bench spawn --resume` (what the Sessions drawer sends) and `bench resume` refuse it as
-    // restore does, and take it once the holder is gone.
+fn spawn_resume_refuses_a_claude_conversation_a_process_outside_benchd_holds() {
+    // `bench spawn --resume` (what the Sessions drawer sends) refuses it as restore does, and
+    // takes it once the holder is gone.
     let home = TestHome::claim("outside-resume");
     let h = &home.dir;
     let ws = workspace(h).display().to_string();
     let _daemon = DaemonGuard::start_with_script(h, "claude", ARGV_CLAUDE);
     let spawned = json_of(&bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]));
-    let sid = spawned["session"].as_str().unwrap().to_string();
     let runtime = spawned["runtime_session"].as_str().unwrap().to_string();
     let pid = spawned["pid"].as_i64().unwrap() as i32;
     libc_kill(pid);
@@ -8375,30 +8344,84 @@ fn no_resume_route_re_enters_a_claude_conversation_a_process_outside_benchd_hold
     });
     let outside = Detached::start();
     claude_holds(h, outside.0.id(), &runtime);
+    let resume = || {
+        bench(
+            h,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &ws, "--resume", &runtime,
+            ],
+        )
+    };
 
-    let spawn = bench(
-        h,
-        &[
-            "spawn", "--agent", "claude", "--cwd", &ws, "--resume", &runtime,
-        ],
+    let refused = resume();
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(
+        refused.stderr.contains("already live"),
+        "{}",
+        refused.stderr
     );
-    assert_eq!(spawn.code, 3, "{}", spawn.stderr);
-    assert!(spawn.stderr.contains("already live"), "{}", spawn.stderr);
-    let resume = bench(h, &["resume", &sid]);
-    assert_eq!(resume.code, 3, "{}", resume.stderr);
-    assert!(resume.stderr.contains("already live"), "{}", resume.stderr);
 
     // A live process's row that cannot be read could be the holder: refused, and saying why.
     let row = h.join(format!(".claude/sessions/{}.json", outside.0.id()));
     fs::write(&row, "{\"pid\":").unwrap();
-    let resume = bench(h, &["resume", &sid]);
-    assert_eq!(resume.code, 3, "{}", resume.stderr);
-    assert!(resume.stderr.contains("cannot tell"), "{}", resume.stderr);
+    let refused = resume();
+    assert_eq!(refused.code, 3, "{}", refused.stderr);
+    assert!(refused.stderr.contains("cannot tell"), "{}", refused.stderr);
 
     // The row outlives its process: a stale row holds nothing, read or not.
     drop(outside);
-    let resume = bench(h, &["resume", &sid]);
-    assert_eq!(resume.code, 0, "{}", resume.stderr);
+    let resumed = resume();
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+}
+
+#[test]
+fn an_exited_sessions_attach_refusal_names_a_resume_that_works() {
+    // `bench resume` is retired: attaching to an exited session prints the `spawn --resume` that
+    // replaces it, and running exactly that brings the conversation back.
+    let home = TestHome::claim("exited-hint");
+    let h = &home.dir;
+    let ws = h.join("a dir with 'quotes'");
+    fs::create_dir_all(&ws).unwrap();
+    let ws = ws.display().to_string();
+    let _daemon = DaemonGuard::start_with_script(h, "claude", ARGV_CLAUDE);
+    let spawned = json_of(&bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]));
+    let sid = spawned["session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        session_row(h, &sid)["live"] == false
+    });
+
+    let attach = bench(h, &["attach", &sid]);
+    assert_eq!(attach.code, 3, "{}", attach.stderr);
+    let command = attach
+        .stderr
+        .split('`')
+        .nth(1)
+        .unwrap_or_else(|| panic!("names a command: {}", attach.stderr));
+    // The shell splits it as an operator pasting it would.
+    let words = isolated("sh")
+        .arg("-c")
+        .arg(format!(
+            "for w in {command}; do printf '%s\\0' \"$w\"; done"
+        ))
+        .output()
+        .unwrap();
+    let words: Vec<String> = String::from_utf8(words.stdout)
+        .unwrap()
+        .split('\0')
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(words[0], "bench", "{words:?}");
+    let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    let resumed = bench(h, &args);
+    assert_eq!(resumed.code, 0, "`{command}`: {}", resumed.stderr);
+    assert_eq!(
+        json_of(&resumed)["runtime_session"],
+        spawned["runtime_session"],
+        "the same conversation"
+    );
 }
 
 /// The agent recorded in a pane, from the document.
@@ -8957,14 +8980,8 @@ fn a_codex_conversation_is_resumed_by_spawn_and_again_by_resume_in_each_sessions
     wait_until("the session exits", Duration::from_secs(5), || {
         !libc_alive(pid)
     });
-    let mut resumed = bench(h, &["resume", &first]);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while resumed.stderr.contains("still live") && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-        resumed = bench(h, &["resume", &first]);
-    }
-    assert_eq!(resumed.code, 0, "stderr: {}", resumed.stderr);
-    let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
+    let resumed = codex_resume_once_free(h, &ws, thread);
+    let second = resumed["session"].as_str().unwrap().to_string();
     assert_ne!(second, first);
     assert_eq!(
         fake.asked("thread/unsubscribe", 1)[0]["threadId"],
@@ -8977,7 +8994,7 @@ fn a_codex_conversation_is_resumed_by_spawn_and_again_by_resume_in_each_sessions
         "params": {"threadId": thread, "status": {"type": "idle"}}}));
     let sent = json_of(&bench(
         h,
-        &["mail", "send", "--to", &first, "--body", "wake up"],
+        &["mail", "send", "--to", &second, "--body", "wake up"],
     ));
     assert_eq!(sent["wake"], "queued", "{sent}");
     wait_until(
@@ -8988,9 +9005,9 @@ fn a_codex_conversation_is_resumed_by_spawn_and_again_by_resume_in_each_sessions
 }
 
 #[test]
-fn a_codex_spawned_new_is_resumed_by_bench_resume() {
-    // Its thread is known from spawn (#466), so `bench resume` has an id to re-enter; before,
-    // codex named it only after the fact and the resume was refused.
+fn a_codex_spawned_new_is_resumed_by_the_thread_its_spawn_named() {
+    // Its thread is known from spawn (#466), so a resume has an id to re-enter; before, codex
+    // named it only after the fact.
     let home = TestHome::claim("cxresnew");
     let h = &home.dir;
     let ws = workspace(h);
@@ -9008,15 +9025,27 @@ fn a_codex_spawned_new_is_resumed_by_bench_resume() {
     wait_until("the session exits", Duration::from_secs(5), || {
         !libc_alive(pid)
     });
-    let mut resumed = bench(h, &["resume", &first]);
+    let resumed = codex_resume_once_free(h, &ws, &thread);
+    let second = resumed["session"].as_str().unwrap().to_string();
+    assert_ne!(second, first);
+    assert_codex_resumed(h, &fake, &runs, &second, &thread, "danger-full-access");
+}
+
+/// `bench spawn --resume <thread>` of a codex whose session was just killed: benchd may still
+/// count that session live for a moment, and refuses the resume while it does.
+fn codex_resume_once_free(home: &Path, ws: &Path, thread: &str) -> serde_json::Value {
+    let ws = ws.display().to_string();
+    let args = [
+        "spawn", "--agent", "codex", "--cwd", &ws, "--resume", thread,
+    ];
+    let mut resumed = bench(home, &args);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while resumed.stderr.contains("still live") && Instant::now() < deadline {
+    while resumed.stderr.contains("already live") && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
-        resumed = bench(h, &["resume", &first]);
+        resumed = bench(home, &args);
     }
     assert_eq!(resumed.code, 0, "stderr: {}", resumed.stderr);
-    let second = json_of(&resumed)["session"].as_str().unwrap().to_string();
-    assert_codex_resumed(h, &fake, &runs, &second, &thread, "danger-full-access");
+    json_of(&resumed)
 }
 
 #[test]
@@ -9070,9 +9099,10 @@ fn recording_pi(home: &Path) -> (String, PathBuf) {
 }
 
 #[test]
-fn bench_resume_and_restore_send_a_fresh_notice_and_never_the_spawn_prompt() {
+fn restore_sends_a_fresh_notice_and_never_the_spawn_prompt() {
     // A resumed agent whose last turn was cut off sits at its prompt until something starts a
-    // turn, so benchd's resume routes start one with the notice.
+    // turn, so benchd's resume routes start one with the notice (`spawn --resume`'s is
+    // `spawn_resume_sends_the_notice_unless_the_caller_sent_a_prompt`).
     let home = TestHome::claim("resume-notice");
     let ws = workspace(&home.dir).display().to_string();
     let (record, runs) = recording_pi(&home.dir);
@@ -9105,17 +9135,6 @@ fn bench_resume_and_restore_send_a_fresh_notice_and_never_the_spawn_prompt() {
         let (task, text) = pointed_prompt(&recorded_runs(&runs, 1)[0]);
         assert_eq!(text, "TASK-ALPHA", "a new conversation gets its own prompt");
 
-        // `bench resume` of an exited session: the notice, never the spawn's prompt again.
-        let sid = spawned["session"].as_str().unwrap().to_string();
-        libc_kill(spawned["pid"].as_i64().unwrap() as i32);
-        wait_until("the agent's session ends", Duration::from_secs(10), || {
-            session_row(&home.dir, &sid)["live"] == false
-        });
-        let resumed = bench(&home.dir, &["resume", &sid]);
-        assert_eq!(resumed.code, 0, "{}", resumed.stderr);
-        let notice = assert_resume_notice(&recorded_runs(&runs, 2)[1]);
-        assert_ne!(notice, task);
-
         let shell = json_of(&bench(&home.dir, &["open", "terminal"]));
         (
             spawned["pane"].as_str().unwrap().to_string(),
@@ -9138,9 +9157,9 @@ fn bench_resume_and_restore_send_a_fresh_notice_and_never_the_spawn_prompt() {
     };
     assert_eq!(how(&agent_pane).as_deref(), Some("resumed"), "{restored}");
     assert_eq!(how(&shell_pane).as_deref(), Some("shell"), "{restored}");
-    let all = recorded_runs(&runs, 3);
-    assert_eq!(all.len(), 3, "{all:?}");
-    let notice = assert_resume_notice(&all[2]);
+    let all = recorded_runs(&runs, 2);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let notice = assert_resume_notice(&all[1]);
     assert_ne!(notice, task);
 }
 
@@ -9291,7 +9310,7 @@ fn a_resume_whose_worktree_was_removed_recreates_it_on_the_agents_branch() {
             "a folder that is there gets no note"
         );
 
-        // `bench resume` of the exited session, after its worktree went.
+        // `spawn --resume` again once the session exited, after its worktree went.
         let spawned = json_of(&spawned);
         let sid = spawned["session"].as_str().unwrap().to_string();
         libc_kill(spawned["pid"].as_i64().unwrap() as i32);
@@ -9299,7 +9318,12 @@ fn a_resume_whose_worktree_was_removed_recreates_it_on_the_agents_branch() {
             session_row(&home.dir, &sid)["live"] == false
         });
         remove();
-        let resumed = bench(&home.dir, &["resume", &sid]);
+        let resumed = bench(
+            &home.dir,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+            ],
+        );
         assert_eq!(resumed.code, 0, "{}", resumed.stderr);
         recreated(&recorded_runs(&runs, 2)[1]);
     }
@@ -9310,6 +9334,84 @@ fn a_resume_whose_worktree_was_removed_recreates_it_on_the_agents_branch() {
     let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
     assert_eq!(restored["restored"][0]["how"], "resumed", "{restored}");
     recreated(&recorded_runs(&runs, 3)[2]);
+}
+
+#[test]
+fn a_refused_resume_never_recreates_its_worktree() {
+    // A pane whose worktree was pruned (#621) and whose conversation is live elsewhere (#634):
+    // restore refuses the resume, and must not bring back a folder for a resume that never runs.
+    let home = TestHome::claim("resume-held-wt");
+    let (repo, wt) = claude_in_a_worktree(&home.dir);
+    let (record, _runs) = recording_where(&home.dir);
+    let pane = {
+        let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+        json_of(&spawned)["pane"].as_str().unwrap().to_string()
+    };
+    git_in(&repo, &["worktree", "remove", "--force", ".worktrees/w"]);
+    let outside = Detached::start();
+    claude_holds(&home.dir, outside.0.id(), "c-wt");
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let row = restored["restored"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["pane"] == pane.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("{restored}"));
+    assert_eq!(row["how"], "shell", "{restored}");
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("already live")),
+        "{restored}"
+    );
+    assert!(!Path::new(&wt).exists(), "no worktree came back for it");
+
+    // `spawn --resume` refuses it the same way, before the folder too.
+    let spawn = bench(
+        &home.dir,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+        ],
+    );
+    assert_eq!(spawn.code, 3, "{}", spawn.stderr);
+    assert!(!Path::new(&wt).exists(), "no worktree came back for it");
+}
+
+#[test]
+fn a_claude_never_written_in_gets_no_worktree_back_either() {
+    // restore refuses it after `plan`, and only Claude's transcript names the branch a worktree
+    // would come back on: no transcript, no branch, no `git worktree add`.
+    let home = TestHome::claim("resume-unwritten-wt");
+    let (repo, wt) = claude_in_a_worktree(&home.dir);
+    let (record, _runs) = recording_where(&home.dir);
+    {
+        let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+    }
+    fs::remove_dir_all(home.dir.join(".claude/projects")).unwrap();
+    git_in(&repo, &["worktree", "remove", "--force", ".worktrees/w"]);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let note = restored["restored"][0]["note"].as_str().unwrap_or_default();
+    assert!(note.contains("never written in"), "{restored}");
+    assert!(!Path::new(&wt).exists(), "no worktree came back for it");
 }
 
 #[test]
@@ -10138,11 +10240,34 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// A daemon that also listens on TCP at `port`.
-fn tcp_daemon(home: &Path, port: u16) -> DaemonGuard {
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"));
-    DaemonGuard::start_with(home, None, cmd)
+/// A daemon that also listens on TCP, and the port it holds.
+fn tcp_daemon(home: &Path) -> (DaemonGuard, u16) {
+    tcp_daemon_from(home, None, |_| {})
+}
+
+/// A port `free_port` found is let go of before benchd binds it, and under the full gate another
+/// test can take it in between; benchd then refuses to start (`serve_tcp`). So each try starts
+/// benchd on a fresh port until one holds, beginning at `first` when given.
+fn tcp_daemon_from(
+    home: &Path,
+    first: Option<u16>,
+    configure: impl Fn(&mut std::process::Command),
+) -> (DaemonGuard, u16) {
+    let mut refused = Vec::new();
+    for port in first
+        .into_iter()
+        .chain(std::iter::repeat_with(free_port))
+        .take(10)
+    {
+        let mut cmd = isolated(benchd_bin());
+        cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"));
+        configure(&mut cmd);
+        match DaemonGuard::try_start_with(home, None, cmd) {
+            Ok(guard) => return (guard, port),
+            Err(why) => refused.push(format!("{port}: {why}")),
+        }
+    }
+    panic!("benchd could not hold a TCP port: {refused:?}");
 }
 
 /// A TCP link between clients and benchd's listener that the test can cut, the way a Wi-Fi
@@ -10220,8 +10345,7 @@ impl Link {
 #[test]
 fn a_client_with_only_a_url_reaches_benchd_over_tcp() {
     let home = TestHome::claim("m5c-tcp");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let url = format!("tcp://127.0.0.1:{port}");
     // A root of its own with no socket in it: whatever answers came over TCP.
     let elsewhere = home.dir.join("elsewhere");
@@ -10287,14 +10411,13 @@ fn a_url_that_is_wrong_or_unanswered_is_named_and_a_listen_that_cannot_bind_stop
         malformed.stderr
     );
 
-    let port = free_port();
-    let url = format!("tcp://127.0.0.1:{port}");
+    let url = format!("tcp://127.0.0.1:{}", free_port());
     let unanswered = bench_as(&home.dir, &["status"], &[("BENCH_URL", &url)]);
     assert_eq!(unanswered.code, 2, "{}", unanswered.stderr);
     assert!(unanswered.stderr.contains(&url), "{}", unanswered.stderr);
 
     // Two benchds, one address: the second is told why, and does not start.
-    let _first = tcp_daemon(&home.dir, port);
+    let (_first, port) = tcp_daemon(&home.dir);
     let other = TestHome::claim("m5c-bad-2");
     let mut second = isolated(benchd_bin());
     second
@@ -10317,8 +10440,7 @@ fn a_pane_whose_link_drops_reconnects_and_shows_the_session_as_it_is() {
     // with its session still live (the M5c spike, attach.rs:240). Sleep, a Wi-Fi change and a
     // benchd restart all drop the link; only benchd saying the session ended may end the pane.
     let home = TestHome::claim("m5c-drop");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let link = Link::start(port);
     let run = bench(
         &home.dir,
@@ -10443,8 +10565,7 @@ fn decoded(answer: &serde_json::Value) -> Vec<u8> {
 /// A benchd on TCP and a canvas folder holding `plan.md` (`# Plan\n`), canonical.
 fn canvas_over_tcp(name: &str) -> (TestHome, u16, PathBuf, PathBuf, DaemonGuard) {
     let home = TestHome::claim(name);
-    let port = free_port();
-    let daemon = tcp_daemon(&home.dir, port);
+    let (daemon, port) = tcp_daemon(&home.dir);
     let dir = home.dir.join("canvas");
     fs::create_dir_all(dir.join("img")).unwrap();
     let dir = dir.canonicalize().unwrap();
@@ -10978,7 +11099,7 @@ fn fake_transcript(home: &Path, id: &str) {
 fn a_fork_is_its_own_read_only_conversation_so_the_author_restores_beside_it() {
     // #531: the operator asks an agent about its work in a fork of its conversation. Before, a
     // fork (`--resume <id> --arg --fork-session`) was recorded under the author's id, and while it
-    // ran the author's pane would not restore: "already live in another session".
+    // ran the author's pane would not restore: "conversation <id> is already live in <session>".
     let home = TestHome::claim("fork");
     let ws = workspace(&home.dir).display().to_string();
     let (author_pane, author) = {
@@ -11457,8 +11578,7 @@ fn browser_over_tcp(name: &str, debugger: u16) -> (TestHome, u16, DaemonGuard) {
         &home.dir,
         serde_json::json!({ "binary": fake, "args": [format!("--fake-port={debugger}")] }),
     );
-    let port = free_port();
-    let daemon = tcp_daemon(&home.dir, port);
+    let (daemon, port) = tcp_daemon(&home.dir);
     let started = bench(&home.dir, &["browser", "start"]);
     assert_eq!(started.code, 0, "{}", started.stderr);
     (home, port, daemon)
@@ -11605,11 +11725,10 @@ fn a_pane_that_leaves_closes_the_browser_side_and_no_browser_is_refused() {
 
 /// A TCP daemon whose PATH holds only the system's and Homebrew's folders: never the operator's
 /// `~/.bun/bin`, so the only `archon` it can find is a test's stub in its own `HOME`.
-fn tcp_daemon_with_system_path(home: &Path, port: u16) -> DaemonGuard {
-    let mut cmd = isolated(benchd_bin());
-    cmd.env("BENCH_LISTEN", format!("127.0.0.1:{port}"))
-        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
-    DaemonGuard::start_with(home, None, cmd)
+fn tcp_daemon_with_system_path(home: &Path) -> (DaemonGuard, u16) {
+    tcp_daemon_from(home, None, |cmd| {
+        cmd.env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
+    })
 }
 
 fn command_run(port: u16, command: serde_json::Value, timeout_ms: u64) -> serde_json::Value {
@@ -11700,8 +11819,7 @@ fn repo_with_worktrees(home: &Path) -> PathBuf {
 #[test]
 fn command_run_over_tcp_answers_gits_own_status_and_output() {
     let home = TestHome::claim("m5c-git");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let app = repo_with_worktrees(&home.dir);
     let common = app.join(".git").display().to_string();
     let git = |args: &[&str]| {
@@ -11772,8 +11890,7 @@ fn command_run_over_tcp_answers_gits_own_status_and_output() {
 #[test]
 fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
     let home = TestHome::claim("m5c-archon");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let work = home.dir.join("work");
     fs::create_dir_all(&work).unwrap();
     let work = work.canonicalize().unwrap();
@@ -11860,8 +11977,7 @@ fn command_run_over_tcp_finds_archon_in_benchds_home_and_keeps_its_deadline() {
 #[test]
 fn path_exists_and_git_repositories_over_tcp_read_benchds_disk() {
     let home = TestHome::claim("m5c-repos");
-    let port = free_port();
-    let _daemon = tcp_daemon_with_system_path(&home.dir, port);
+    let (_daemon, port) = tcp_daemon_with_system_path(&home.dir);
     let app = repo_with_worktrees(&home.dir);
     let feature = app.join(".worktrees/feature").display().to_string();
     let gone = app.join(".worktrees/gone").display().to_string();
@@ -11991,8 +12107,7 @@ fn note(port: u16, workspace: &Path) -> PathBuf {
 #[test]
 fn prp_note_lands_in_the_store_the_canonical_resolver_picks() {
     let home = TestHome::claim("m5c-prp-note");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, plain) = prp_folders(&home.dir);
     let prp_home = home.dir.join(".prp");
     let sub = main.join("sub");
@@ -12029,8 +12144,7 @@ fn prp_note_lands_in_the_store_the_canonical_resolver_picks() {
 #[test]
 fn prp_note_adopts_a_registration_and_refuses_what_it_cannot_key() {
     let home = TestHome::claim("m5c-prp-adopt");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, _) = prp_folders(&home.dir);
     let custom = home.dir.join(".prp/custom-name");
     fs::create_dir_all(&custom).unwrap();
@@ -12063,8 +12177,7 @@ fn prp_note_adopts_a_registration_and_refuses_what_it_cannot_key() {
 #[test]
 fn prp_stores_and_artifacts_list_benchds_home() {
     let home = TestHome::claim("m5c-prp-list");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     let (main, worktree, plain) = prp_folders(&home.dir);
     let prp = home.dir.join(".prp");
     let store = |key: &str, json: &str| {
@@ -12158,8 +12271,7 @@ fn prp_stores_and_artifacts_list_benchds_home() {
 #[test]
 fn path_resolve_expands_against_benchds_home() {
     let home = TestHome::claim("m5c-path");
-    let port = free_port();
-    let _daemon = tcp_daemon(&home.dir, port);
+    let (_daemon, port) = tcp_daemon(&home.dir);
     fs::create_dir_all(home.dir.join("proj/sub")).unwrap();
     fs::write(home.dir.join("proj/plan.md"), "x").unwrap();
     let resolve = |path: &str| tcp_verb(port, "path/resolve", serde_json::json!({ "path": path }));
@@ -12942,4 +13054,26 @@ fn focus_waiting_walks_asking_then_finished_then_mail() {
         visited,
         [finished_pane, mail_pane.clone(), asking_pane, mail_pane]
     );
+}
+
+/// The flake in `a_client_with_only_a_url_reaches_benchd_over_tcp`, with the race lost on purpose:
+/// `free_port` lets go of the port it found, and under the full gate another test can take it
+/// before benchd binds. benchd then rightly refuses to start (`serve_tcp`), so a helper that hands
+/// it a port it no longer holds must try another.
+#[test]
+fn a_tcp_daemon_whose_port_was_taken_starts_on_another() {
+    let home = TestHome::claim("m5c-taken");
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let held = taken.local_addr().unwrap().port();
+    let (_daemon, port) = tcp_daemon_from(&home.dir, Some(held), |_| {});
+    assert_ne!(
+        port, held,
+        "it moved on rather than waiting out its deadline"
+    );
+    let status = bench_as(
+        &home.dir,
+        &["status"],
+        &[("BENCH_URL", format!("tcp://127.0.0.1:{port}").as_str())],
+    );
+    assert_eq!(status.code, 0, "{}", status.stderr);
 }
