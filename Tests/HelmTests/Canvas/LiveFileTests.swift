@@ -134,6 +134,30 @@ final class LiveFileTests: XCTestCase {
         XCTAssertEqual(try onDisk(), "{\"done\": false, \"by\": \"agent\"}")
     }
 
+    /// One write path for every page, helm's and Pocket's (`CanvasFiles.writeLive`): the file a
+    /// stale write is answered with comes back byte for byte, a byte-order mark included, so the
+    /// page's next base is the file and its next write lands. A file that is not UTF-8 cannot be a
+    /// page's base at all, and is refused by name rather than handed back with its bad bytes
+    /// replaced, which would conflict with every later write.
+    func testALiveWriteHandsBackTheFileExactlyOrRefusesIt() throws {
+        let live = BenchLiveFile.path(for: page.path)!
+        let files = DiskCanvasFiles()
+        try Data("\u{FEFF}{\"by\": \"agent\"}\n".utf8).write(to: data)
+        let mine = CanvasDataWrite(text: "{\"done\": true}\n", base: "{}", notify: false)
+        guard case let .success(.changed(now)) = files.writeLive(mine, to: live) else {
+            return XCTFail("a stale write is answered with the file")
+        }
+        XCTAssertEqual(Data(now.utf8), try Data(contentsOf: data), "the file, byte for byte")
+        let again = CanvasDataWrite(text: mine.text, base: now, notify: false)
+        XCTAssertEqual(files.writeLive(again, to: live), .success(.written(mine.text)))
+
+        try Data([0x7B, 0xFF, 0xFE, 0x7D]).write(to: data)
+        guard case let .failure(why) = files.writeLive(mine, to: live) else {
+            return XCTFail("a live file that is not UTF-8 was handed to the page")
+        }
+        XCTAssertTrue(why.reason.contains("not UTF-8"), why.reason)
+    }
+
     /// A page whose base is stale is told so even when it writes its own base back: helm asks
     /// benchd rather than answering `written` from the page's say-so.
     func testWritingBackAStaleBaseIsAnsweredWithTheNewerFile() throws {

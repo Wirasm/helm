@@ -1,3 +1,4 @@
+import CanvasKit
 import Foundation
 import HelmWire
 
@@ -47,11 +48,6 @@ package enum PocketReply {
         let at = ISO8601DateFormatter().string(from: date)
         replies.append(["from": "pocket", "text": text, "at": at])
         object["replies"] = replies
-        guard
-            let data = try? JSONSerialization.data(
-                withJSONObject: object,
-                options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
-        else { return nil }
-        return String(decoding: data, as: UTF8.self) + "\n"
+        return CanvasDataWrite.text(of: object)
     }
 }

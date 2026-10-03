@@ -113,7 +113,7 @@ package final class PocketModel: ObservableObject {
         }
         // A poll that began before `connect` moved to another benchd answers for the old one.
         guard client === asked else { return }
-        sessions = answered
+        sessions = PocketHome.owners(answered, workspaces: workspaces)
         failure = refused
     }
 
@@ -182,13 +182,14 @@ package final class PocketModel: ObservableObject {
         case let .failure(why): return why
         }
         for _ in 0..<2 {
-            guard let next = PocketReply.adding(text, at: Date(), to: current) else {
+            // The base is the file's bytes exactly (`CanvasText`), or there is none to write over.
+            let base = current.map(CanvasText.decode) ?? ""
+            guard let base, let next = PocketReply.adding(text, at: Date(), to: current) else {
                 return Refusal(
-                    "the page's live file is not a JSON object; the reply was not written")
+                    "the page's live file is not a UTF-8 JSON object; the reply was not written")
             }
             let request = BenchFileWriteRequest(
-                id: Self.id("write"), path: live, text: next,
-                expect: .unchanged(current.map { String(decoding: $0, as: UTF8.self) } ?? ""),
+                id: Self.id("write"), path: live, text: next, expect: .unchanged(base),
                 notify: true)
             switch await Self.ask(request, at: endpoint, BenchFileWrite.self, writes: true) {
             case .success(.written): return nil

@@ -71,41 +71,39 @@ final class PocketRowsTests: XCTestCase {
         XCTAssertNil(row("e", running("busy"), open: .transcript(path: "/t", parent: "a")).screen)
     }
 
-    /// Home: each workspace in the document's order, named by its folder, holding the sessions
-    /// Pocket can talk to: the operator's orchestrators first, then the rest, each in benchd's
-    /// order. A workspace with none still shows, empty.
-    func testHomePinsTheOperatorsOrchestratorsInEachWorkspace() {
-        let sessions: [String: [BenchSessionRow]] = [
-            "/w/helm": [
-                row(
-                    "asking", running("waiting", "permission prompt"), spawner: .agent(handle: "o")),
-                row("ended", .finished(atMs: 1), open: .resume(argv: ["claude"], cwd: "/w/helm")),
-                row("job", running("busy"), open: .claudeAttach(job: "j")),
-                row("busy", running("busy")),
-                row("lead", running("busy"), spawner: .operator),
+    /// A session two workspaces list (one inside the other) belongs to the most specific one its
+    /// cwd is in (operator, 2026-10-03), so home and agents list it once. One whose cwd is in
+    /// neither, a worktree elsewhere, stays with the first workspace that listed it.
+    func testASessionBelongsToTheMostSpecificWorkspaceItRunsIn() {
+        let inner = row("inner", running("busy"), cwd: "/w/helm/.worktrees/x/sub")
+        let outer = row("outer", running("busy"), cwd: "/w/helm/Sources")
+        let away = row("away", running("busy"), cwd: "/elsewhere/helm-x")
+        let sibling = row("sibling", running("busy"), cwd: "/w/helm2")
+        let owners = PocketHome.owners(
+            [
+                "/w/helm": [inner, outer, away],
+                "/w/helm/.worktrees/x": [inner, away],
+                "/w/helm2": [sibling],
             ],
-            "/w/prp": [row("prp-lead", running("idle"), spawner: .operator)],
-        ]
-        let groups = PocketHome.groups(
-            workspaces: ["/w/prp", "/w/helm", "/w/kild"], sessions: sessions)
-        XCTAssertEqual(groups.map(\.name), ["prp", "helm", "kild"])
-        XCTAssertEqual(
-            groups.map { $0.rows.map(\.id) }, [["prp-lead"], ["lead", "asking", "busy"], []])
-        XCTAssertEqual(groups[1].rows.map(\.isOrchestrator), [true, false, false])
+            // The outer workspace first, so "the first that listed it" is not the answer.
+            workspaces: ["/w/helm", "/w/helm/.worktrees/x", "/w/helm2"])
+        XCTAssertEqual(owners["/w/helm/.worktrees/x"]?.map(\.id), ["inner"])
+        XCTAssertEqual(owners["/w/helm"]?.map(\.id), ["outer", "away"])
+        XCTAssertEqual(owners["/w/helm2"]?.map(\.id), ["sibling"])
     }
 
-    /// Agents: every session on every workspace once, by what it wants from the operator (asking,
-    /// finished and not seen, working, seen, ended), newest first within each.
-    func testAgentsListsEverySessionOnceByAttention() {
+    /// Agents: every session, by what it wants from the operator (asking, finished and not seen,
+    /// working, seen, ended), newest first within each.
+    func testAgentsListsEverySessionByAttention() {
         let done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
-        let shared = row("shared", running("busy"), at: 50)
         let sessions: [String: [BenchSessionRow]] = [
             "/w/helm": [
-                row("idle", running("idle"), at: 95), shared, row("ended", .finished(atMs: 99)),
+                row("idle", running("idle"), at: 95), row("shared", running("busy"), at: 50),
+                row("ended", .finished(atMs: 99)),
                 row("unseen", running("idle"), at: 10, done: done),
             ],
             "/w/helm/.worktrees/x": [
-                shared, row("new", running("busy"), at: 70), row("ask", running("waiting"), at: 1),
+                row("new", running("busy"), at: 70), row("ask", running("waiting"), at: 1),
             ],
         ]
         XCTAssertEqual(
