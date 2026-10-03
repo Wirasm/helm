@@ -188,7 +188,7 @@ pub fn open_action(
             parent: parent.clone(),
         }),
         (Host::None, false) => {
-            // The resume flags have one spelling, the one `bench resume` uses.
+            // The resume flags have one spelling, the one `bench spawn --resume` uses.
             let agent = match harness {
                 Harness::Claude => AgentKind::Claude,
                 Harness::Codex => AgentKind::Codex,

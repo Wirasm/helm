@@ -188,7 +188,6 @@ pub const KNOWN_VERBS: &[&str] = &[
     "sessions/seen",
     "attach",
     "close",
-    "resume",
     "mail/send",
     "mail/list",
     "mail/read",
@@ -264,7 +263,6 @@ pub enum Verb {
     SessionsSeen,
     Attach,
     Close,
-    Resume,
     MailSend,
     MailList,
     MailRead,
@@ -335,7 +333,6 @@ impl Verb {
             "sessions/seen" => Some(Verb::SessionsSeen),
             "attach" => Some(Verb::Attach),
             "close" => Some(Verb::Close),
-            "resume" => Some(Verb::Resume),
             "mail/send" => Some(Verb::MailSend),
             "mail/list" => Some(Verb::MailList),
             "mail/read" => Some(Verb::MailRead),
@@ -750,7 +747,7 @@ pub struct ScreenAnswer {
     pub lines: Vec<String>,
 }
 
-/// The payload shared by `attach`, `close` and `resume`: a session id, plus the
+/// The payload shared by `attach` and `close`: a session id, plus the
 /// viewer's size where the verb has a viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionArgs {
@@ -1490,7 +1487,7 @@ mod tests {
         }
         assert_eq!(
             KNOWN_VERBS.len(),
-            57,
+            56,
             "a new verb joins KNOWN_VERBS and this count together"
         );
         assert!(Verb::parse("frobnicate").is_none());

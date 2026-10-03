@@ -113,9 +113,6 @@ const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --versi
      \x20                                         (`just resume-all` after a benchd restart)\n\
      \x20     close <session>                     drain-then-die the session (a pane id closes\n\
      \x20                                         the pane, above)\n\
-     \x20     resume <session>                    re-enter an exited session's runtime state\n\
-     \x20                                         (a resume's first message is benchd's notice\n\
-     \x20                                         to carry on, unless --prompt-file sends one)\n\
      \x20     file read <path>                    the file's bytes on stdout, exactly\n\
      \x20     file write <path> --expect <f>      stdin over <path>, only if it still holds what\n\
      \x20                                         <f> holds (what you read); exit 3 when it changed\n\
@@ -315,7 +312,7 @@ fn run() -> i32 {
     let args: Value = match verb.as_str() {
         "events" if follow => json!({ "follow": true }),
         "events" if since > 0 => json!({ "since": since }),
-        "attach" | "close" | "resume" => {
+        "attach" | "close" => {
             let Some(sid) = positional.first() else {
                 return refuse(&format!(
                     "{verb} needs a session id — `bench sessions` lists them"

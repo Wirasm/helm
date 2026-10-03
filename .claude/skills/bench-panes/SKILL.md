@@ -73,14 +73,14 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(
 - `--resume <session-id>` re-enters a claude, codex or pi conversation instead of starting one
   (codex's id is its thread id, which its hook records). Without `--prompt-file` its first
   message is benchd's resume notice, which tells it its last turn was interrupted and to carry
-  on; `bench resume` and `bench restore` send the same. A `--prompt-file` replaces the notice.
+  on; `bench restore` sends the same. A `--prompt-file` replaces the notice.
 - `--fork <session-id>` starts a new claude, codex or pi conversation that begins as a copy of
   that one, to ask about its work while the original carries on untouched. The fork gets its own
   id (the answer's `runtime_session`; `forked_from` names the original) and runs **read-only**
   rather than in the unattended posture: Claude in plan mode, codex in a read-only sandbox, pi
   with only `read,grep,find,ls`. It shares the original's worktree, and an edit there collides
-  with the original's work. Put the question in `--prompt-file`. A fork resumed later, by `--resume`,
-  `bench resume` or `bench restore`, is read-only too. `--arg` still adds flags after the
+  with the original's work. Put the question in `--prompt-file`. A fork resumed later, by `--resume`
+  or `bench restore`, is read-only too. `--arg` still adds flags after the
   posture, so a permission flag there is your explicit override of it: do not pass one unless
   the operator asked.
 - Claude Code must already trust `--cwd` (a parent directory it trusts counts), or it stops at
@@ -136,8 +136,8 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
   its own hook), else a shell in the directory the pane's shell was last working in. A
   conversation a live process already holds (a `claude --resume` in another terminal) is never
-  resumed a second time: that pane gets a shell whose first line says why, and `bench resume` and
-  `bench spawn --resume` refuse it.
+  resumed a second time: that pane gets a shell whose first line says why, and
+  `bench spawn --resume` refuses it.
 - Every codex benchd starts is a thread on benchd's one codex app-server; its pane attaches
   to it. benchd starts that server trusting the hooks codex says need review, so no codex pane
   opens on "Hooks need review"; nothing is saved. A `~/.codex/hooks.json` changed after the
