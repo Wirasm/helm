@@ -2,7 +2,8 @@
 //! their limits, as each harness publishes it. Nothing here asks a provider: Claude Code hands
 //! its statusline command `rate_limits`, and codex writes `rate_limits` into its rollout. The
 //! `bench` CLI reads those on benchd's machine and reports them; benchd keeps one figure per
-//! harness ([`Usage::merge`]) and answers it in `sessions`, so helm reads no harness file.
+//! harness and account ([`Usage::merge`]) and answers it in `sessions`, so helm reads no harness
+//! file.
 
 use crate::Harness;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,12 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub harness: Harness,
+    /// Which of the harness's logins this plan is, when the operator has more than one: for
+    /// Claude, the config dir its session ran under (`CLAUDE_CONFIG_DIR`), spelled exactly as
+    /// set, because Claude keys the login's keychain item by that string. Absent for the default
+    /// login (`~/.claude`) and for codex. Two accounts are two plans: never merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// One per window length: Claude's five hours and seven days, codex's primary and
     /// secondary windows.
     pub windows: Vec<UsageWindow>,
@@ -60,6 +67,7 @@ impl Usage {
             .collect();
         (!windows.is_empty()).then_some(Usage {
             harness: Harness::Claude,
+            account: None,
             windows,
         })
     }
@@ -90,11 +98,12 @@ impl Usage {
             .collect();
         (!windows.is_empty()).then_some(Usage {
             harness: Harness::Codex,
+            account: None,
             windows,
         })
     }
 
-    /// Take in a newer report of the same harness. Per window, the one that resets later wins;
+    /// Take in a newer report of the same harness and account. Per window, the one that resets later wins;
     /// in the same window the higher reading wins, because usage inside a window only rises.
     /// So an idle session repeating an older figure, or a resumed codex session's old record,
     /// never replaces a busier one's. An equal reading only moves `at_ms` forward. A held window
@@ -201,10 +210,12 @@ mod tests {
     fn merge_keeps_the_newest_window_and_its_highest_reading() {
         let mut held = Usage {
             harness: Harness::Claude,
+            account: None,
             windows: vec![window(300, 40.0, 1_000, 10)],
         };
         let report = |used: f64, resets: u64, at: u64| Usage {
             harness: Harness::Claude,
+            account: None,
             windows: vec![window(300, used, resets, at)],
         };
         held.merge(report(30.0, 1_000, 20));
@@ -231,6 +242,7 @@ mod tests {
         assert_eq!(held.windows[0], window(300, 2.0, 2_000, 60), "a new window");
         held.merge(Usage {
             harness: Harness::Claude,
+            account: None,
             windows: vec![window(10080, 7.0, 9_000, 70)],
         });
         assert_eq!(
@@ -245,6 +257,7 @@ mod tests {
         };
         held.merge(Usage {
             harness: Harness::Claude,
+            account: None,
             windows: vec![no_reset.clone()],
         });
         assert_eq!(held.windows[0], no_reset, "the held window had reset");

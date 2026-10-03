@@ -193,10 +193,12 @@ one-line change the operator makes himself**, and nothing here makes it for him:
 with `<bench>` the absolute path `bench wiring` prints (it prints this line too, and `--check`
 reports `statusline_reports_limits` without making it a requirement). Leave `refreshInterval` unset: the payload
 carries no fetch time, so each run is stamped when it ran, and a timer would keep restamping an idle
-session's figure as current. benchd keeps one figure per harness and window, merged so that a
+session's figure as current. benchd keeps one figure per harness, account and window, merged so that a
 window that resets later wins and, within one window, the higher reading wins (usage in a window
 only rises), and a held window that had already reset gives way to any later report. An idle session repeating an old figure, or a resumed codex session's old record,
-never replaces a newer one; two accounts on one benchd are not told apart. It is memory only: a
+never replaces a newer one. A second Claude login is told apart by its config dir: Claude runs the
+statusline with its own environment, so `bench statusline` reports `CLAUDE_CONFIG_DIR`, as spelled,
+as the figure's `account` (absent for the default `~/.claude`). It is memory only: a
 restarted benchd shows nothing until the next turn reports. helm greys a figure older than 15
 minutes and drops a window whose reset time has passed.
 

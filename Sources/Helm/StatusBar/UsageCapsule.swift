@@ -2,8 +2,8 @@ import HelmWire
 import SwiftUI
 
 /// How close the operator's Claude and codex plans are to their limits (#143): one capsule,
-/// one part per harness, e.g. `Claude 62% · resets 14:00   codex 30% · resets Fri 09:00`.
-/// Absent until a harness has reported.
+/// one part per harness and account, e.g. `Claude 62% · resets 14:00   Claude .claude-b 12%
+/// · resets 15:00   codex 30% · resets Fri 09:00`. Absent until a harness has reported.
 ///
 /// benchd holds the figures (`usage` in its `sessions` answer), as each harness published them on
 /// benchd's machine: Claude Code through its statusline (`bench statusline`), codex through its
@@ -67,7 +67,7 @@ struct UsageSummary: Equatable {
             guard let binding = live.max(by: { $0.usedPercent < $1.usedPercent }) else {
                 continue
             }
-            let name = Self.name(of: report.harness)
+            let name = Self.name(of: report)
             let stale = now.timeIntervalSince(binding.at) > Self.staleAfter
             parts.append(Part(label: name + " " + clock.figure(binding), stale: stale))
             near = near || (!stale && binding.usedPercent >= Self.nearAt)
@@ -85,8 +85,11 @@ struct UsageSummary: Equatable {
             + "\nAs each harness last reported it; faint once 15 minutes old."
     }
 
-    private static func name(of harness: String) -> String {
-        harness == "claude" ? "Claude" : harness
+    /// The harness, and for a second login its config dir's name: `Claude .claude-b`.
+    private static func name(of report: BenchUsage) -> String {
+        let harness = report.harness == "claude" ? "Claude" : report.harness
+        guard let account = report.account else { return harness }
+        return harness + " " + URL(fileURLWithPath: account).lastPathComponent
     }
 
     /// 300 → `5h`, 10080 → `7d`.
