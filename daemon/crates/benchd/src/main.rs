@@ -1060,13 +1060,12 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
 fn exited(session: &Session) -> String {
     let sid = &session.id;
     match session.spec.conversation.id() {
-        // `--name` keeps its mailbox: a spawn is otherwise named after its new session.
+        // A spawn takes a handle no session in this daemon holds, so the resume gets a new one.
         Some(id) => format!(
-            "session {sid} has exited — `bench spawn --agent {} --cwd '{}' --resume {id} --name {}` \
-             re-enters its conversation",
+            "session {sid} has exited — `bench spawn --agent {} --cwd '{}' --resume {id}` \
+             re-enters its conversation, under a new mailbox",
             session.agent.name(),
             session.cwd.replace('\'', "'\\''"),
-            session.handle
         ),
         None => format!(
             "session {sid} has exited, and {} has no conversation to resume",

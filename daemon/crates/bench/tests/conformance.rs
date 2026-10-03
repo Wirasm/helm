@@ -8359,6 +8359,56 @@ fn spawn_resume_refuses_a_claude_conversation_a_process_outside_benchd_holds() {
     assert_eq!(resumed.code, 0, "{}", resumed.stderr);
 }
 
+#[test]
+fn an_exited_sessions_attach_refusal_names_a_resume_that_works() {
+    // `bench resume` is retired: attaching to an exited session prints the `spawn --resume` that
+    // replaces it, and running exactly that brings the conversation back.
+    let home = TestHome::claim("exited-hint");
+    let h = &home.dir;
+    let ws = h.join("a dir with 'quotes'");
+    fs::create_dir_all(&ws).unwrap();
+    let ws = ws.display().to_string();
+    let _daemon = DaemonGuard::start_with_script(h, "claude", ARGV_CLAUDE);
+    let spawned = json_of(&bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]));
+    let sid = spawned["session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        session_row(h, &sid)["live"] == false
+    });
+
+    let attach = bench(h, &["attach", &sid]);
+    assert_eq!(attach.code, 3, "{}", attach.stderr);
+    let command = attach
+        .stderr
+        .split('`')
+        .nth(1)
+        .unwrap_or_else(|| panic!("names a command: {}", attach.stderr));
+    // The shell splits it as an operator pasting it would.
+    let words = isolated("sh")
+        .arg("-c")
+        .arg(format!(
+            "for w in {command}; do printf '%s\\0' \"$w\"; done"
+        ))
+        .output()
+        .unwrap();
+    let words: Vec<String> = String::from_utf8(words.stdout)
+        .unwrap()
+        .split('\0')
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(words[0], "bench", "{words:?}");
+    let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    let resumed = bench(h, &args);
+    assert_eq!(resumed.code, 0, "`{command}`: {}", resumed.stderr);
+    assert_eq!(
+        json_of(&resumed)["runtime_session"],
+        spawned["runtime_session"],
+        "the same conversation"
+    );
+}
+
 /// The agent recorded in a pane, from the document.
 fn pane_agent(home: &Path, pane: &str) -> serde_json::Value {
     json_of(&bench(home, &["get", "pane", pane]))["pane"]["surface"]["agent"].clone()
