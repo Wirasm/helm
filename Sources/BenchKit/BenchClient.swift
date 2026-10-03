@@ -263,12 +263,29 @@ final class BenchFollower: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// End the current connection only: `run` reconnects after the shortest backoff, as the last
-    /// connection had succeeded.
+    /// End the current connection, or the wait before the next attempt: `run` connects again at
+    /// once, and backs off from the shortest wait if that fails too.
     func reconnect() {
         lock.lock()
         socket?.interrupt()
+        woken = true
         lock.unlock()
+        wake.signal()
+    }
+
+    private var woken = false
+    private let wake = DispatchSemaphore(value: 0)
+
+    /// Sleep `seconds` between attempts. false when `reconnect` cut it short.
+    private func wait(_ seconds: TimeInterval) -> Bool {
+        let slept = wake.wait(timeout: .now() + seconds) == .timedOut
+        lock.lock()
+        defer { lock.unlock() }
+        let cut = woken
+        woken = false
+        // A signal for a connection already ended, not a wait, is spent here, unread.
+        while wake.wait(timeout: .now()) == .success {}
+        return slept && !cut
     }
 
     private var isStopped: Bool {
@@ -283,8 +300,8 @@ final class BenchFollower: @unchecked Sendable {
             let why = follow { attempt = 0 }
             guard !isStopped else { return }
             emit(.disconnected(why))
-            Thread.sleep(forTimeInterval: Self.backoff[min(attempt, Self.backoff.count - 1)])
-            attempt += 1
+            // Cut short by `reconnect`: the next failure backs off from the start again.
+            attempt = wait(Self.backoff[min(attempt, Self.backoff.count - 1)]) ? attempt + 1 : 0
         }
     }
 

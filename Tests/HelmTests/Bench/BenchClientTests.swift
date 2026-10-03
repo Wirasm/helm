@@ -1,8 +1,8 @@
-import BenchKit
 import Foundation
 import HelmWire
 import XCTest
 
+@testable import BenchKit
 @testable import Helm
 
 /// The client against a benchd stand-in on a real unix socket (`FakeBenchd`): what goes out, what
@@ -246,6 +246,28 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual(client.state, .connected)
     }
 
+    /// `reconnect` also cuts a wait between attempts short: a phone back from a long sleep tries
+    /// at once, not after the capped backoff of up to four seconds.
+    func testReconnectCutsTheBackoffShort() throws {
+        let attempts = Attempts()
+        let follower = BenchFollower(
+            endpoint: .unix(path: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock"),
+            latest: LatestDocument()
+        ) { event in
+            if case .disconnected = event { attempts.add() }
+        }
+        follower.start()
+        defer { follower.stop() }
+        // 0.1 + 0.25 + 0.5 + 1 + 2: the next wait is the four-second cap.
+        XCTAssertTrue(Eventually.holds(within: 8) { attempts.count >= 6 })
+        let before = attempts.count
+        Thread.sleep(forTimeInterval: 0.2)
+        follower.reconnect()
+        XCTAssertTrue(
+            Eventually.holds(within: 1) { attempts.count > before },
+            "tried again at once, not after the backoff")
+    }
+
     /// No daemon at all: the state names the socket's failure, and a verb throws rather than
     /// hanging.
     func testNoDaemonIsDisconnectedAndAVerbFails() throws {
@@ -285,5 +307,21 @@ final class BenchClientTests: XCTestCase {
             model.verbFailure?.contains("no pane 1234 on the bench"), true,
             "\(model.verbFailure ?? "nil")")
         XCTAssertEqual(model.bench, before)
+    }
+}
+
+/// Disconnections a follower reported, counted from its own thread.
+private final class Attempts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+    func add() {
+        lock.lock()
+        value += 1
+        lock.unlock()
     }
 }

@@ -54,6 +54,7 @@ final class BenchdAgentScriptTests: XCTestCase {
             case "$1" in
             print) [ -e \(state)/hung ] && exit 124; [ -e \(state)/loaded ] || exit 113 ;;
             kickstart) echo $(( $(cat \(state)/pid) + 1 )) > \(state)/pid ;;
+            bootstrap) touch \(state)/up ;;
             esac
             """,
             // The scripts bound every step with `timeout`, which macOS does not ship (CI has none;
@@ -354,7 +355,10 @@ final class BenchdAgentScriptTests: XCTestCase {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let loopback = try resolve("127.0.0.1:52230", tailscale: nil)
         XCTAssertEqual(loopback.stdout, "127.0.0.1:52230 tcp://127.0.0.1:52230\n", loopback.stderr)
-        for spec in ["0.0.0.0:4519", "[::]:4519", "100.101.102.103", "no-port:"] {
+        for spec in [
+            "0.0.0.0:4519", "[::]:4519", "[::0]:4519", "*:4519", ":4519", "100.101.102.103",
+            "no-port:",
+        ] {
             let refused = try resolve(spec, tailscale: nil)
             XCTAssertNotEqual(refused.status, 0, spec)
             XCTAssertEqual(refused.stdout, "", spec)
@@ -378,5 +382,36 @@ final class BenchdAgentScriptTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: scratch.appendingPathComponent("Library/LaunchAgents").path))
+    }
+
+    /// The whole install with `--listen tailscale` in userspace mode: the plist listens on
+    /// loopback, the installer prints the tailnet URL to type into Pocket, and installing again
+    /// without `--listen` says that it stops listening rather than doing it silently.
+    func testAnInstallListensWhereTailscaleForwardsAndSaysSoWhenItStops() throws {
+        try writeFakes()
+        _ = try resolve("tailscale", tailscale: "100.98.232.17", interfaces: ["127.0.0.1"])
+        let install = [
+            scripts.appendingPathComponent("benchd-agent.sh").path, "install", "--no-build",
+        ]
+        let cargo = ["CARGO_INSTALL_ROOT": scratch.path]
+        let first = try bash(install + ["--listen", "tailscale"], environment: cargo)
+        XCTAssertEqual(first.status, 0, first.stderr)
+        XCTAssertTrue(
+            first.stdout.contains("type tcp://100.98.232.17:4519 into Pocket"), first.stdout)
+        let plist = scratch.appendingPathComponent("Library/LaunchAgents/com.wirasm.benchd.plist")
+        func listen() throws -> String? {
+            let agent = try XCTUnwrap(
+                PropertyListSerialization.propertyList(
+                    from: Data(contentsOf: plist), format: nil) as? [String: Any])
+            return (agent["EnvironmentVariables"] as? [String: String])?["BENCH_LISTEN"]
+        }
+        XCTAssertEqual(try listen(), "127.0.0.1:4519")
+
+        let again = try bash(install, environment: cargo)
+        XCTAssertEqual(again.status, 0, again.stderr)
+        XCTAssertNil(try listen())
+        XCTAssertTrue(
+            again.stdout.contains("no longer listens on 127.0.0.1:4519"),
+            "a reinstall without --listen says Pocket loses benchd: \(again.stdout)")
     }
 }

@@ -14,8 +14,10 @@
 # `tailscale` is this Mac's tailnet address (`tailscale ip -4`), port 4519 unless given, or
 # 127.0.0.1 where Tailscale runs in userspace mode and forwards the tailnet there; either way the
 # installer prints the tcp:// URL Pocket dials. The port has no login, so the tailnet is the trust
-# boundary: an install whose address cannot be resolved stops, and never falls back to 0.0.0.0 or
-# a LAN address. An install without --listen writes an agent that does not listen.
+# boundary: `tailscale` that cannot be resolved stops the install, and never falls back to
+# 0.0.0.0 or a LAN address. `<host>:<port>` is taken as the operator gives it, except an address
+# that is every interface. An install without --listen writes an agent that does not listen, and
+# says so when the one it replaces did.
 #
 # KeepAlive restarts benchd on a crash or a kill, not on a clean exit, so `bench stop` still
 # stops it until the next login or `launchctl kickstart`. Output goes to ~/Library/Logs/benchd.log.
@@ -98,7 +100,13 @@ resolve_listen() {
       echo "benchd-agent: Tailscale answered '$host', which is not a tailnet address; not listening on it" >&2
       return 2
     fi
-    if ifconfig 2>/dev/null | grep -qw "inet $host"; then
+    local interfaces
+    interfaces="$(ifconfig 2>/dev/null)"
+    if [ -z "$interfaces" ]; then
+      echo "benchd-agent: could not list this Mac's interfaces (ifconfig), so cannot tell where Tailscale delivers; not listening" >&2
+      return 2
+    fi
+    if grep -qw "inet $host" <<<"$interfaces"; then
       bind="$host"
     else
       bind=127.0.0.1
@@ -108,12 +116,13 @@ resolve_listen() {
   *:*)
     host="${spec%:*}"
     port="${spec##*:}"
-    case "$host" in
-    0.0.0.0 | "[::]" | "::" | "")
+    # Every spelling of every interface: 0.0.0.0, ::, [::0], *, and none at all.
+    local bare="${host#[}"
+    bare="${bare%]}"
+    if [ -z "$bare" ] || [ "$bare" = "*" ] || [[ "$bare" =~ ^0+(\.0+){3}$ ]] || [[ "$bare" =~ ^[0:]+$ ]]; then
       echo "benchd-agent: --listen $spec listens on every interface, and the port has no login; name the tailnet address, or use --listen tailscale" >&2
       return 2
-      ;;
-    esac
+    fi
     bind="$host"
     ;;
   *)
@@ -217,6 +226,11 @@ agent_install() {
   plist="$HOME/Library/LaunchAgents/$label.plist"
   logfile="$HOME/Library/Logs/benchd.log"
   mkdir -p "$(dirname "$plist")" "$(dirname "$logfile")"
+  local listened
+  listened="$(plutil -extract EnvironmentVariables.BENCH_LISTEN raw -o - "$plist" 2>/dev/null)"
+  if [ -n "$listened" ] && [ -z "$listen" ]; then
+    echo "benchd-agent: benchd no longer listens on $listened: Pocket cannot reach it until you install with --listen again"
+  fi
   write_plist "$plist" "$label" "$bin/benchd" "$logfile" "" "$listen" ||
     { echo "benchd-agent: could not write $plist" >&2; return 4; }
 
