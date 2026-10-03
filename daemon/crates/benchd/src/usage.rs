@@ -27,6 +27,9 @@ pub fn answer(c: &mut Core, args: &Value) -> Result<Value, String> {
     if usage.harness == Harness::Pi {
         return Err("usage/report: pi publishes no plan limits".into());
     }
+    if usage.account.is_some() && usage.harness != Harness::Claude {
+        return Err("usage/report: only a Claude plan names an account".into());
+    }
     record(c, usage);
     Ok(Value::Object(Default::default()))
 }

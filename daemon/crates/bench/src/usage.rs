@@ -9,7 +9,7 @@
 //! - **codex** writes them into its rollout, which every hook payload names
 //!   (`transcript_path`), so `bench hook codex` reads the newest record there.
 
-use bench_wire::{Harness, Usage};
+use bench_wire::{ConfigDir, Harness, Usage};
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -41,8 +41,11 @@ pub fn statusline(command: &[String]) -> i32 {
         .ok()
         .and_then(|payload| Usage::from_claude_statusline(&payload, now_ms()))
     {
-        usage.account = claude_account(std::env::var_os("CLAUDE_CONFIG_DIR"));
-        let _ = crate::quiet_request("usage/report", json!(usage));
+        // A config dir Claude would not run on names no login: better no figure than a wrong one.
+        if let Ok(account) = ConfigDir::from_env(std::env::var_os("CLAUDE_CONFIG_DIR")) {
+            usage.account = account;
+            let _ = crate::quiet_request("usage/report", json!(usage));
+        }
     }
     let child = match command.split_first() {
         None => None,
@@ -71,14 +74,6 @@ pub fn statusline(command: &[String]) -> i32 {
         Some(Ok(status)) => status.code().unwrap_or(1),
         Some(Err(_)) => 1,
     }
-}
-
-/// Which Claude login a statusline runs for: its session's `CLAUDE_CONFIG_DIR` as spelled, or
-/// none for the default login. Empty counts as unset, as it does for Claude's keychain lookup.
-fn claude_account(config_dir: Option<std::ffi::OsString>) -> Option<String> {
-    config_dir
-        .map(|d| d.to_string_lossy().into_owned())
-        .filter(|d| !d.is_empty())
 }
 
 /// What a codex hook reports about its plan's limits: the newest record in its rollout, on the

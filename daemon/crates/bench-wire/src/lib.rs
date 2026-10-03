@@ -29,6 +29,8 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod config_dir;
+pub use config_dir::ConfigDir;
 mod usage;
 pub use usage::{Usage, UsageWindow};
 
@@ -1424,7 +1426,7 @@ mod tests {
             reply
                 .usage
                 .iter()
-                .map(|u| (u.harness, u.account.as_deref()))
+                .map(|u| (u.harness, u.account.as_ref().map(ConfigDir::as_str)))
                 .collect::<Vec<_>>(),
             [
                 (Harness::Claude, None),

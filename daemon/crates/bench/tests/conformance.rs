@@ -4366,7 +4366,8 @@ fn plan_limits_reach_sessions_from_claudes_statusline_and_codexs_hook() {
 
 /// A session on a second Claude login runs the same `bench statusline` under its own
 /// `CLAUDE_CONFIG_DIR`: that login's plan is held apart, and a lower reading there replaces
-/// nothing of the default's. An empty config dir is the default login, as it is to Claude.
+/// nothing of the default's. An empty config dir is the default login, as it is to Claude, and
+/// benchd takes no account that names no login, whoever sends it.
 #[test]
 fn a_second_claude_logins_plan_limits_are_held_apart() {
     let home = TestHome::claim("usage-acct");
@@ -4383,7 +4384,7 @@ fn a_second_claude_logins_plan_limits_are_held_apart() {
         serde_json::json!({ "minutes": 300, "used_percent": used,
                             "resets_at_ms": (now_s + 3600) * 1000 })
     };
-    let _daemon = DaemonGuard::start(h, None);
+    let daemon = DaemonGuard::start(h, None);
     let second = h.join(".claude-b").display().to_string();
     let report = |five_hour: u32, config_dir: Option<&str>| {
         let env: Vec<(&str, &str)> = config_dir
@@ -4395,10 +4396,10 @@ fn a_second_claude_logins_plan_limits_are_held_apart() {
     };
     report(62, None);
     report(10, Some(&second));
-    report(5, Some(""));
+    report(70, Some(""));
     assert_eq!(
         usage_of(h, "claude"),
-        Some(serde_json::json!({ "harness": "claude", "windows": [window(62.0)] })),
+        Some(serde_json::json!({ "harness": "claude", "windows": [window(70.0)] })),
         "the default's plan, which an empty config dir also reports to"
     );
     assert_eq!(
@@ -4412,6 +4413,20 @@ fn a_second_claude_logins_plan_limits_are_held_apart() {
         None,
         "an empty config dir is no account of its own"
     );
+    let sent = |harness: &str, account: &str| {
+        let mut w = window(1.0);
+        w["at_ms"] = serde_json::json!(now_s * 1000);
+        let args = serde_json::json!({ "harness": harness, "account": account, "windows": [w] });
+        raw_request(&daemon.socket, "usage/report", args).0["status"].clone()
+    };
+    assert_eq!(
+        sent("claude", &second),
+        "ok",
+        "the control: a login's own report"
+    );
+    for (harness, account) in [("claude", ""), ("claude", "relative"), ("codex", "/x")] {
+        assert_eq!(sent(harness, account), "refused", "{harness} {account:?}");
+    }
 }
 
 #[test]

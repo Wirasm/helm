@@ -5,7 +5,7 @@
 //! harness and account ([`Usage::merge`]) and answers it in `sessions`, so helm reads no harness
 //! file.
 
-use crate::Harness;
+use crate::{ConfigDir, Harness};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -13,12 +13,11 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub harness: Harness,
-    /// Which of the harness's logins this plan is, when the operator has more than one: for
-    /// Claude, the config dir its session ran under (`CLAUDE_CONFIG_DIR`), spelled exactly as
-    /// set, because Claude keys the login's keychain item by that string. Absent for the default
-    /// login (`~/.claude`) and for codex. Two accounts are two plans: never merged.
+    /// Which Claude login this plan is, when the operator has more than one: the config dir its
+    /// session ran under. Absent for the default login (`~/.claude`), and always for codex. Two
+    /// logins are two plans: never merged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
+    pub account: Option<ConfigDir>,
     /// One per window length: Claude's five hours and seven days, codex's primary and
     /// secondary windows.
     pub windows: Vec<UsageWindow>,
@@ -103,7 +102,8 @@ impl Usage {
         })
     }
 
-    /// Take in a newer report of the same harness and account. Per window, the one that resets later wins;
+    /// Take in a newer report of the same harness and account. Per window, the one that resets
+    /// later wins;
     /// in the same window the higher reading wins, because usage inside a window only rises.
     /// So an idle session repeating an older figure, or a resumed codex session's old record,
     /// never replaces a busier one's. An equal reading only moves `at_ms` forward. A held window

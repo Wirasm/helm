@@ -345,7 +345,10 @@ struct Core {
     /// restore` needs after the restart.
     stopping: bool,
     /// Each harness's plan limits as last reported, per account (#143, `usage`).
-    usage: std::collections::BTreeMap<(bench_wire::Harness, Option<String>), bench_wire::Usage>,
+    usage: std::collections::BTreeMap<
+        (bench_wire::Harness, Option<bench_wire::ConfigDir>),
+        bench_wire::Usage,
+    >,
     /// The one codex app-server every codex agent is a thread on (#466), started on first use.
     codex: Arc<codex::Host>,
     /// Who spawned each benchd session, by session id (`attention::spawner`): what a conversation
