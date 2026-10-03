@@ -98,7 +98,11 @@ impl Agent {
     /// Take in one event. Returns the activity when it changed.
     fn observe(&mut self, args: &HookArgs, transition: Option<&Transition>) -> Option<Activity> {
         self.seen = Instant::now();
-        self.pid = args.pid;
+        // A codex on benchd's server is its session's TUI, the pid it was registered with
+        // ([`serve_codex`]); a hook's process is the shared server, which outlives every pane.
+        if !matches!(self.channel, Some(Channel::Codex)) {
+            self.pid = args.pid;
+        }
         if let Some(socket) = &args.messaging_socket {
             self.channel = Some(Channel::ClaudeSocket(PathBuf::from(socket)));
         }
@@ -147,13 +151,18 @@ pub fn serve_codex(c: &mut Core, session: &bench_session::Session) {
         None,
     );
     // What codex said about the thread before its session was here, if anything: a first turn
-    // that failed at once (a usage limit) fires no `Stop`, only a status.
-    let earlier = crate::codex::running(&c.codex).and_then(|server| server.claim(thread));
-    agent.set_activity(match earlier.as_deref() {
-        Some(status) if crate::codex::stopped(status) => Activity::Idle,
-        _ => Activity::Busy,
-    });
-    c.agents.insert(key, Some(agent));
+    // that already completed, or one that failed at once (a usage limit, only a status).
+    let earlier = crate::codex::running(&c.codex)
+        .map(|server| server.claim(thread))
+        .unwrap_or_default();
+    agent.set_activity(earlier.activity.unwrap_or(Activity::Busy));
+    c.agents.insert(key.clone(), Some(agent));
+    if earlier.ended {
+        let pane = c.bench.document.pane_showing_session(&session.id);
+        if let Err(why) = crate::attention::turn(c, &key, Some(&Transition::TurnEnded), pane) {
+            eprintln!("benchd: codex thread {thread}: its first turn's end not recorded: {why}");
+        }
+    }
 }
 
 /// What benchd's codex app-server says about one of its threads (`codex.rs`'s connection is
@@ -249,6 +258,15 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
             }
             return Ok(json!(HookReply::default()));
         }
+        // A codex the operator runs himself, in a pane, on a thread a benchd session once held:
+        // benchd's entry for it is gone with that session, and his hooks address it afresh. Only
+        // his declare a pane; benchd's server runs hooks with no `HELM_PANE`.
+        if args.harness == Harness::Codex && !served && args.pane.is_some() {
+            let benchds = matches!(c.agents.get(&key), Some(Some(a)) if matches!(a.channel, Some(Channel::Codex)));
+            if benchds {
+                c.agents.remove(&key);
+            }
+        }
         if !c.agents.contains_key(&key) {
             let channel = channel(&c, &args);
             let agent = address(&mut c, &args, &key)
@@ -316,14 +334,14 @@ pub fn answer(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Refusal> {
 /// for it as for any other agent. A codex the operator started is owned by no session and is
 /// read as it came.
 fn own_codex_thread(c: &Core, args: &mut HookArgs) -> bool {
-    // The live one: a thread re-entered by a new session after its old one exited is held by
-    // both until the old pane goes.
-    let owners = || {
-        c.sessions
-            .values()
-            .filter(|s| s.runtime_session.as_deref() == Some(args.session.as_str()))
-    };
-    let Some(session) = owners().find(|s| s.is_live()).or_else(|| owners().next()) else {
+    // Only a live one: a thread re-entered by a new session after its old one exited is held by
+    // both until the old pane goes, and a thread whose session ended is no longer benchd's (the
+    // operator may resume it on codex's own server, where only its hooks say what it does).
+    let Some(session) = c
+        .sessions
+        .values()
+        .find(|s| s.is_live() && s.runtime_session.as_deref() == Some(args.session.as_str()))
+    else {
         return false;
     };
     args.bench_session = Some(session.id.clone());

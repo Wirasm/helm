@@ -4513,9 +4513,9 @@ struct FakeCodex {
     /// The answers to the next `turn/start`s: `Some(true)` starts a turn, `Some(false)` refuses,
     /// `None` answers naming no turn. Empty starts one.
     turns: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Option<bool>>>>,
-    /// A thread status to send before answering the next `turn/start`, as codex does when a
-    /// turn fails at once (a usage limit).
-    early: std::sync::Arc<std::sync::Mutex<Option<&'static str>>>,
+    /// Notifications (method, params without the thread) to send on the thread before answering
+    /// the next `turn/start`: a turn that ends, or fails, before benchd has heard its answer.
+    early: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>,
     clients: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<std::sync::Mutex<UnixStream>>>>>,
 }
 
@@ -4568,14 +4568,14 @@ impl FakeCodex {
                                 .unwrap()
                                 .push(serde_json::json!({"method": method, "params": params}));
                         }
-                        if method == "turn/start"
-                            && let Some(status) = early.lock().unwrap().take()
-                        {
-                            server_frame(
-                                &mut writer.lock().unwrap(),
-                                &serde_json::json!({"method": "thread/status/changed",
-                                    "params": {"threadId": params["threadId"], "status": {"type": status}}}),
-                            );
+                        if method == "turn/start" {
+                            for (note, mut body) in early.lock().unwrap().drain(..) {
+                                body["threadId"] = params["threadId"].clone();
+                                server_frame(
+                                    &mut writer.lock().unwrap(),
+                                    &serde_json::json!({"method": note, "params": body}),
+                                );
+                            }
                         }
                         let reply = match answer {
                             Ok(result) => serde_json::json!({"id": id, "result": result}),
@@ -5246,13 +5246,76 @@ fn a_codex_status_sent_before_its_session_is_registered_is_not_lost() {
     let ws = workspace(h);
     trust_codex(h, &[&ws]);
     let fake = FakeCodex::bind(h);
-    *fake.early.lock().unwrap() = Some("systemError");
+    fake.early.lock().unwrap().push((
+        "thread/status/changed",
+        serde_json::json!({"status": {"type": "systemError"}}),
+    ));
     let (bin, _) = write_fake_codex(h);
     let _daemon = codex_daemon(h, &bin);
     let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
     bench(h, &["mail", "send", "--to", "cx", "--body", "one"]);
     let turns = fake.asked("turn/start", 2);
     assert_eq!(turns[1]["threadId"], spawned["runtime_session"]);
+}
+
+#[test]
+fn a_codex_first_turn_that_ends_before_its_session_is_registered_is_done() {
+    // A turn can complete before benchd has heard `turn/start`'s answer, let alone registered
+    // the session: its `turn/completed` is kept, and the agent starts done.
+    let home = TestHome::claim("cxearlydone");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let fake = FakeCodex::bind(h);
+    fake.early.lock().unwrap().extend([
+        (
+            "turn/completed",
+            serde_json::json!({"turn": {"id": "t1", "status": "completed"}}),
+        ),
+        (
+            "thread/status/changed",
+            serde_json::json!({"status": {"type": "idle"}}),
+        ),
+    ]);
+    let (bin, _) = write_fake_codex(h);
+    let _daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let e = live_entry(h, spawned["session"].as_str().unwrap());
+    assert_eq!(e["done"]["to"], "operator", "{e}");
+    assert_eq!(e["report"]["activity"]["kind"], "idle", "{e}");
+}
+
+#[test]
+fn a_codex_the_operator_resumes_himself_after_its_benchd_session_ended_reports_by_its_hooks() {
+    // A thread is benchd's only while a live session holds it. Once that session ended, the
+    // operator's own codex on it (a pane, codex's own server) is read by its hooks again.
+    let home = TestHome::claim("cxreclaim");
+    let h = &home.dir;
+    let ws = workspace(h);
+    trust_codex(h, &[&ws]);
+    let _fake = FakeCodex::bind(h);
+    let (bin, _) = write_fake_codex(h);
+    let daemon = codex_daemon(h, &bin);
+    let spawned = spawn_codex(h, &ws, &["--name", "cx"]);
+    let thread = spawned["runtime_session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+    let (_, his) = terminal_process(h, "his-codex");
+    let reply = hook_verb(
+        &daemon.socket,
+        serde_json::json!({"harness": "codex", "event": "PermissionRequest", "session": thread,
+            "cwd": ws.display().to_string(), "pid": his, "pane": HOOK_PANE}),
+    );
+    assert_eq!(reply["handle"], "cx", "the mailbox it had: {reply}");
+    assert!(
+        event_kinds(h).iter().any(|(k, d)| k == "agent/state"
+            && d["session"] == thread.as_str()
+            && d["event"] == "PermissionRequest"),
+        "his hook says what it does"
+    );
 }
 
 /// A benchd-spawned codex is listed by its thread, and once it ends by its rollout; `bench log`
