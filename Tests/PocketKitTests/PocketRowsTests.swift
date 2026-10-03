@@ -22,6 +22,17 @@ final class PocketRowsTests: XCTestCase {
         .running(activity: activity, detail: detail)
     }
 
+    /// A chat looks for a prompt's choices only when the agent says it waits: mail to him asks
+    /// for him too, but the screen behind it holds no prompt, and numbered lines in a reply there
+    /// must not become buttons that type into the agent.
+    func testOnlyAWaitingAgentHasAPromptToAnswer() {
+        let mail = BenchOperatorMail(unread: 1, since: Date(timeIntervalSince1970: 1))
+        XCTAssertTrue(row("x", running("waiting", "permission prompt")).waitsAtPrompt)
+        XCTAssertFalse(row("x", running("idle"), mail: mail).waitsAtPrompt)
+        XCTAssertFalse(row("x", running("busy")).waitsAtPrompt)
+        XCTAssertFalse(row("x", .finished(atMs: 1)).waitsAtPrompt)
+    }
+
     /// What a row wants from the operator, from what benchd says of it (#623): ● it waits on him
     /// (a prompt, a block, or mail to him unread), ✓ its turn ended and he has not looked, ○ it
     /// works; then, dimmed, ✓ a turn he has seen and ✓ a session that ended. Every activity word

@@ -148,7 +148,7 @@ struct ChatRowView: View {
     var body: some View {
         let attention = Attention(row)
         let preview = model.previews[row.id]
-        let unread = preview?.isUnread(openedAtMs: memory.opened[row.id]) ?? false
+        let unread = preview?.isUnread(readThrough: memory.readThrough[row.id]) ?? false
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(attention.glyph).foregroundStyle(Palette.of(attention))
             VStack(alignment: .leading, spacing: 1) {

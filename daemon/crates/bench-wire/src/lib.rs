@@ -61,10 +61,10 @@ pub use just::{
 mod sessions;
 pub use sessions::{
     Activity, AttentionRecord, DISMISSED_RECORD_FORMAT, DISMISSED_RECORD_VERSION, Dismissal,
-    DismissedRecord, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host, HostedRecord,
-    HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList, SessionLog,
-    SessionLogArgs, SessionLogEntry, SessionRow, SessionState, SessionsArgs, Spawner, Unreadable,
-    dismissed_path, hosted_path, sessions_dir,
+    DismissedRecord, EntryKind, HOSTED_RECORD_FORMAT, HOSTED_RECORD_VERSION, Harness, Host,
+    HostedRecord, HostedSession, HostedVia, MailAddress, OpenAction, SessionKey, SessionList,
+    SessionLog, SessionLogArgs, SessionLogEntry, SessionRow, SessionState, SessionsArgs, Spawner,
+    Unreadable, dismissed_path, hosted_path, sessions_dir,
 };
 
 /// This build of the bench, as `status.version` and `bench --version` both say it. helm runs
@@ -1340,6 +1340,17 @@ mod tests {
         assert!(
             reply.entries.iter().any(|e| e.tool.is_some()),
             "a tool entry pins `tool`"
+        );
+        let kinds: Vec<EntryKind> = reply.entries.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                EntryKind::User,
+                EntryKind::Tool,
+                EntryKind::Error,
+                EntryKind::Agent
+            ],
+            "every kind crosses the wire, so a rename on one side fails the other"
         );
     }
 

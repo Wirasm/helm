@@ -31,10 +31,11 @@ package struct PromptChoices: Equatable, Sendable {
         }
         guard let first = options.first, options.count >= 2 else { return nil }
         let question = bottom[..<first.0].last { $0.hasSuffix("?") }
-        let after = bottom[first.0...].joined(separator: " ").lowercased()
+        let words = bottom[first.0...].joined(separator: " ").lowercased()
+            .split { !$0.isLetter }
         return PromptChoices(
             question: question, choices: options.map(\.1),
-            canEscape: after.contains("esc"))
+            canEscape: words.contains("esc"))
     }
 
     /// `❯ 1. Yes` or `2. No`: a digit, a dot, the label; a cursor mark in front is allowed.
@@ -65,7 +66,10 @@ package struct ChatLog: Equatable, Sendable {
     /// Whether the transcript holds entries before the oldest read.
     package var hasOlder: Bool { (oldest ?? 0) > 0 }
 
+    /// A page whose transcript holds no more entries than the newest read means the file was
+    /// rewritten under the cursor: what was read is dropped, and the next ask starts over.
     package mutating func merge(_ page: BenchSessionLog) {
+        if let newest, page.total <= newest { entries = [] }
         var byIndex = Dictionary(entries.map { ($0.index, $0) }, uniquingKeysWith: { a, _ in a })
         for entry in page.entries { byIndex[entry.index] = entry }
         entries = byIndex.values.sorted { $0.index < $1.index }
@@ -77,8 +81,9 @@ package struct ChatPreview: Equatable, Sendable {
     package var text: String
     /// His own prompt, rather than the agent's reply.
     package var mine: Bool
-    /// When it was written, from the transcript's timestamp.
-    package var atMs: UInt64?
+    /// Its place in the transcript, which says whether he has read it.
+    package var index: Int
+    package var atMs: UInt64
 
     package init?(_ log: BenchSessionLog) {
         guard let last = log.entries.last(where: { $0.kind == .user || $0.kind == .agent })
@@ -86,20 +91,13 @@ package struct ChatPreview: Equatable, Sendable {
         text = String(
             last.text.split(separator: "\n", omittingEmptySubsequences: true).first ?? "")
         mine = last.kind == .user
-        atMs = Self.epochMs(last.at)
+        index = last.index
+        atMs = last.atMs
     }
 
-    /// The agent replied after he last opened the chat (or he never has).
-    package func isUnread(openedAtMs: UInt64?) -> Bool {
-        guard !mine, let atMs else { return false }
-        return openedAtMs.map { atMs > $0 } ?? true
-    }
-
-    private static func epochMs(_ text: String) -> UInt64? {
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = precise.date(from: text) ?? ISO8601DateFormatter().date(from: text)
-        else { return nil }
-        return UInt64(max(0, date.timeIntervalSince1970 * 1000))
+    /// The agent replied past the last entry he had on screen (`readThrough`), or he never opened
+    /// the chat. Indices, not clocks: the transcript's and the phone's need not agree.
+    package func isUnread(readThrough: Int?) -> Bool {
+        !mine && index > (readThrough ?? -1)
     }
 }

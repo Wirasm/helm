@@ -231,14 +231,28 @@ pub struct SessionLog {
     pub unreadable: usize,
 }
 
+/// What a transcript entry is: the one spelling `bench log`, `sessions/log` and helm's copy
+/// (`BenchLogEntry.Kind`) share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    /// A prompt: the operator's, a spawner's, or a notice the harness delivered as a turn.
+    User,
+    /// The agent's text reply.
+    Agent,
+    /// A tool call: `tool` is its name and `text` a short argument.
+    Tool,
+    /// A failed tool call (`tool` names it) or an error the harness recorded.
+    Error,
+}
+
 /// One entry of a transcript (`bench_sessions::transcript::Entry`) and its place in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionLogEntry {
     pub index: usize,
-    /// The record's own timestamp, as written.
-    pub at: String,
-    /// `user` (a prompt), `agent` (a reply), `tool` (one tool call) or `error`.
-    pub kind: String,
+    /// When it was written, in epoch ms, from the record's own timestamp.
+    pub at_ms: u64,
+    pub kind: EntryKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     pub text: String,

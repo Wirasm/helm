@@ -56,6 +56,8 @@ package struct BenchSessionLog: Decodable, Equatable, Sendable {
 
 /// One transcript entry (`bench_wire::SessionLogEntry`) and its index, the cursor.
 package struct BenchLogEntry: Decodable, Equatable, Sendable, Identifiable {
+    /// `bench_wire::EntryKind`. A kind this build does not know fails the page's decoding, as
+    /// a payload that grows a kind should.
     package enum Kind: String, Decodable, Sendable {
         /// A prompt: the operator's, a spawner's, or a notice delivered as a turn.
         case user
@@ -68,16 +70,22 @@ package struct BenchLogEntry: Decodable, Equatable, Sendable, Identifiable {
     }
 
     package var index: Int
-    package var at: String
+    /// When it was written, in epoch ms, by the clock of the machine the agent runs on.
+    package var atMs: UInt64
     package var kind: Kind
     package var tool: String?
     package var text: String
 
     package var id: Int { index }
 
-    package init(index: Int, at: String, kind: Kind, tool: String? = nil, text: String) {
+    private enum CodingKeys: String, CodingKey {
+        case index, kind, tool, text
+        case atMs = "at_ms"
+    }
+
+    package init(index: Int, atMs: UInt64, kind: Kind, tool: String? = nil, text: String) {
         self.index = index
-        self.at = at
+        self.atMs = atMs
         self.kind = kind
         self.tool = tool
         self.text = text

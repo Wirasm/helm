@@ -79,7 +79,6 @@ struct Composer: View {
         .padding(.bottom, 8)
         .overlay(alignment: .top) { Palette.line.frame(height: 1) }
         .onAppear(perform: open)
-        .onChange(of: chat) { open() }
         .onChange(of: draft) { memory.keep(draft, for: chat) }
     }
 
@@ -91,14 +90,16 @@ struct Composer: View {
 
     private func send() {
         let text = draft
-        let chat = chat
         guard let target, !text.isEmpty, !sending else { return }
         sending = true
         Task {
             let refusal = await model.send(.message(text), to: target)
             refused = refusal?.description
-            if refusal == nil || refusal?.maybeSent == true, self.chat == chat, draft == text {
-                draft = ""
+            // Gone, or maybe gone: off this chat's draft, even if he has moved to another chat
+            // meanwhile, so it is never offered to send twice.
+            if refusal == nil || refusal?.maybeSent == true {
+                if memory.draft(chat) == text { memory.keep("", for: chat) }
+                if draft == text { draft = "" }
             }
             sending = false
         }

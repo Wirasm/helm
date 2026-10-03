@@ -29,18 +29,8 @@ const TOOL_ARG_CHARS: usize = 120;
 /// An error is cut to this many characters.
 const ERROR_CHARS: usize = 300;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    /// A prompt: the operator's, a spawner's, or a notice the harness delivered as a turn.
-    User,
-    /// The agent's text reply.
-    Agent,
-    /// A tool call: `tool` is its name and `text` a short argument.
-    Tool,
-    /// A failed tool call (`tool` names it) or an error the harness recorded.
-    Error,
-}
+/// What an entry is; its spelling is the wire's (`sessions/log`).
+pub use bench_wire::EntryKind as Kind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Entry {

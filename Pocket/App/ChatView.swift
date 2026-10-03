@@ -10,13 +10,10 @@ struct ChatView: View {
     enum Mode: String { case chat, screen }
 
     @EnvironmentObject private var model: PocketModel
-    @EnvironmentObject private var memory: ChatMemory
     @Environment(\.dismiss) private var dismiss
     /// The session id, as `sessions/all` and `sessions/log` name it.
     @State var chat: String
-    @State private var log = ChatLog()
     @State private var mode = Mode.chat
-    @State private var prompt: PromptChoices?
     @State private var switching = false
 
     private var row: BenchSessionRow? {
@@ -28,12 +25,9 @@ struct ChatView: View {
             header
             switch mode {
             case .chat:
-                MessagesView(log: $log, chat: chat)
-                    .simultaneousGesture(swipe)
-                if let prompt, let target = row?.screen {
-                    ChoicesBar(shown: $prompt, prompt: prompt, target: target)
-                }
-                Composer(chat: chat, target: row?.screen)
+                // A pane per chat: a switch leaves the last one's state, and any answer still on
+                // its way to it, behind.
+                ChatPane(chat: chat).id(chat).simultaneousGesture(swipe)
             case .screen:
                 if let target = row?.screen { ScreenPane(target: target) }
             }
@@ -45,7 +39,6 @@ struct ChatView: View {
         .sheet(isPresented: $switching) {
             SwitcherView { chat = $0 }
         }
-        .task(id: chat) { await follow() }
     }
 
     private var header: some View {
@@ -94,29 +87,61 @@ struct ChatView: View {
         }
     }
 
+}
+
+/// One chat's conversation, its waiting prompt's choices and its field. Its state is this chat's
+/// alone (`ChatView` gives each chat a pane of its own).
+struct ChatPane: View {
+    @EnvironmentObject private var model: PocketModel
+    @EnvironmentObject private var memory: ChatMemory
+    let chat: String
+    @State private var log = ChatLog()
+    @State private var prompt: PromptChoices?
+    @State private var failure: String?
+
+    private var row: BenchSessionRow? {
+        model.sessions.values.joined().first { $0.id == chat }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let failure { Text(failure).font(Mono.small).foregroundStyle(Palette.asking) }
+            MessagesView(log: $log, chat: chat)
+            if let prompt, let target = row?.screen {
+                ChoicesBar(shown: $prompt, prompt: prompt, target: target)
+            }
+            Composer(chat: chat, target: row?.screen)
+        }
+        .task { await follow() }
+    }
+
     /// The last page, then every second and a half whatever came after it; and, while the agent
-    /// asks, its prompt's choices off the screen. Having the chat open is reading it.
+    /// waits on a prompt, its choices off the screen. Having the chat open is reading it.
     private func follow() async {
-        log = ChatLog()
-        prompt = nil
-        if case let .success(page) = await model.log(chat, page: .last) { log.merge(page) }
-        memory.read(chat)
+        await load(.last)
         if let row, Attention(row) == .finished {
             _ = await model.markSeen(harness: row.harness, session: row.id)
         }
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(1500))
-            let page: BenchSessionLogRequest.Page = log.newest.map { .after($0) } ?? .last
-            if case let .success(next) = await model.log(chat, page: page), !next.entries.isEmpty {
-                log.merge(next)
-                memory.read(chat)
-            }
+            await load(log.newest.map { .after($0) } ?? .last)
             prompt = await choices()
         }
     }
 
+    private func load(_ page: BenchSessionLogRequest.Page) async {
+        switch await model.log(chat, page: page) {
+        case let .success(next):
+            failure = nil
+            log.merge(next)
+            if let newest = log.newest { memory.read(chat, through: newest) }
+        case let .failure(why):
+            failure = why.description
+        }
+    }
+
     private func choices() async -> PromptChoices? {
-        guard let row, Attention(row) == .asking, let target = row.screen,
+        guard let row, row.waitsAtPrompt, let target = row.screen,
             case let .success(screen) = await model.screen(target)
         else { return nil }
         return PromptChoices.read(screen.lines)
@@ -129,6 +154,9 @@ struct MessagesView: View {
     @EnvironmentObject private var model: PocketModel
     @Binding var log: ChatLog
     let chat: String
+    /// The entry at the bottom of the view: new entries scroll in only while it is the newest,
+    /// so reading back is not pulled down by the agent's next line.
+    @State private var shown: Int?
 
     var body: some View {
         ScrollViewReader { reader in
@@ -140,11 +168,14 @@ struct MessagesView: View {
                     }
                     ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
                 }
+                .scrollTargetLayout()
                 .padding(.vertical, 6)
             }
             .defaultScrollAnchor(.bottom)
-            .onChange(of: log.newest) { _, newest in
-                if let newest { reader.scrollTo(newest, anchor: .bottom) }
+            .scrollPosition(id: $shown, anchor: .bottom)
+            .onChange(of: log.newest) { old, newest in
+                guard let newest, shown == nil || shown == old else { return }
+                reader.scrollTo(newest, anchor: .bottom)
             }
         }
     }

@@ -13120,6 +13120,7 @@ fn sessions_log_pages_a_transcript_by_index_and_refuses_a_path() {
         })
         .collect();
     assert_eq!(kinds, [(1, "tool".to_string()), (2, "agent".to_string())]);
+    assert_eq!(last["data"]["entries"][0]["at_ms"], 1_791_028_800_000u64);
 
     let back = ask(serde_json::json!({"id": "c-7e2d", "before": 1}));
     assert_eq!(back["data"]["entries"][0]["text"], "run the gate", "{back}");
@@ -13142,8 +13143,13 @@ fn sessions_log_pages_a_transcript_by_index_and_refuses_a_path() {
 
     let path = ask(serde_json::json!({"id": transcript.display().to_string()}));
     assert_eq!(path["status"], "refused", "{path}");
+    let both = ask(serde_json::json!({"id": "c-7e2d", "before": 2, "after": 0}));
+    assert_eq!(both["status"], "refused", "{both}");
+    // A refusal names the id, never where benchd looked: the client is over TCP.
     let unknown = ask(serde_json::json!({"id": "nobody"}));
     assert_eq!(unknown["status"], "refused", "{unknown}");
+    let home_dir = home.dir.display().to_string();
+    assert!(!unknown.to_string().contains(&home_dir), "{unknown}");
 }
 
 /// `BENCH_LISTEN` is benchd's own: a session it spawns never inherits it, or a test benchd an

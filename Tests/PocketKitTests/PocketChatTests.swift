@@ -53,6 +53,9 @@ final class PocketChatTests: XCTestCase {
         XCTAssertNil(PromptChoices.read(try screen("pi-trust")))
         // One numbered line is a list item in a reply, not a choice.
         XCTAssertNil(PromptChoices.read(["Next:", "1. Merge #640", "> "]))
+        // A label that merely holds the letters is not an Esc hint.
+        let lines = ["Apply?", "1. Yes", "2. Edit src/descriptions.rs"]
+        XCTAssertFalse(try XCTUnwrap(PromptChoices.read(lines)).canEscape)
         // Numbered lines of an agent's reply, far above the bottom, are not a prompt.
         let reply = ["Here is the plan:", "1. Read", "2. Write"] + Array(repeating: "x", count: 25)
         XCTAssertNil(PromptChoices.read(reply))
@@ -62,7 +65,7 @@ final class PocketChatTests: XCTestCase {
     /// overlap or arrive.
     func testPagesMergeInOrderEachEntryOnce() {
         func entry(_ index: Int) -> BenchLogEntry {
-            BenchLogEntry(index: index, at: "", kind: .agent, text: "\(index)")
+            BenchLogEntry(index: index, atMs: 0, kind: .agent, text: "\(index)")
         }
         var log = ChatLog()
         XCTAssertNil(log.newest)
@@ -75,36 +78,37 @@ final class PocketChatTests: XCTestCase {
         XCTAssertTrue(log.hasOlder)
         log.merge(BenchSessionLog(total: 12, entries: (0...3).map(entry)))
         XCTAssertFalse(log.hasOlder)
+        // The file was rewritten shorter: following `after: 11` would bring nothing, ever.
+        log.merge(BenchSessionLog(total: 5, entries: []))
+        XCTAssertNil(log.newest, "what was read is dropped, so the next ask is the last page")
+        log.merge(BenchSessionLog(total: 5, entries: (0...4).map(entry)))
+        XCTAssertEqual(log.entries.map(\.index), Array(0...4))
     }
 
-    /// A chat's preview is its last message, his or the agent's, never a tool line; its time is
-    /// what unread compares with when he last opened it.
-    func testThePreviewIsTheLastMessageAndUnreadIsAReplyAfterHeLastLooked() throws {
+    /// A chat's preview is its last message, his or the agent's, never a tool line; it is unread
+    /// while its index is past the last entry he had on screen.
+    func testThePreviewIsTheLastMessageAndUnreadIsAReplyPastWhatHeRead() throws {
         let log = BenchSessionLog(
             total: 3,
             entries: [
-                BenchLogEntry(index: 0, at: "2026-10-03T12:00:00.000Z", kind: .user, text: "go"),
-                BenchLogEntry(
-                    index: 1, at: "2026-10-03T12:05:00.000Z", kind: .agent,
-                    text: "Done.\nDetails follow."),
-                BenchLogEntry(
-                    index: 2, at: "2026-10-03T12:06:00Z", kind: .tool, tool: "Bash", text: "ls"),
+                BenchLogEntry(index: 0, atMs: 1, kind: .user, text: "go"),
+                BenchLogEntry(index: 1, atMs: 2, kind: .agent, text: "Done.\nDetails follow."),
+                BenchLogEntry(index: 2, atMs: 3, kind: .tool, tool: "Bash", text: "ls"),
             ])
         let preview = try XCTUnwrap(ChatPreview(log))
         XCTAssertEqual(preview.text, "Done.")
         XCTAssertFalse(preview.mine)
-        let replied = try XCTUnwrap(preview.atMs)
-        XCTAssertTrue(preview.isUnread(openedAtMs: nil))
-        XCTAssertTrue(preview.isUnread(openedAtMs: replied - 1))
-        XCTAssertFalse(preview.isUnread(openedAtMs: replied))
+        XCTAssertEqual(preview.atMs, 2)
+        XCTAssertTrue(preview.isUnread(readThrough: nil), "never opened")
+        XCTAssertTrue(preview.isUnread(readThrough: 0))
+        XCTAssertFalse(preview.isUnread(readThrough: 1))
+        XCTAssertFalse(preview.isUnread(readThrough: 2))
         let own = try XCTUnwrap(
             ChatPreview(
                 BenchSessionLog(
-                    total: 1,
-                    entries: [
-                        BenchLogEntry(index: 0, at: "2026-10-03T12:00:00Z", kind: .user, text: "hi")
-                    ])))
+                    total: 1, entries: [BenchLogEntry(index: 0, atMs: 1, kind: .user, text: "hi")]
+                )))
         XCTAssertTrue(own.mine)
-        XCTAssertFalse(own.isUnread(openedAtMs: nil), "his own message is never unread")
+        XCTAssertFalse(own.isUnread(readThrough: nil), "his own message is never unread")
     }
 }

@@ -20,7 +20,7 @@ final class BenchSessionLogWireTests: XCTestCase {
 
     func testTheLogRequestAndAnswerAreSpelledAsTheDaemonSpellsThem() throws {
         let samples = try fixture()
-        let request = BenchSessionLogRequest(id: "pocket-1", session: "c-7e2d", page: .after(1))
+        let request = BenchSessionLogRequest(id: "pocket-1", session: "c-7e2d", page: .after(0))
         XCTAssertEqual(
             try plain(JSONSerialization.jsonObject(with: JSONEncoder().encode(request))),
             try plain(XCTUnwrap(samples["request"])))
@@ -28,15 +28,19 @@ final class BenchSessionLogWireTests: XCTestCase {
         let reply = try JSONDecoder().decode(
             BenchSessionLog.self,
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["reply"])))
-        XCTAssertEqual(reply.total, 4)
+        XCTAssertEqual(reply.total, 5)
         XCTAssertEqual(
             reply.entries,
             [
+                BenchLogEntry(index: 1, atMs: 1_791_028_800_000, kind: .user, text: "run the gate"),
                 BenchLogEntry(
-                    index: 2, at: "2026-10-03T12:01:00.000Z", kind: .tool, tool: "Bash",
+                    index: 2, atMs: 1_791_028_830_000, kind: .tool, tool: "Bash",
                     text: "just check"),
                 BenchLogEntry(
-                    index: 3, at: "2026-10-03T12:02:00.000Z", kind: .agent,
+                    index: 3, atMs: 1_791_028_845_000, kind: .error, tool: "Bash",
+                    text: "exit 1: daemon FAIL"),
+                BenchLogEntry(
+                    index: 4, atMs: 1_791_028_860_000, kind: .agent,
                     text: "The gate is **green**.\n\n- lint PASS\n- swift PASS"),
             ])
     }

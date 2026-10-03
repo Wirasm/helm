@@ -24,9 +24,8 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var pages: [PocketPage] = []
     /// Each running chat's last message, by session id (`sessions/log`), for the chats list.
     @Published package private(set) var previews: [String: ChatPreview] = [:]
-    /// The row each preview was read for, by `updatedAtMs`: a row that has not changed since is
-    /// not read again.
-    private var previewed: [String: UInt64] = [:]
+    /// When each preview was last asked for, and the row's `updatedAtMs` then (`refreshPreviews`).
+    private var previewed: [String: (updatedAtMs: UInt64, at: Date)] = [:]
     /// The canvases on the bench an agent opened, standardized: a reply to one is mailed to it.
     @Published private var opened: Set<String> = []
 
@@ -238,21 +237,33 @@ package final class PocketModel: ObservableObject {
         return await Self.ask(request, at: endpoint, BenchSessionLog.self)
     }
 
-    /// The last message of every running session whose row changed since it was last read.
-    package func refreshPreviews() async {
+    /// How long a preview stands before it is asked for again although its row did not change.
+    /// `updatedAtMs` is not a change signal for every row: a codex or pi agent benchd spawned keeps
+    /// its spawn time, so its replies are found this way.
+    package static let previewStanding: TimeInterval = 10
+
+    /// The last message of every running session whose row changed since it was last asked for,
+    /// or that has not been asked for in `previewStanding`. A failed read leaves the old preview,
+    /// and so does a page of tool lines only.
+    package func refreshPreviews(now: Date = Date()) async {
         let running = sessions.values.joined().filter {
             if case .running = $0.state { true } else { false }
         }
         guard let asked = client else { return }
-        for row in running where previewed[row.id] != row.updatedAtMs {
+        for row in running {
+            if let last = previewed[row.id], last.updatedAtMs == row.updatedAtMs,
+                now.timeIntervalSince(last.at) < Self.previewStanding
+            {
+                continue
+            }
             // A short page: the last message is near the end, behind a few tool lines at most.
             let page = await log(row.id, page: .last, limit: 20)
             // A reconnect to another benchd while this was asked answers for the old one.
             guard client === asked else { return }
-            // Read once per change either way: a session with no transcript to find is not asked
-            // again every two seconds.
-            previewed[row.id] = row.updatedAtMs
-            if case let .success(log) = page { previews[row.id] = ChatPreview(log) }
+            previewed[row.id] = (row.updatedAtMs, now)
+            if case let .success(log) = page, let preview = ChatPreview(log) {
+                previews[row.id] = preview
+            }
         }
     }
 
