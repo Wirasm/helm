@@ -32,19 +32,24 @@ The `bench` CLI is on your PATH or named by `$BENCH`. The `bench-panes`, `bench-
 
 ## 2. Pick the harness and model
 
-Read `references/harnesses.md` before the first spawn of a run. The short version, verified
-2026-10-01:
+Read `references/harnesses.md` before the first spawn of a run: it has every job's default and
+alternatives with the evidence behind them, the plan limits, and how to verify a model name. The
+operator's word always wins. Otherwise take the default, or override it with a reason written in
+the run file's Workstreams row. The short version, names verified 2026-10-03:
 
-| Job | Spawn |
-|---|---|
-| Delivery (`prp-issue`), and anything touching wire formats, daemon state, isolation or data loss | `--agent claude --model opus --effort high` |
-| Spike, plan, debugging | `--agent claude --model opus --effort high`, or `--agent codex --model gpt-6-sol --effort high` for a second opinion from another model family |
-| Mechanical work: a rebase, conflict catch-up, a doc fix | `--agent claude --model sonnet --effort medium` or `--agent codex --model gpt-6-luna` |
-| A question about an agent's work | `--fork <its runtime session>`, with its own `--agent`: a read-only copy, and the author is not disturbed |
-| A model only pi reaches, or work on pi itself | `--agent pi --model <provider/id>` |
+| Job | Default | Alternatives |
+|---|---|---|
+| Delivery (`prp-issue`), UI, spike, review, research | `--agent claude --model opus --effort high` | `gpt-6.1-sol` `high` on codex or pi (`openai-codex/gpt-6.1-sol`) |
+| Wire formats, daemon state, isolation, data loss | `--agent claude --model opus --effort high` (`xhigh` after a failed round) | `--agent codex --model gpt-6.1-sol --effort xhigh`, reviewed by claude |
+| Hard diagnosis that failed once on opus | `--agent claude --model fable --effort xhigh` | `--model opus --effort max` |
+| Mechanical work: a rebase, conflict catch-up, a doc fix | `--agent claude --model sonnet --effort medium` | `--agent codex --model gpt-6-luna --effort medium` |
+| A question about an agent's work | `--fork <its runtime session>`, with its own `--agent`: a read-only copy, and the author is not disturbed | |
+| A model only pi reaches, or work on pi itself | `--agent pi --model <provider/id>` | |
 
-Model names change. Verify a name with the one-line check in the reference before spawning a
-fleet on it: codex starts with any name and fails at its first turn, inside the pane.
+When Claude's plan window is near its limit, move the next deliveries to `gpt-6.1-sol` rather
+than queue them: `bench sessions` carries each harness's windows in `usage`. Model names change.
+Verify a name with the one-line check in the reference before spawning a fleet on it: codex
+starts with any name and fails at its first turn, inside the pane.
 
 ## 3. Give each workstream a worktree
 
@@ -204,9 +209,9 @@ re-arm what you had running. Mail an agent only when its state or next step has 
 
 ## Resources
 
-- `references/harnesses.md` — per harness: model names, effort levels, resume and fork, which
-  skills it can see, how its mail and state work, and how to verify a model name. Read before the
-  first spawn.
+- `references/harnesses.md` — which harness, model and effort for each job, with the evidence;
+  plan limits and cost; per harness: flags, resume and fork, which skills it can see, and how to
+  verify a model name. Read before the first spawn.
 - `references/briefs.md` — the brief every agent gets, and templates for a delivery, a spike, a
   review and a fix after review. Read before writing a brief.
 - `references/merge-and-release.md` — verifying a PR, the Archon merge queue, conflict catch-up,
