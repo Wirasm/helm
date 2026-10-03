@@ -286,6 +286,8 @@ final class BenchdAgentScriptTests: XCTestCase {
             answer.map { "[ \"$*\" = \"\(expected)\" ] || exit 9\necho '\($0)'" }
             ?? "echo 'Tailscale is stopped.' >&2\nexit 1"
         let fakes = [
+            // macOS ships no `timeout`, and CI's runner has none: as `writeFakes` has it.
+            "timeout": #"shift; exec "$@""#,
             "tailscale": body,
             "ifconfig": interfaces.map { "echo '\tinet \($0) netmask 0xffffffff'" }
                 .joined(separator: "\n"),
