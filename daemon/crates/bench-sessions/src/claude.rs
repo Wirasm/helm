@@ -157,48 +157,56 @@ pub fn holder(home: &Path, session: &str) -> Result<Option<u32>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("cannot list {}: {e}", dir.display())),
     };
-    let mut unreadable = None;
+    let mut unreadable = Vec::new();
     for path in entries.flatten().map(|entry| entry.path()) {
         if path.extension().is_none_or(|e| e != "json") {
             continue;
         }
         match holder_fields(&path) {
-            Some((id, pid, started)) if id == session => {
+            Ok((id, pid, started)) if id == session => {
                 if crate::process::alive(pid, Some(started)) {
                     return Ok(Some(pid));
                 }
             }
-            Some(_) => {}
-            None => {
+            Ok(_) => {}
+            Err(why) => {
                 let owner = path.file_stem().and_then(|n| n.to_str()?.parse().ok());
                 if owner.is_some_and(|pid| crate::process::alive(pid, None)) {
-                    unreadable = Some(path);
+                    unreadable.push(format!("{}: {why}", path.display()));
                 }
             }
         }
     }
-    match unreadable {
-        Some(path) => Err(format!(
-            "Claude's registry row {} cannot be read",
-            path.display()
-        )),
-        None => Ok(None),
+    if unreadable.is_empty() {
+        return Ok(None);
     }
+    Err(format!(
+        "Claude's registry cannot be read ({})",
+        unreadable.join("; ")
+    ))
 }
 
-/// A registry row's `sessionId`, `pid` and `startedAt`. Claude rewrites a row in place (its inode
-/// survives every status change), so a row that does not parse may be mid-write and is read again.
-fn holder_fields(path: &Path) -> Option<(String, u32, u64)> {
+/// A registry row's `sessionId`, `pid` and `startedAt`, or what is wrong with it. Claude rewrites
+/// a row in place (its inode survives every status change), so a row that does not parse may be
+/// mid-write and is read again.
+fn holder_fields(path: &Path) -> Result<(String, u32, u64), String> {
     let read = || {
-        let row: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
-        let pid = u32::try_from(row["pid"].as_u64()?).ok()?;
-        Some((
-            row["sessionId"].as_str()?.to_string(),
-            pid,
-            row["startedAt"].as_u64()?,
-        ))
+        let row: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("not JSON: {e}"))?;
+        let field = |k: &str| row.get(k).ok_or(format!("no {k:?}"));
+        let pid = field("pid")?
+            .as_u64()
+            .and_then(|p| u32::try_from(p).ok())
+            .ok_or("\"pid\" is not a pid")?;
+        let session = field("sessionId")?
+            .as_str()
+            .ok_or("\"sessionId\" is not text")?;
+        let started = field("startedAt")?
+            .as_u64()
+            .ok_or("\"startedAt\" is not a number")?;
+        Ok((session.to_string(), pid, started))
     };
-    read().or_else(|| {
+    read().or_else(|_: String| {
         std::thread::sleep(std::time::Duration::from_millis(20));
         read()
     })
@@ -716,6 +724,7 @@ mod tests {
         fs::remove_dir_all(&home).unwrap();
         assert_eq!(held, Ok(Some(pid)));
         assert_eq!(stale, Ok(None));
-        assert!(unknown.is_err(), "{unknown:?}");
+        let unknown = unknown.unwrap_err();
+        assert!(unknown.contains("not JSON"), "says why: {unknown}");
     }
 }
