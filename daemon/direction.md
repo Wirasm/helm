@@ -142,8 +142,11 @@ TUI cannot attach to a thread with no turn yet), and the pane runs `codex resume
 --remote unix://<root>/codex.sock`. codex runs every hook with the server's environment, so a
 hook names its agent only by its thread, and benchd knows every thread it made. benchd holds one
 connection to the server, the one that made every thread, so codex sends it every thread's
-status; mail wakes an idle codex with `turn/start` there, and a turn that ends without a `Stop`
-(a usage limit) is seen in its `thread/status/changed`. A TUI that resumes against a remote
+typed events, and they say what the codex is doing (#357): `turn/started` is busy,
+`turn/completed` is a finished turn (one interrupted or failed is idle), and
+`thread/status/changed` is waiting on an approval or on the user's input, busy, or idle (a turn
+refused by a usage limit fires no `Stop`, only `systemError`). Its hooks then only hand out mail
+and say the session ended. Mail wakes an idle codex with `turn/start` on the same connection. A TUI that resumes against a remote
 server reviews hooks at startup whatever `--dangerously-bypass-hook-trust` says, so the server
 starts with the trust: benchd asks `hooks/list` which hooks need review and passes their current
 hashes as a `-c hooks.state=…` override, the form codex's own `/hooks` saves, without saving it;
@@ -345,8 +348,8 @@ place); it moves his focus, so an agent needs `asked`.
 
 **And what else needs someone: a finished turn, and mail to the operator (M1, #357).** Each session
 in `sessions` and each running row in `sessions/all` also carries `done` when its agent's turn
-ended (a typed signal: Claude's and codex's `Stop`, pi's `agent_settled`; never the last message
-read as prose) and it has not started another, and `operator_mail` when its mailbox sent the
+ended (a typed signal: Claude's `Stop`; for a codex on benchd's app-server its `turn/completed`,
+else its `Stop`; pi's `agent_settled`; never the last message read as prose) and it has not started another, and `operator_mail` when its mailbox sent the
 operator mail he has not read. `done.to` is whose it is: the agent that spawned it (benchd resolves
 the spawner from who asked: `BENCH_HANDLE`, else the mailbox in the asking pane; a `--resume` by
 another agent makes it that agent's), or `operator`; each `sessions/all` row also names its
