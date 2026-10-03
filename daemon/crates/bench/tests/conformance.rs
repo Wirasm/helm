@@ -9323,6 +9323,33 @@ fn a_refused_resume_never_recreates_its_worktree() {
 }
 
 #[test]
+fn a_claude_never_written_in_gets_no_worktree_back_either() {
+    // restore refuses it after `plan`, and only Claude's transcript names the branch a worktree
+    // would come back on: no transcript, no branch, no `git worktree add`.
+    let home = TestHome::claim("resume-unwritten-wt");
+    let (repo, wt) = claude_in_a_worktree(&home.dir);
+    let (record, _runs) = recording_where(&home.dir);
+    {
+        let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+        let spawned = bench(
+            &home.dir,
+            &[
+                "spawn", "--agent", "claude", "--cwd", &wt, "--resume", "c-wt",
+            ],
+        );
+        assert_eq!(spawned.code, 0, "{}", spawned.stderr);
+    }
+    fs::remove_dir_all(home.dir.join(".claude/projects")).unwrap();
+    git_in(&repo, &["worktree", "remove", "--force", ".worktrees/w"]);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", &record);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let note = restored["restored"][0]["note"].as_str().unwrap_or_default();
+    assert!(note.contains("never written in"), "{restored}");
+    assert!(!Path::new(&wt).exists(), "no worktree came back for it");
+}
+
+#[test]
 fn with_its_branch_gone_too_claude_resumes_in_the_repo_root_and_pi_is_refused() {
     // claude and codex re-enter a conversation from any folder; pi starts a new, empty one
     // there, so it is refused rather than resumed somewhere it would lose its conversation.

@@ -1060,11 +1060,13 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
 fn exited(session: &Session) -> String {
     let sid = &session.id;
     match session.spec.conversation.id() {
+        // `--name` keeps its mailbox: a spawn is otherwise named after its new session.
         Some(id) => format!(
-            "session {sid} has exited — `bench spawn --agent {} --cwd {} --resume {id}` re-enters \
-             its conversation",
+            "session {sid} has exited — `bench spawn --agent {} --cwd '{}' --resume {id} --name {}` \
+             re-enters its conversation",
             session.agent.name(),
-            session.cwd
+            session.cwd.replace('\'', "'\\''"),
+            session.handle
         ),
         None => format!(
             "session {sid} has exited, and {} has no conversation to resume",
@@ -1846,4 +1848,23 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "unknown".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_id_counts_whether_it_was_spawned_or_resumed() {
+        // `session/resumed` is no longer written, but a log from before still holds its ids.
+        let event = |kind: &str| Event {
+            seq: 1,
+            at: String::new(),
+            kind: kind.into(),
+            data: json!({ "session": "s7" }),
+        };
+        assert_eq!(started_session_number(&event("session/spawned")), Some(7));
+        assert_eq!(started_session_number(&event("session/resumed")), Some(7));
+        assert_eq!(started_session_number(&event("session/exited")), None);
+    }
 }

@@ -145,7 +145,8 @@ fn resume(
     match (agent, refused) {
         (Some(_), Some(why)) => Err(Some(why)),
         // Claude reports its id at start, before anything is said: a conversation nobody
-        // wrote in has no transcript, and `claude --resume` of it exits at once.
+        // wrote in has no transcript, and `claude --resume` of it exits at once. With no
+        // transcript there is no branch either, so `plan` recreated no worktree for it.
         (Some(a), None) if a.command == "claude" && !has_transcript(&a.session) => {
             Err(Some(format!(
                 "claude conversation {} was never written in: nothing to resume",
@@ -177,7 +178,8 @@ fn resume(
 }
 
 /// Whether and where each recorded agent of the panes a restore takes resumes
-/// ([`resume_dir::plan`]: refused while it is live elsewhere, its worktree may be gone, #621). Then a codex's thread has to be re-entered on benchd's app-server before its TUI starts
+/// ([`resume_dir::plan`]: refused while it is live elsewhere; its worktree may be gone, #621).
+/// Then a codex's thread has to be re-entered on benchd's app-server before its TUI starts
 /// (`spawn::codex_thread`), which asks the server; so each codex pane that will be resumed gets
 /// its session reserved and its thread re-entered here too. Both start or ask processes, git and
 /// codex, so they are worked out before the lock is taken for the restore.
