@@ -18,6 +18,10 @@ settings:
     # `package` access across the three libraries and the app, as SwiftPM gives helm's targets
     # from `name: "helm"`. Every target must agree on it.
     SWIFT_PACKAGE_NAME: helm
+    # Pure Swift throughout: no target reads an Objective-C header, so none is generated or
+    # copied. Copying HelmWire-Swift.h over the last build's failed in Xcode with "Operation not
+    # permitted" on a second run to a phone, and an unused header is not worth a workaround.
+    SWIFT_INSTALL_OBJC_HEADER: NO
 
 targets:
   HelmWire:

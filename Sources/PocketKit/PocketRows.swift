@@ -85,12 +85,34 @@ package enum PocketHome {
         }
     }
 
-    /// Every session once, however many workspaces list it (by id, as the row is `Identifiable`),
-    /// by its `Attention`, newest first within each.
+    /// Each session under one workspace: of those `sessions/all` listed it under, the most
+    /// specific one its cwd is in, else the first in `workspaces` (a worktree outside every
+    /// workspace's folder). benchd lists a session under every workspace whose folder or git
+    /// worktrees hold it, so a workspace inside another lists its sessions twice. Each workspace
+    /// keeps benchd's order.
+    package static func owners(
+        _ listed: [String: [BenchSessionRow]], workspaces: [String]
+    ) -> [String: [BenchSessionRow]] {
+        // The workspaces that listed each session, in document order.
+        var listing: [String: [String]] = [:]
+        for workspace in workspaces {
+            for row in listed[workspace] ?? [] { listing[row.id, default: []].append(workspace) }
+        }
+        func owner(_ row: BenchSessionRow) -> String? {
+            let candidates = listing[row.id] ?? []
+            return candidates.filter(row.isIn).max { $0.count < $1.count } ?? candidates.first
+        }
+        var owned: [String: [BenchSessionRow]] = [:]
+        for workspace in workspaces {
+            owned[workspace] = (listed[workspace] ?? []).filter { owner($0) == workspace }
+        }
+        return owned
+    }
+
+    /// Every session (each listed once, by `owners`), by its `Attention`, newest first within
+    /// each.
     package static func agents(sessions: [String: [BenchSessionRow]]) -> [BenchSessionRow] {
-        var seen = Set<String>()
-        let unique = sessions.values.joined().filter { seen.insert($0.id).inserted }
-        return unique.sorted { a, b in
+        sessions.values.joined().sorted { a, b in
             let (aWants, bWants) = (Attention(a), Attention(b))
             if aWants != bWants { return aWants < bWants }
             return a.lastMs > b.lastMs
@@ -99,6 +121,11 @@ package enum PocketHome {
 }
 
 extension BenchSessionRow {
+    /// Whether its cwd is `folder` or inside it, by path component.
+    fileprivate func isIn(_ folder: String) -> Bool {
+        cwd == folder || cwd.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+    }
+
     /// When it last changed: its finish for a finished row.
     package var lastMs: UInt64 {
         if case let .finished(atMs) = state { atMs } else { updatedAtMs }
