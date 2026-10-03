@@ -352,21 +352,16 @@ final class BenchdAgentScriptTests: XCTestCase {
         XCTAssertTrue(userspace.stderr.contains("userspace"), userspace.stderr)
     }
 
-    /// An address the operator names is his, except one that listens on every interface.
-    func testAnExplicitListenIsTakenUnlessItIsEveryInterface() throws {
+    /// `--listen` takes the tailnet and nothing else (operator, 2026-10-03): an address typed by
+    /// hand, loopback included, is refused rather than bound.
+    func testListenTakesOnlyTailscale() throws {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
-        let loopback = try resolve("127.0.0.1:52230", tailscale: nil)
-        XCTAssertEqual(loopback.stdout, "127.0.0.1:52230 tcp://127.0.0.1:52230\n", loopback.stderr)
-        let named = try resolve("rasmus-mac.tail1234.ts.net:4519", tailscale: nil)
-        XCTAssertEqual(named.status, 0, named.stderr)
-        let v6 = try resolve("[fd7a:115c:a1e0::1]:4519", tailscale: nil)
-        XCTAssertEqual(v6.status, 0, v6.stderr)
         for spec in [
-            "0.0.0.0:4519", "[::]:4519", "[::0]:4519", "*:4519", ":4519", "0.0:4519",
-            "0x0:4519", "::1:4519", "100.101.102.103",
-            "no-port:",
+            "127.0.0.1:52230", "100.101.102.103:4519", "0.0.0.0:4519", "[::]:4519",
+            "rasmus-mac.tail1234.ts.net:4519", "tailscale:nope", "tailscaled",
         ] {
-            let refused = try resolve(spec, tailscale: nil)
+            let refused = try resolve(
+                spec, tailscale: "100.101.102.103", interfaces: ["100.101.102.103"])
             XCTAssertNotEqual(refused.status, 0, spec)
             XCTAssertEqual(refused.stdout, "", spec)
         }
@@ -392,9 +387,9 @@ final class BenchdAgentScriptTests: XCTestCase {
     }
 
     /// The whole install with `--listen tailscale` in userspace mode: the plist listens on
-    /// loopback, the installer prints the tailnet URL to type into Pocket, and installing again
-    /// without `--listen` says that it stops listening rather than doing it silently.
-    func testAnInstallListensWhereTailscaleForwardsAndSaysSoWhenItStops() throws {
+    /// loopback and the installer prints the tailnet URL to type into Pocket. Installing again
+    /// without `--listen`, as every release does, keeps it listening; only `--no-listen` stops it.
+    func testAnInstallKeepsListeningUntilToldNotTo() throws {
         try writeFakes()
         _ = try resolve("tailscale", tailscale: "100.98.232.17", interfaces: ["127.0.0.1"])
         let install = [
@@ -414,11 +409,17 @@ final class BenchdAgentScriptTests: XCTestCase {
         }
         XCTAssertEqual(try listen(), "127.0.0.1:4519")
 
-        let again = try bash(install, environment: cargo)
-        XCTAssertEqual(again.status, 0, again.stderr)
+        let release = try bash(install, environment: cargo)
+        XCTAssertEqual(release.status, 0, release.stderr)
+        XCTAssertEqual(try listen(), "127.0.0.1:4519", "a release keeps Pocket's listener")
+        XCTAssertTrue(release.stdout.contains("still listens on 127.0.0.1:4519"), release.stdout)
+
+        let stop = try bash(install + ["--no-listen"], environment: cargo)
+        XCTAssertEqual(stop.status, 0, stop.stderr)
         XCTAssertNil(try listen())
-        XCTAssertTrue(
-            again.stdout.contains("no longer listens on 127.0.0.1:4519"),
-            "a reinstall without --listen says Pocket loses benchd: \(again.stdout)")
+        XCTAssertTrue(stop.stdout.contains("no longer listens on 127.0.0.1:4519"), stop.stdout)
+
+        let both = try bash(install + ["--listen", "tailscale", "--no-listen"], environment: cargo)
+        XCTAssertNotEqual(both.status, 0, "listen and do not listen at once is refused")
     }
 }

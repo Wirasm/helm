@@ -76,7 +76,7 @@ session, such as Ghostty outside helm (`just benchd-install` refuses with `BENCH
 every bench session has):
 
 ```text
-just benchd-install      # cargo install bench and benchd, restart the login agent, browser back
+just benchd-install      # cargo install bench and benchd, restart the login agent (Pocket's listener kept), browser back
 make release             # then the badge, as above
 just resume-all          # every recorded agent resumed in its pane, every other pane a shell
 ```

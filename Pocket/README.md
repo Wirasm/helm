@@ -44,9 +44,8 @@ session (`just resume-all` brings the panes back).
    `~/.tailscale/tailscaled.sock` when tailscaled runs as your own agent) and has the login
    agent's benchd listen on port 4519 (`--listen tailscale:<port>` for another). It stops,
    changing nothing, if Tailscale is not running; it never listens on every interface or a LAN
-   address instead. (`--listen <host>:<port>` takes an IP address or hostname as you give it, except one that can
-   mean every interface: that one is yours to choose.) Installing again without `--listen` stops
-   benchd listening, and says so. It prints the URL Pocket dials:
+   address, or one typed by hand, instead. Installing again keeps it listening, as every release
+   does (`just benchd-install` with no flags); `--no-listen` stops it. It prints the URL Pocket dials:
    `benchd-agent: type tcp://100.x.y.z:4519 into Pocket's connect sheet`.
 
    **In userspace mode** (tailscaled run as your own agent with `--tun=userspace-networking`) no network
