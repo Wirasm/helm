@@ -76,14 +76,19 @@ session, such as Ghostty outside helm (`just benchd-install` refuses with `BENCH
 every bench session has):
 
 ```text
-just benchd-install      # cargo install bench and benchd, restart the login agent, browser back
+just benchd-install --listen tailscale   # cargo install bench and benchd, restart the login agent, browser back
 make release             # then the badge, as above
 just resume-all          # every recorded agent resumed in its pane, every other pane a shell
 ```
 
-`just release-resume <session-id>` was the one-command form for an operator who is away. Since
-M5b it refuses every session in a helm pane (it requires the session to descend from helm's
-process, and pane sessions descend from benchd's), so do not reach for it until that is fixed.
+`--listen tailscale` keeps Pocket's listener: installing without `--listen` stops benchd
+listening, and the phone loses it until the next install with it. Leave it out only when benchd
+had no listener (`plutil -extract EnvironmentVariables.BENCH_LISTEN raw
+~/Library/LaunchAgents/com.wirasm.benchd.plist` says whether it has one).
+
+`just release-resume <session-id>` is the one-command form for an operator who is away: it
+builds, restarts helm and benchd, and resumes that session and every other pane
+(`docs/running-helm.md`). The session may be one in a helm pane, which runs inside benchd.
 
 After a release, mail each resumed workstream where it stands.
 

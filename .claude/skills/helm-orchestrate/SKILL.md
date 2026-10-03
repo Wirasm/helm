@@ -88,8 +88,8 @@ tail -1 "$RUN"
   quotes). `$WS` becomes the agent's mail handle (`--name`), such as `ws1` or `issue-186`; a taken
   one is refused.
 - The answer carries `handle`, `agent`, `session`, `pid`, `runtime_session`, `pane` and
-  `workspace`. `runtime` is the conversation id `--resume` and `--fork` take later; a new codex has
-  none until its hook records its thread id.
+  `workspace`. `runtime_session` is the conversation id `--resume` and `--fork` take later; for a
+  codex it is its thread id.
 - The pane lands in the background of `$WORKTREE`'s workspace. A few seconds after the spawn, read
   it once with `bench get screen <pane>`: an agent stopped at a trust question or an unknown
   model shows there, not in the spawn's exit code.
@@ -126,8 +126,9 @@ for r in json.load(sys.stdin)["rows"]:
 - `waiting` after a finished turn is healthy. `waiting (permission prompt)` for many minutes is a
   stall: no posture removes some guardrails (#283). Read the pane with `bench get screen <pane>`
   and tell the operator; do not add flags.
-- codex and pi report their activity through their hooks. `bench log <runtime>` says what any of
-  them did, and `bench get screen <pane>` what a pane shows now.
+- pi reports its activity through its hooks, and a codex through its thread's events on benchd's
+  codex app-server. `bench log <runtime>` says what any of them did, and `bench get screen <pane>`
+  what a pane shows now.
 - `unread` that keeps growing means the agent is not reading its mail.
 - `done` means the agent's last turn ended and it has not started another. `unseen` means the
   operator has not looked at its pane since; one you spawned is yours to act on, not his.
