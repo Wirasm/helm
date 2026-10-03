@@ -106,6 +106,29 @@ final class PocketModelTests: XCTestCase {
         model.connect("")  // stop following the address nothing listens on
     }
 
+    /// A send benchd took and never answered may have reached the agent: it comes back marked so,
+    /// for the screen to clear rather than invite the operator to send it twice. One that never
+    /// reached benchd does not.
+    func testASendBenchdNeverAnsweredMayHaveGone() async throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                "/w/helm", BenchFixture.bench([BenchFixture.terminal()]), seq: 1),
+            tcp: true)
+        defer { server.stop() }
+        server.answer = { _ in [:] }
+        let model = PocketModel()
+        model.connect(server.endpoint.description)
+        let unanswered = await model.send(.message("status?"), to: "s7")
+        XCTAssertEqual(unanswered?.maybeSent, true, "\(String(describing: unanswered))")
+        XCTAssertEqual(
+            server.requests.filter { $0["verb"] as? String == "screen/send" }.count, 1,
+            "sent once, and not again")
+        server.stop()
+        let unreached = await model.send(.message("status?"), to: "s7")
+        XCTAssertEqual(unreached?.maybeSent, false, "\(String(describing: unreached))")
+        model.connect("")
+    }
+
     /// Pocket reaches benchd over TCP only: anything else is refused by name, and nothing is
     /// followed.
     func testAnythingButTCPIsRefusedByName() {

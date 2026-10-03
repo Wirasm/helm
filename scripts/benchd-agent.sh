@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # benchd as a user LaunchAgent (#407): it starts at login and launchd restarts it after a crash.
 #
-#   scripts/benchd-agent.sh install [--no-build]     (or: just benchd-install)
+#   scripts/benchd-agent.sh install [--no-build] [--listen <host:port|tailscale[:port]>]
+#                                                    (or: just benchd-install …)
 #   scripts/benchd-agent.sh uninstall                (or: just benchd-uninstall)
 #
 # install builds bench and benchd into cargo's bin (as release-resume does), writes
 # ~/Library/LaunchAgents/com.wirasm.benchd.plist, stops a hand-started benchd if one answers,
 # loads the agent, and starts the shared browser once. After that benchd brings the browser back
 # by itself: it stays wanted until `bench browser stop` (daemon/direction.md).
+#
+# --listen also has benchd listen on TCP (BENCH_LISTEN), for Pocket on the operator's phone (#625).
+# `tailscale` is this Mac's tailnet address (`tailscale ip -4`), port 4519 unless given. The port
+# has no login, so the tailnet is the trust boundary: an install whose address cannot be resolved
+# to one stops, and never falls back to 0.0.0.0 or a LAN address. An install without --listen
+# writes an agent that does not listen.
 #
 # KeepAlive restarts benchd on a crash or a kill, not on a clean exit, so `bench stop` still
 # stops it until the next login or `launchctl kickstart`. Output goes to ~/Library/Logs/benchd.log.
@@ -48,9 +55,65 @@ agent_path() {
   printf '%s\n' "$out"
 }
 
-# write_plist <path> <label> <benchd> <log> [suite]
+# The port `--listen tailscale` binds when none is given.
+agent_listen_port=4519
+
+# The Tailscale CLI: on PATH, else the one inside the Mac app.
+tailscale_cli() {
+  command -v tailscale 2>/dev/null && return 0
+  local app=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  [ -x "$app" ] && printf '%s\n' "$app"
+}
+
+# resolve_listen <host:port|tailscale[:port]>: the address benchd is to listen on, or a refusal
+# on stderr and a non-zero status. `tailscale` is accepted only as an address in 100.64.0.0/10,
+# where Tailscale puts every node; anything else it answers is not the tailnet.
+resolve_listen() {
+  local spec="$1" host port cli
+  case "$spec" in
+  tailscale | tailscale:*)
+    port="${spec#tailscale}"
+    port="${port#:}"
+    port="${port:-$agent_listen_port}"
+    cli="$(tailscale_cli)" || {
+      echo "benchd-agent: --listen tailscale needs Tailscale; it is not installed" >&2
+      return 2
+    }
+    host="$(timeout 10 "$cli" ip -4 2>&1)" || {
+      echo "benchd-agent: Tailscale has no address for this Mac (is it running and signed in?): $host" >&2
+      return 2
+    }
+    host="${host%%$'\n'*}"
+    if ! [[ "$host" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+      echo "benchd-agent: Tailscale answered '$host', which is not a tailnet address; not listening on it" >&2
+      return 2
+    fi
+    ;;
+  *:*)
+    host="${spec%:*}"
+    port="${spec##*:}"
+    case "$host" in
+    0.0.0.0 | "[::]" | "::" | "")
+      echo "benchd-agent: --listen $spec listens on every interface, and the port has no login; name the tailnet address, or use --listen tailscale" >&2
+      return 2
+      ;;
+    esac
+    ;;
+  *)
+    echo "benchd-agent: --listen takes <host>:<port> or tailscale[:<port>], not '$spec'" >&2
+    return 2
+    ;;
+  esac
+  if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    echo "benchd-agent: --listen $spec: '$port' is not a port" >&2
+    return 2
+  fi
+  printf '%s:%s\n' "$host" "$port"
+}
+
+# write_plist <path> <label> <benchd> <log> [suite] [listen]
 write_plist() {
-  local path="$1" label="$2" benchd="$3" logfile="$4" suite="${5:-}"
+  local path="$1" label="$2" benchd="$3" logfile="$4" suite="${5:-}" listen="${6:-}"
   rm -f "$path"
   plutil -create xml1 "$path" &&
     plutil -insert Label -string "$label" "$path" &&
@@ -66,6 +129,9 @@ write_plist() {
     plutil -insert EnvironmentVariables.PATH -string "$(agent_path)" "$path" || return 1
   if [ -n "$suite" ]; then
     plutil -insert EnvironmentVariables.BENCH_SUITE -string "$suite" "$path" || return 1
+  fi
+  if [ -n "$listen" ]; then
+    plutil -insert EnvironmentVariables.BENCH_LISTEN -string "$listen" "$path" || return 1
   fi
   plutil -lint -s "$path"
 }
@@ -88,18 +154,31 @@ await_bench() {
 bench_pid() { timeout 5 "$1" status 2>/dev/null | plutil -extract pid raw - 2>/dev/null; }
 
 agent_install() {
-  local build=1
-  case "${1:-}" in
-  --no-build) build=0 ;;
-  "") ;;
-  *) echo "benchd-agent: unknown option $1" >&2; return 1 ;;
-  esac
+  local build=1 listen=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --no-build) build=0 ;;
+    --listen)
+      [ $# -ge 2 ] || { echo "benchd-agent: --listen needs <host>:<port> or tailscale" >&2; return 1; }
+      listen="$2"
+      shift
+      ;;
+    *) echo "benchd-agent: unknown option $1" >&2; return 1 ;;
+    esac
+    shift
+  done
   # The agent is for the live root. Installed under either of these it would still boot the live
   # root (the plist carries neither), which is not what anyone setting them meant. An empty
   # BENCH_DIR is unset (#412); an empty BENCH_SUITE is a refusal to bench, so it refuses here too.
   if [ -n "${BENCH_SUITE+x}" ] || [ -n "${BENCH_DIR:-}" ]; then
     echo "benchd-agent: refusing to install with BENCH_SUITE or BENCH_DIR set — only the live benchd runs as a login agent; run a suite by hand" >&2
     return 3
+  fi
+
+  # Before anything is built or touched: an address that cannot be resolved changes nothing.
+  if [ -n "$listen" ]; then
+    listen="$(resolve_listen "$listen")" || return 2
+    echo "benchd-agent: benchd will listen on $listen"
   fi
 
   local bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" crate
@@ -119,7 +198,7 @@ agent_install() {
   plist="$HOME/Library/LaunchAgents/$label.plist"
   logfile="$HOME/Library/Logs/benchd.log"
   mkdir -p "$(dirname "$plist")" "$(dirname "$logfile")"
-  write_plist "$plist" "$label" "$bin/benchd" "$logfile" ||
+  write_plist "$plist" "$label" "$bin/benchd" "$logfile" "" "$listen" ||
     { echo "benchd-agent: could not write $plist" >&2; return 4; }
 
   if agent_loaded "$label"; then
@@ -160,6 +239,6 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   case "${1:-}" in
   install) shift; agent_install "$@" ;;
   uninstall) agent_uninstall ;;
-  *) echo "usage: benchd-agent.sh install [--no-build] | uninstall" >&2; exit 1 ;;
+  *) echo "usage: benchd-agent.sh install [--no-build] [--listen <host:port|tailscale[:port]>] | uninstall" >&2; exit 1 ;;
   esac
 fi

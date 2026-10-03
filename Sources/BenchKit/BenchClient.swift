@@ -106,6 +106,13 @@ package final class BenchClient: ObservableObject {
         follower = nil
     }
 
+    /// Drop the follower's connection and connect again at once, rather than wait for a socket
+    /// a sleep or a network change killed to be noticed dead. Pocket calls it on coming back to
+    /// the foreground.
+    package func reconnect() {
+        follower?.reconnect()
+    }
+
     private func receive(_ event: BenchFollower.Event) {
         switch event {
         case .connected(let at):
@@ -156,8 +163,11 @@ package final class BenchClient: ObservableObject {
         let socket = try BenchSocket(endpoint: endpoint, timeout: timeout)
         defer { socket.close() }
         try socket.writeLine(JSONEncoder().encode(request))
-        guard let line = try socket.readLine() else {
-            throw BenchSocket.Failure(description: "benchd closed the connection without answering")
+        // Written whole, so benchd may have carried it out: from here a failure is unanswered.
+        let line: Data?
+        do { line = try socket.readLine() } catch { throw BenchUnanswered(description: "\(error)") }
+        guard let line else {
+            throw BenchUnanswered(description: "benchd closed the connection without answering")
         }
         return try JSONDecoder().decode(BenchResponse<Payload>.self, from: line)
     }
@@ -175,6 +185,12 @@ package final class BenchClient: ObservableObject {
         receive(.frame(at))
         return at
     }
+}
+
+/// A request benchd was sent whole and never answered: benchd may have carried it out, so a
+/// caller must not send it again as if it had not.
+package struct BenchUnanswered: Error, Equatable, CustomStringConvertible {
+    package let description: String
 }
 
 /// The newest document the follower has read, shared between its thread and the main actor.
@@ -243,6 +259,14 @@ final class BenchFollower: @unchecked Sendable {
     func stop() {
         lock.lock()
         stopped = true
+        socket?.interrupt()
+        lock.unlock()
+    }
+
+    /// End the current connection only: `run` reconnects after the shortest backoff, as the last
+    /// connection had succeeded.
+    func reconnect() {
+        lock.lock()
         socket?.interrupt()
         lock.unlock()
     }

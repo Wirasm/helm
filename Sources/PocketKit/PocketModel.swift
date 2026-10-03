@@ -62,6 +62,12 @@ package final class PocketModel: ObservableObject {
 
     package var endpoint: BenchEndpoint? { client?.endpoint }
 
+    /// Back in the foreground: connect the follower again now, rather than wait for a socket the
+    /// sleep or a network change killed to be noticed dead. Its backoff covers the rest.
+    package func resume() {
+        client?.reconnect()
+    }
+
     /// Whether an agent opened `page` on the bench, so a reply to it reaches that agent.
     package func isOpened(_ page: PocketPage) -> Bool {
         opened.contains(StandardizedPath(page.path).value)
@@ -226,6 +232,8 @@ package final class PocketModel: ObservableObject {
                     return .failure(Refusal(answer.reason ?? "benchd refused without a reason"))
                 }
                 return .success(data)
+            } catch let unanswered as BenchUnanswered {
+                return .failure(Refusal(unanswered.description, maybeSent: true))
             } catch {
                 return .failure(Refusal("\(error)"))
             }
@@ -235,6 +243,17 @@ package final class PocketModel: ObservableObject {
 
 /// Why a verb got no answer Pocket can use, in benchd's words or the socket's.
 package struct Refusal: Error, Equatable, CustomStringConvertible {
-    package let description: String
-    init(_ description: String) { self.description = description }
+    package let reason: String
+    /// benchd was sent the request whole and never answered (`BenchUnanswered`): it may have
+    /// carried it out. A screen clears what was typed rather than invite it a second time.
+    package let maybeSent: Bool
+
+    init(_ reason: String, maybeSent: Bool = false) {
+        self.reason = reason
+        self.maybeSent = maybeSent
+    }
+
+    package var description: String {
+        maybeSent ? "no answer, so it may have gone; look before sending again (\(reason))" : reason
+    }
 }

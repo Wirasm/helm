@@ -203,6 +203,49 @@ final class BenchClientTests: XCTestCase {
         XCTAssertEqual(asked, [1, 2], "the drawing after a reconnect asked benchd again")
     }
 
+    /// A request benchd read and never answered may have been carried out, so it fails as
+    /// unanswered; one that never reached benchd fails as anything else. A caller that would
+    /// retry has to tell the two apart (#625: Pocket never sends a message twice).
+    func testARequestBenchdTookButNeverAnsweredFailsAsUnanswered() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        server.answer = { _ in [:] }
+        let request = BenchRequest(
+            id: "r", verb: .paneSplit(direction: .down), by: .operatorGesture)
+        XCTAssertThrowsError(
+            try BenchClient.request(
+                request, at: .unix(path: server.path), answering: LayoutReport.self)
+        ) { error in
+            XCTAssertTrue(error is BenchUnanswered, "\(error)")
+        }
+        XCTAssertThrowsError(
+            try BenchClient.request(
+                request, at: .unix(path: "/tmp/hb-nobody-\(UUID().uuidString.prefix(6)).sock"),
+                answering: LayoutReport.self)
+        ) { error in
+            XCTAssertFalse(error is BenchUnanswered, "nothing was sent: \(error)")
+        }
+    }
+
+    /// `reconnect` drops the follower's connection and connects again at once, as a phone
+    /// coming back from sleep wants rather than waiting on a socket the network change killed.
+    func testReconnectConnectsTheFollowerAgainAtOnce() throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                path, BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        let client = BenchClient(endpoint: .unix(path: server.path))
+        client.start()
+        defer { client.stop() }
+        XCTAssertTrue(Eventually.holds { client.connections == 1 })
+        client.reconnect()
+        XCTAssertTrue(
+            Eventually.holds(within: 2) { client.connections == 2 }, "\(client.connections)")
+        XCTAssertEqual(client.state, .connected)
+    }
+
     /// No daemon at all: the state names the socket's failure, and a verb throws rather than
     /// hanging.
     func testNoDaemonIsDisconnectedAndAVerbFails() throws {
