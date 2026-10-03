@@ -88,9 +88,11 @@ Several agents share this machine and the operator's live helm. These rules are 
 - **A test leaves nothing behind**: no file, no process (`just check` fails a part that does), no
   child ended with SIGQUIT or SIGABRT (each writes a crash report).
 - **A test never reaches the operator's benchd.** A pane inherits `BENCH_DIR=~/.bench`,
-  `BENCH_SESSION`, `BENCH_HANDLE`, `HELM_PANE` and maybe `BENCH_URL`. Point a test at a temp
-  `BENCH_DIR` with those removed, or at `FakeBenchd`; never `BenchClient.live()`. One test that
-  did took the operator's terminal sessions (#493).
+  `BENCH_SESSION`, `BENCH_HANDLE`, `HELM_PANE` and maybe `BENCH_URL`; a session started before
+  benchd stopped passing it on may still carry `BENCH_LISTEN`, the operator's own address, which
+  a test benchd would try to bind and refuse to start. Point a test at a temp `BENCH_DIR` with
+  those removed, or at `FakeBenchd`; never `BenchClient.live()`. One test that did took the
+  operator's terminal sessions (#493).
 - **A second helm runs under `HELM_DEFAULTS_SUITE=<name>`**, beside its own `BENCH_SUITE=<name>`
   benchd, so it has no path to the operator's defaults, snapshot, bench or browser
   (`docs/running-helm.md`). Never hand-roll a bundle identifier for it.
