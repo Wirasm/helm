@@ -199,6 +199,61 @@ pub fn claude_settings(bench: &str) -> serde_json::Value {
     serde_json::json!({ "hooks": hooks, "crossSessionInbound": "accept" })
 }
 
+/// What a notification from benchd's codex app-server says about one of its threads (#357): the
+/// thread, and the same transition a hook would carry. These are codex's own typed events, so for
+/// a codex on benchd's server they, not its hooks, say what it is doing (codex app-server
+/// protocol, 0.160.0):
+///
+/// - `turn/started`: busy.
+/// - `turn/completed`: a turn that completed ended (`TurnEnded`, attention's `done`); one that was
+///   interrupted (the operator is at the pane) or failed is idle, as a hook's `Interrupt` or
+///   `StopFailure` is.
+/// - `thread/status/changed`: `active` waiting on an approval or on the user's input waits for
+///   the operator; `active` otherwise is busy; `idle`, or `systemError` after a turn that failed
+///   (a usage limit), is idle.
+///
+/// `None` for anything else, a status this build does not know included.
+pub fn codex_server_transition(
+    method: &str,
+    params: &serde_json::Value,
+) -> Option<(String, Transition)> {
+    use Transition::*;
+    let thread = params["threadId"].as_str()?.to_string();
+    let waiting = |what: &str| {
+        To(Activity::Waiting {
+            waiting_for: Some(what.into()),
+        })
+    };
+    let transition = match method {
+        "turn/started" => To(Activity::Busy),
+        "turn/completed" => match params["turn"]["status"].as_str()? {
+            "completed" => TurnEnded,
+            "interrupted" | "failed" => To(Activity::Idle),
+            _ => return None,
+        },
+        "thread/status/changed" => {
+            let status = &params["status"];
+            match status["type"].as_str()? {
+                "active" => {
+                    let flags = status["activeFlags"].as_array();
+                    let flagged = |flag: &str| flags.is_some_and(|f| f.iter().any(|x| x == flag));
+                    if flagged("waitingOnApproval") {
+                        waiting(PERMISSION)
+                    } else if flagged("waitingOnUserInput") {
+                        waiting(QUESTION)
+                    } else {
+                        To(Activity::Busy)
+                    }
+                }
+                "idle" | "systemError" => To(Activity::Idle),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some((thread, transition))
+}
+
 /// Every codex event `bench hook codex` is wired to (codex's hooks docs). Unlike Claude, codex
 /// has `Interrupt`, so an Esc needs no reconciler.
 pub const CODEX_EVENTS: [&str; 8] = [
@@ -523,6 +578,56 @@ pub fn standing_rule(handle: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_servers_typed_events_say_what_a_hook_would() {
+        use serde_json::json;
+        let of = |method: &str, params: serde_json::Value| codex_server_transition(method, &params);
+        let t = |status: serde_json::Value| json!({"threadId": "019a", "status": status});
+        let waiting = |what: &str| {
+            Transition::To(Activity::Waiting {
+                waiting_for: Some(what.into()),
+            })
+        };
+        assert_eq!(
+            of(
+                "turn/started",
+                json!({"threadId": "019a", "turn": {"id": "t1"}})
+            ),
+            Some(("019a".into(), Transition::To(Activity::Busy)))
+        );
+        let ended = |status: &str| {
+            of(
+                "turn/completed",
+                json!({"threadId": "019a", "turn": {"id": "t1", "status": status}}),
+            )
+            .map(|(_, t)| t)
+        };
+        assert_eq!(ended("completed"), Some(Transition::TurnEnded));
+        assert_eq!(ended("interrupted"), Some(Transition::To(Activity::Idle)));
+        assert_eq!(ended("failed"), Some(Transition::To(Activity::Idle)));
+        let status = |s: serde_json::Value| of("thread/status/changed", t(s)).map(|(_, t)| t);
+        assert_eq!(
+            status(json!({"type": "active", "activeFlags": ["waitingOnApproval"]})),
+            Some(waiting(PERMISSION))
+        );
+        assert_eq!(
+            status(json!({"type": "active", "activeFlags": ["waitingOnUserInput"]})),
+            Some(waiting(QUESTION))
+        );
+        assert_eq!(
+            status(json!({"type": "active", "activeFlags": []})),
+            Some(Transition::To(Activity::Busy))
+        );
+        for stopped in ["idle", "systemError"] {
+            assert_eq!(
+                status(json!({"type": stopped})),
+                Some(Transition::To(Activity::Idle))
+            );
+        }
+        assert_eq!(status(json!({"type": "notLoaded"})), None);
+        assert_eq!(of("item/completed", json!({"threadId": "019a"})), None);
+    }
 
     fn none_held(_: &str) -> bool {
         false

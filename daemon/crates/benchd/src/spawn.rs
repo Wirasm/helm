@@ -333,7 +333,6 @@ fn register(
     let live = &core.sessions;
     core.spawners.retain(|id, _| live.contains_key(id));
     core.spawners.insert(session.id.clone(), spawner.clone());
-    hook::serve_codex(core, session);
     core.append(
         "session/spawned",
         json!({
@@ -354,7 +353,10 @@ fn register(
     .map_err(|why| (Status::Error, why))?;
     // Recorded at spawn only: `resume` re-enters the same runtime session id
     // (bench_session::argv), which this record already holds.
-    sessions::record_spawn(core, session, spawner).map_err(|why| (Status::Error, why))
+    sessions::record_spawn(core, session, spawner).map_err(|why| (Status::Error, why))?;
+    // After the record: a codex whose first turn already ended is done, which the record holds.
+    hook::serve_codex(core, session);
+    Ok(())
 }
 
 /// Judge the arguments (and the record of a conversation to resume, for its posture) before
