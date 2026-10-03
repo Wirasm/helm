@@ -62,6 +62,12 @@ package final class PocketModel: ObservableObject {
 
     package var endpoint: BenchEndpoint? { client?.endpoint }
 
+    /// Back in the foreground: connect the follower again now, rather than wait for a socket the
+    /// sleep or a network change killed to be noticed dead. Its backoff covers the rest.
+    package func resume() {
+        client?.reconnect()
+    }
+
     /// Whether an agent opened `page` on the bench, so a reply to it reaches that agent.
     package func isOpened(_ page: PocketPage) -> Bool {
         opened.contains(StandardizedPath(page.path).value)
@@ -123,7 +129,9 @@ package final class PocketModel: ObservableObject {
     package func send(_ input: BenchScreenInput, to target: String) async -> Refusal? {
         guard let endpoint else { return Refusal(Self.notConnected) }
         let request = BenchScreenRequest.send(id: Self.id("send"), target: target, input: input)
-        if case let .failure(why) = await Self.ask(request, at: endpoint, BenchScreenSent.self) {
+        if case let .failure(why) = await Self.ask(
+            request, at: endpoint, BenchScreenSent.self, writes: true)
+        {
             return why
         }
         return nil
@@ -182,7 +190,7 @@ package final class PocketModel: ObservableObject {
                 id: Self.id("write"), path: live, text: next,
                 expect: .unchanged(current.map { String(decoding: $0, as: UTF8.self) } ?? ""),
                 notify: true)
-            switch await Self.ask(request, at: endpoint, BenchFileWrite.self) {
+            switch await Self.ask(request, at: endpoint, BenchFileWrite.self, writes: true) {
             case .success(.written): return nil
             case let .success(.changed(now)): current = now
             case let .failure(why): return why
@@ -202,7 +210,7 @@ package final class PocketModel: ObservableObject {
             conversation: .start(prompt: prompt, model: model, effort: effort))
         // An agent's first start can take seconds: benchd answers once its pane is up.
         if case let .failure(why) = await Self.ask(
-            request, at: endpoint, BenchSpawned.self, timeout: 15)
+            request, at: endpoint, BenchSpawned.self, timeout: 15, writes: true)
         {
             return why
         }
@@ -213,10 +221,11 @@ package final class PocketModel: ObservableObject {
 
     private static func id(_ verb: String) -> String { "pocket-\(verb)-\(UUID().uuidString)" }
 
-    /// One verb, off the main actor: the answer, or benchd's reason for refusing it.
+    /// One verb, off the main actor: the answer, or benchd's reason for refusing it. `writes` is a
+    /// verb that changes something (a send, a write, a spawn): unanswered, it may have.
     private nonisolated static func ask<Payload: Decodable & Sendable>(
         _ request: some Encodable & Sendable, at endpoint: BenchEndpoint, _: Payload.Type,
-        timeout: TimeInterval = BenchClient.requestTimeout
+        timeout: TimeInterval = BenchClient.requestTimeout, writes: Bool = false
     ) async -> Result<Payload, Refusal> {
         await Task.detached {
             do {
@@ -226,6 +235,10 @@ package final class PocketModel: ObservableObject {
                     return .failure(Refusal(answer.reason ?? "benchd refused without a reason"))
                 }
                 return .success(data)
+            } catch let unanswered as BenchUnanswered {
+                // Only a verb that changes something may have done it unseen: an unanswered read
+                // changed nothing, and its caller may simply try again.
+                return .failure(Refusal(unanswered.description, maybeSent: writes))
             } catch {
                 return .failure(Refusal("\(error)"))
             }
@@ -235,6 +248,17 @@ package final class PocketModel: ObservableObject {
 
 /// Why a verb got no answer Pocket can use, in benchd's words or the socket's.
 package struct Refusal: Error, Equatable, CustomStringConvertible {
-    package let description: String
-    init(_ description: String) { self.description = description }
+    package let reason: String
+    /// benchd was sent the request whole and never answered (`BenchUnanswered`): it may have
+    /// carried it out. A screen clears what was typed rather than invite it a second time.
+    package let maybeSent: Bool
+
+    init(_ reason: String, maybeSent: Bool = false) {
+        self.reason = reason
+        self.maybeSent = maybeSent
+    }
+
+    package var description: String {
+        maybeSent ? "no answer, so it may have gone; look before sending again (\(reason))" : reason
+    }
 }

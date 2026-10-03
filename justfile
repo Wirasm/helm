@@ -34,6 +34,7 @@ day *args:
 # benchd as a login agent (com.wirasm.benchd): builds bench and benchd, loads the agent, replaces
 # a hand-started benchd, and starts the shared browser. launchd restarts benchd after a crash, and
 # benchd brings the browser back until `bench browser stop`. Only the live instance, never a suite.
+# `--listen tailscale` also has benchd listen on this Mac's tailnet address, for Pocket (#625).
 benchd-install *args:
     @bash scripts/benchd-agent.sh install "$@"
 

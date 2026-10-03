@@ -129,6 +129,23 @@ final class PocketPagesModelTests: XCTestCase {
         XCTAssertEqual(args["id"] as? String, "9496c9f4-8105")
     }
 
+    /// A reply whose read of the live file went unanswered was never written: it comes back as
+    /// not sent, so the page keeps the text to send again (only a write may have gone).
+    func testAReplyWhoseReadWentUnansweredWasNotSent() async throws {
+        let server = try benchd { nil }
+        defer { server.stop() }
+        let model = try await connected(to: server)
+        _ = await model.loadPages()
+        let page = try XCTUnwrap(model.pages.first)
+        let answer = server.answer
+        server.answer = { request in
+            request["verb"] as? String == "file/read" ? [:] : answer(request)
+        }
+        let refusal = await model.reply("keep it", to: page)
+        XCTAssertEqual(refusal?.maybeSent, false, "\(String(describing: refusal))")
+        XCTAssertNil(server.requests.first { $0["verb"] as? String == "file/write" })
+    }
+
     /// Start is a spawn by helm with the first message as text, so benchd records it as the
     /// operator's and moves no focus on the Mac.
     func testStartSpawnsAnOrchestratorAsHelm() async throws {
