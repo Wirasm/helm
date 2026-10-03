@@ -215,9 +215,10 @@ still there; else a claude or codex starts in the repository root, and the notic
 says which; pi re-enters a conversation only where it ran, so its resume is refused instead. The
 sessions drawer resumes a finished row through `spawn --resume` for the same reason. None of
 them re-enters a conversation a live process holds, since two processes on one conversation fork
-it (`restore::holder`): a benchd session, an agent whose hook reported since benchd started, or a
-claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which is what catches one
-in another terminal after a restart. codex refuses a thread another process writes by itself; pi
+it (`restore::refusal`): a benchd session, an agent whose hook reported since benchd started, or
+a claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which is what catches one
+in another terminal after a restart. A registry row of a live process that cannot be read refuses
+too, saying so: it could be the holder. codex refuses a thread another process writes by itself; pi
 records no holder, so a pi outside benchd is seen only once its hook reports. `restore` gives that
 pane a shell that says why, `spawn --resume` and `bench resume` refuse. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),

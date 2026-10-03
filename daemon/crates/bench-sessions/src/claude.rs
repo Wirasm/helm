@@ -148,29 +148,60 @@ pub fn row_of(home: &Path, pid: u32) -> Option<Registered> {
 /// The live process holding conversation `session`, by its registry row: how benchd learns that
 /// a claude it did not start (`claude --resume` in another terminal) holds it. Only `pid`,
 /// `sessionId` and `startedAt` are read, so a row whose status this build does not know still
-/// holds; a row without them is [`registry`]'s to report. Claude rewrites a row in place (its inode
+/// holds. `Err` when it cannot tell: a row without those fields whose process (the pid its file is
+/// named after) lives could be the holder, and so could any row of a registry it cannot list.
+pub fn holder(home: &Path, session: &str) -> Result<Option<u32>, String> {
+    let dir = home.join(".claude/sessions");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot list {}: {e}", dir.display())),
+    };
+    let mut unreadable = None;
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        match holder_fields(&path) {
+            Some((id, pid, started)) if id == session => {
+                if crate::process::alive(pid, Some(started)) {
+                    return Ok(Some(pid));
+                }
+            }
+            Some(_) => {}
+            None => {
+                let owner = path.file_stem().and_then(|n| n.to_str()?.parse().ok());
+                if owner.is_some_and(|pid| crate::process::alive(pid, None)) {
+                    unreadable = Some(path);
+                }
+            }
+        }
+    }
+    match unreadable {
+        Some(path) => Err(format!(
+            "Claude's registry row {} cannot be read",
+            path.display()
+        )),
+        None => Ok(None),
+    }
+}
+
+/// A registry row's `sessionId`, `pid` and `startedAt`. Claude rewrites a row in place (its inode
 /// survives every status change), so a row that does not parse may be mid-write and is read again.
-pub fn holder(home: &Path, session: &str) -> Option<u32> {
-    let read = |path: &Path| serde_json::from_slice::<Value>(&fs::read(path).ok()?).ok();
-    fs::read_dir(home.join(".claude/sessions"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|e| e == "json"))
-        .filter_map(|path| {
-            read(&path).or_else(|| {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                read(&path)
-            })
-        })
-        .filter(|row| row["sessionId"].as_str() == Some(session))
-        .filter_map(|row| {
-            let pid = u32::try_from(row["pid"].as_u64()?).ok()?;
-            Some((pid, row["startedAt"].as_u64()?))
-        })
-        .find(|(pid, started)| crate::process::alive(*pid, Some(*started)))
-        .map(|(pid, _)| pid)
+fn holder_fields(path: &Path) -> Option<(String, u32, u64)> {
+    let read = || {
+        let row: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+        let pid = u32::try_from(row["pid"].as_u64()?).ok()?;
+        Some((
+            row["sessionId"].as_str()?.to_string(),
+            pid,
+            row["startedAt"].as_u64()?,
+        ))
+    };
+    read().or_else(|| {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        read()
+    })
 }
 
 fn registered(path: &Path) -> Result<Registered, String> {
@@ -675,10 +706,16 @@ mod tests {
         fs::write(dir.join(format!("{pid}.json")), row("held", started)).unwrap();
         // A row left by a process since gone, its pid now another process's.
         fs::write(dir.join("stale.json"), row("stale", started - 3_600_000)).unwrap();
+        // A row nobody can read, of a process that is gone: it holds nothing.
+        fs::write(dir.join("99999999.json"), "{\"pid\":").unwrap();
         let held = holder(&home, "held");
         let stale = holder(&home, "stale");
+        // The same, of a process that lives: it could be anyone's.
+        fs::write(dir.join(format!("{pid}.json")), "{\"pid\":").unwrap();
+        let unknown = holder(&home, "stale");
         fs::remove_dir_all(&home).unwrap();
-        assert_eq!(held, Some(pid));
-        assert_eq!(stale, None);
+        assert_eq!(held, Ok(Some(pid)));
+        assert_eq!(stale, Ok(None));
+        assert!(unknown.is_err(), "{unknown:?}");
     }
 }

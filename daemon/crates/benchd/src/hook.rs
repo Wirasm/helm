@@ -47,9 +47,16 @@ pub struct Agent {
     /// The agent's process, as its last hook reported it: how the session list tells a live
     /// agent from one that was killed (a killed session reports no `SessionEnd`).
     pub pid: u32,
+    /// When `pid` started, read when the pid was reported, so a pid the kernel has since given
+    /// another process is not taken for this agent ([`Agent::is_running`]).
+    started_ms: Option<u64>,
     /// The helm pane it runs in now, as its last report from a terminal said: what `mail/who`
     /// answers. `None` outside helm, and in a benchd session. See [`locate`].
     pub pane: Option<PaneId>,
+}
+
+fn started_ms(pid: u32) -> Option<u64> {
+    bench_sessions::process::started_at_secs(pid).map(|s| s * 1000)
 }
 
 /// The harness's own way to start a turn, per agent.
@@ -80,6 +87,7 @@ impl Agent {
         Agent {
             channel,
             pid,
+            started_ms: started_ms(pid),
             pane,
             handle,
             activity: None,
@@ -90,6 +98,12 @@ impl Agent {
         }
     }
 
+    /// Its process is alive, and is the one its hook reported.
+    pub fn is_running(&self) -> bool {
+        self.started_ms
+            .is_some_and(|ms| bench_sessions::process::alive(self.pid, Some(ms)))
+    }
+
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
     pub fn can_push(&self) -> bool {
         self.channel.is_some() && !matches!(self.push, Push::Held)
@@ -98,7 +112,10 @@ impl Agent {
     /// Take in one event. Returns the activity when it changed.
     fn observe(&mut self, args: &HookArgs, transition: Option<&Transition>) -> Option<Activity> {
         self.seen = Instant::now();
-        self.pid = args.pid;
+        if self.pid != args.pid {
+            self.pid = args.pid;
+            self.started_ms = started_ms(args.pid);
+        }
         if let Some(socket) = &args.messaging_socket {
             self.channel = Some(Channel::ClaudeSocket(PathBuf::from(socket)));
         }

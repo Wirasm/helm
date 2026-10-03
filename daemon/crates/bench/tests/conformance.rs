@@ -8322,7 +8322,14 @@ fn no_resume_route_re_enters_a_claude_conversation_a_process_outside_benchd_hold
     assert_eq!(resume.code, 3, "{}", resume.stderr);
     assert!(resume.stderr.contains("already live"), "{}", resume.stderr);
 
-    // The row outlives its process: a stale row holds nothing.
+    // A live process's row that cannot be read could be the holder: refused, and saying why.
+    let row = h.join(format!(".claude/sessions/{}.json", outside.0.id()));
+    fs::write(&row, "{\"pid\":").unwrap();
+    let resume = bench(h, &["resume", &sid]);
+    assert_eq!(resume.code, 3, "{}", resume.stderr);
+    assert!(resume.stderr.contains("cannot tell"), "{}", resume.stderr);
+
+    // The row outlives its process: a stale row holds nothing, read or not.
     drop(outside);
     let resume = bench(h, &["resume", &sid]);
     assert_eq!(resume.code, 0, "{}", resume.stderr);
