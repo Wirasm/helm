@@ -57,6 +57,9 @@ const INHERITED: &[&str] = &[
     // prp's store home, which `prp/*` reads and writes: the test's HOME decides it, never the
     // operator's `~/.prp`.
     "PRP_HOME",
+    // A test run by an agent on a second Claude account inherits its config dir, which
+    // `bench statusline` reports as the account.
+    "CLAUDE_CONFIG_DIR",
 ];
 
 /// The one way this suite starts a child: without any of [`INHERITED`], so a test sets only
@@ -4196,7 +4199,21 @@ fn a_hook_never_fails_its_agent() {
 
 /// `bench statusline <command>` exactly as Claude Code runs it: the payload on stdin.
 fn bench_statusline(home: &Path, command: &[&str], payload: &serde_json::Value) -> CliRun {
-    let mut child = isolated(bench_bin())
+    bench_statusline_as(home, command, payload, &[])
+}
+
+/// `bench statusline` as a Claude session with `env` set would run it.
+fn bench_statusline_as(
+    home: &Path,
+    command: &[&str],
+    payload: &serde_json::Value,
+    env: &[(&str, &str)],
+) -> CliRun {
+    let mut cmd = isolated(bench_bin());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
         .env("HOME", home)
         .arg("statusline")
         .args(command)
@@ -4219,15 +4236,24 @@ fn bench_statusline(home: &Path, command: &[&str], payload: &serde_json::Value) 
     }
 }
 
-/// `sessions`' `usage` for one harness, with each window's `at_ms` set aside: Claude's is the
-/// moment `bench statusline` ran.
+/// `sessions`' `usage` for one harness's default account, with each window's `at_ms` set aside:
+/// Claude's is the moment `bench statusline` ran.
 fn usage_of(home: &Path, harness: &str) -> Option<serde_json::Value> {
+    usage_of_account(home, harness, None)
+}
+
+/// [`usage_of`] for one account: `None` is the default one, which carries no `account`.
+fn usage_of_account(
+    home: &Path,
+    harness: &str,
+    account: Option<&str>,
+) -> Option<serde_json::Value> {
     let run = bench(home, &["sessions"]);
     assert_eq!(run.code, 0, "{}", run.stderr);
     let mut usage = json_of(&run)["usage"]
         .as_array()?
         .iter()
-        .find(|u| u["harness"] == harness)?
+        .find(|u| u["harness"] == harness && u["account"].as_str() == account)?
         .clone();
     for w in usage["windows"].as_array_mut().unwrap() {
         w.as_object_mut().unwrap().remove("at_ms");
@@ -4336,6 +4362,71 @@ fn plan_limits_reach_sessions_from_claudes_statusline_and_codexs_hook() {
         Some(fixture["codex_usage"].clone()),
         "the line's own time, the plan's limit"
     );
+}
+
+/// A session on a second Claude login runs the same `bench statusline` under its own
+/// `CLAUDE_CONFIG_DIR`: that login's plan is held apart, and a lower reading there replaces
+/// nothing of the default's. An empty config dir is the default login, as it is to Claude, and
+/// benchd takes no account that names no login, whoever sends it.
+#[test]
+fn a_second_claude_logins_plan_limits_are_held_apart() {
+    let home = TestHome::claim("usage-acct");
+    let h = &home.dir;
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let payload = |five_hour: u32| {
+        serde_json::json!({ "session_id": "s", "rate_limits": {
+            "five_hour": { "used_percentage": five_hour, "resets_at": now_s + 3600 } } })
+    };
+    let window = |used: f64| {
+        serde_json::json!({ "minutes": 300, "used_percent": used,
+                            "resets_at_ms": (now_s + 3600) * 1000 })
+    };
+    let daemon = DaemonGuard::start(h, None);
+    let second = h.join(".claude-b").display().to_string();
+    let report = |five_hour: u32, config_dir: Option<&str>| {
+        let env: Vec<(&str, &str)> = config_dir
+            .map(|d| ("CLAUDE_CONFIG_DIR", d))
+            .into_iter()
+            .collect();
+        let run = bench_statusline_as(h, &[], &payload(five_hour), &env);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+    };
+    report(62, None);
+    report(10, Some(&second));
+    report(70, Some(""));
+    assert_eq!(
+        usage_of(h, "claude"),
+        Some(serde_json::json!({ "harness": "claude", "windows": [window(70.0)] })),
+        "the default's plan, which an empty config dir also reports to"
+    );
+    assert_eq!(
+        usage_of_account(h, "claude", Some(&second)),
+        Some(serde_json::json!({ "harness": "claude", "account": second,
+                                 "windows": [window(10.0)] })),
+        "the second login's own plan"
+    );
+    assert_eq!(
+        usage_of_account(h, "claude", Some("")),
+        None,
+        "an empty config dir is no account of its own"
+    );
+    let sent = |harness: &str, account: &str| {
+        let mut w = window(1.0);
+        w["at_ms"] = serde_json::json!(now_s * 1000);
+        let args = serde_json::json!({ "harness": harness, "account": account, "windows": [w] });
+        raw_request(&daemon.socket, "usage/report", args).0["status"].clone()
+    };
+    assert_eq!(
+        sent("claude", &second),
+        "ok",
+        "the control: a login's own report"
+    );
+    for (harness, account) in [("claude", ""), ("claude", "relative"), ("codex", "/x")] {
+        assert_eq!(sent(harness, account), "refused", "{harness} {account:?}");
+    }
 }
 
 #[test]

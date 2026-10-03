@@ -4,10 +4,12 @@
 //! - **Claude Code** publishes `rate_limits` only to its statusline command (measured on
 //!   2.1.286: no hook payload carries it). `bench statusline [command...]` is wired as that
 //!   command: it reports the limits and runs the operator's own statusline on the same input.
+//!   Claude runs it with its own environment, so `CLAUDE_CONFIG_DIR` there says which login's
+//!   plan the limits are (measured on 2.1.288).
 //! - **codex** writes them into its rollout, which every hook payload names
 //!   (`transcript_path`), so `bench hook codex` reads the newest record there.
 
-use bench_wire::{Harness, Usage};
+use bench_wire::{ConfigDir, Harness, Usage};
 use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -35,11 +37,15 @@ pub fn statusline(command: &[String]) -> i32 {
         .take(STATUSLINE_STDIN_MAX)
         .read_to_end(&mut input);
     // Reported first, so a statusline command that cannot start loses only itself.
-    if let Some(usage) = serde_json::from_slice::<Value>(&input)
+    if let Some(mut usage) = serde_json::from_slice::<Value>(&input)
         .ok()
         .and_then(|payload| Usage::from_claude_statusline(&payload, now_ms()))
     {
-        let _ = crate::quiet_request("usage/report", json!(usage));
+        // A config dir Claude would not run on names no login: better no figure than a wrong one.
+        if let Ok(account) = ConfigDir::from_env(std::env::var_os("CLAUDE_CONFIG_DIR")) {
+            usage.account = account;
+            let _ = crate::quiet_request("usage/report", json!(usage));
+        }
     }
     let child = match command.split_first() {
         None => None,

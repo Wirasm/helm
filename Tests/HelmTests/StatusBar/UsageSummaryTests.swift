@@ -46,6 +46,23 @@ final class UsageSummaryTests: XCTestCase {
             summary.help.contains("Claude 7d 30% · resets Fri 12:00"), summary.help)
     }
 
+    /// A second Claude login is a plan of its own: its own part, named by its config dir, and its
+    /// own lines in the help.
+    func testASecondClaudeLoginShowsApartByItsConfigDir() throws {
+        let usage = [
+            BenchUsage(harness: "claude", windows: [window(300, 62, resetsIn: 2 * 3600)]),
+            BenchUsage(
+                harness: "claude", account: "/Users/op/.claude-b",
+                windows: [window(300, 12, resetsIn: 3 * 3600)]),
+        ]
+        let summary = try XCTUnwrap(UsageSummary(usage, now: now, calendar: utc))
+        XCTAssertEqual(
+            summary.parts.map(\.label),
+            ["Claude 62% · resets 14:00", "Claude .claude-b 12% · resets 15:00"])
+        XCTAssertTrue(
+            summary.help.contains("Claude .claude-b 5h 12% · resets 15:00"), summary.help)
+    }
+
     /// A window past its reset time says nothing true any more: the next one shows, and a harness
     /// with none left is absent.
     func testAWindowThatHasResetIsDropped() throws {

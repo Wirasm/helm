@@ -59,13 +59,15 @@ import json, sys, time
 now = time.time() * 1000
 for u in json.load(sys.stdin)["usage"]:
     for w in u["windows"]:
-        print(u["harness"], "%dh window" % (w["minutes"] // 60), "%d%% used" % w["used_percent"],
+        print(u["harness"], u.get("account", ""), "%dh window" % (w["minutes"] // 60),
+              "%d%% used" % w["used_percent"],
               "read %dm ago" % ((now - w["at_ms"]) / 60000),
               "resets in %dh" % ((w["resets_at_ms"] - now) / 3600000))'
 ```
 
 Each harness publishes its own reading when it runs a turn, so a window read hours ago may
-already have reset. Weigh the age before moving work on it.
+already have reset. Weigh the age before moving work on it. A second Claude login reports apart,
+with `account` set to its config dir; no `account` is the default login.
 
 | Account | Window | Hit so far | Spends it |
 |---|---|---|---|

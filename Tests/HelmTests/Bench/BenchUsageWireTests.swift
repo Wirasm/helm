@@ -32,12 +32,26 @@ final class BenchUsageWireTests: XCTestCase {
                             at: Date(timeIntervalSince1970: 1_790_540_800)),
                     ]),
                 BenchUsage(
+                    harness: "claude", account: "/Users/op/.claude-b",
+                    windows: [
+                        .init(
+                            minutes: 300, usedPercent: 12,
+                            resetsAt: Date(timeIntervalSince1970: 1_790_550_000),
+                            at: Date(timeIntervalSince1970: 1_790_540_700)),
+                        .init(
+                            minutes: 10080, usedPercent: 71,
+                            resetsAt: Date(timeIntervalSince1970: 1_790_600_000),
+                            at: Date(timeIntervalSince1970: 1_790_540_700)),
+                    ]),
+                BenchUsage(
                     harness: "codex",
                     windows: [
                         .init(
                             minutes: 10080, usedPercent: 30, resetsAt: nil,
                             at: Date(timeIntervalSince1970: 1_790_534_669.555))
                     ]),
-            ], "each harness's plan limits (#143), a window with no reset time among them")
+            ],
+            "each harness's plan limits (#143), a second Claude login's apart, and a window with no "
+                + "reset time")
     }
 }

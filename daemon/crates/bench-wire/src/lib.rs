@@ -29,6 +29,8 @@ pub use layout::{
 pub mod hook;
 pub use hook::{HookArgs, HookReply};
 
+mod config_dir;
+pub use config_dir::ConfigDir;
 mod usage;
 pub use usage::{Usage, UsageWindow};
 
@@ -1421,9 +1423,18 @@ mod tests {
             "a finished turn and mail to the operator, so helm's decoder is pinned too"
         );
         assert_eq!(
-            reply.usage.iter().map(|u| u.harness).collect::<Vec<_>>(),
-            [Harness::Claude, Harness::Codex],
-            "the sample carries both harnesses' limits, one without a reset time"
+            reply
+                .usage
+                .iter()
+                .map(|u| (u.harness, u.account.as_ref().map(ConfigDir::as_str)))
+                .collect::<Vec<_>>(),
+            [
+                (Harness::Claude, None),
+                (Harness::Claude, Some("/Users/op/.claude-b")),
+                (Harness::Codex, None)
+            ],
+            "the sample carries both harnesses' limits, a second Claude login's, and one without \
+             a reset time"
         );
     }
 
