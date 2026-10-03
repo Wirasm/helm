@@ -52,7 +52,9 @@ struct SessionsView: View {
                     if !model.finished.isEmpty {
                         FinishedDisclosure(
                             count: model.finished.count, isOpen: model.showsFinished,
-                            isSelected: model.onFinishedLine, toggle: model.toggleFinished)
+                            isSelected: model.onFinishedLine, toggle: model.toggleFinished
+                        )
+                        .id(Self.finishedLine)
                     }
                     if model.showsFinished {
                         ForEach(model.finished.prefix(SessionsModel.finishedListed)) { row in
@@ -72,8 +74,14 @@ struct SessionsView: View {
             .onChange(of: model.selected) { _, id in
                 if let id { scroller.scrollTo(id) }
             }
+            .onChange(of: model.onFinishedLine) { _, on in
+                if on { scroller.scrollTo(Self.finishedLine) }
+            }
         }
     }
+
+    /// The finished line's scroll id: no session's.
+    private static let finishedLine = "sessions-finished-line"
 
     private func line(_ row: BenchSessionRow) -> some View {
         SessionRowView(

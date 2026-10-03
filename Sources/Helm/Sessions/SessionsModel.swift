@@ -21,7 +21,7 @@ final class SessionsModel: ObservableObject {
     /// not read. nil when the list is whole.
     @Published private(set) var problem: String?
     /// The row the keyboard is on; nil while it is on the finished line.
-    @Published var selected: BenchSessionRow.ID?
+    @Published private(set) var selected: BenchSessionRow.ID?
     /// The keyboard is on the "finished" line, where Return opens or closes it.
     @Published private(set) var onFinishedLine = false
     /// The workspaces whose finished sessions the operator has opened, by path.
@@ -107,6 +107,11 @@ final class SessionsModel: ObservableObject {
         let current = stops.firstIndex { $0 == here } ?? -1
         land(on: stops[min(max(current + step, 0), stops.count - 1)])
         return true
+    }
+
+    /// Put the keyboard on a row.
+    func select(_ id: BenchSessionRow.ID) {
+        land(on: id)
     }
 
     private func land(on stop: BenchSessionRow.ID?) {

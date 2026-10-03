@@ -64,13 +64,13 @@ final class SessionsFinishedTests: XCTestCase {
             "opened: the newest ten, in benchd's order")
 
         // The keyboard is on a finished row; closing them moves it to one still listed.
-        model.selected = "done-3"
+        model.select("done-3")
         model.toggleFinished()
         XCTAssertEqual(model.selected, "run-a")
 
         // The keyboard reaches the finished line: ↓ past the running rows lands on it, Return
         // there opens it, and ↓ goes on into the finished rows.
-        model.selected = "run-b"
+        model.select("run-b")
         XCTAssertTrue(model.move(1))
         XCTAssertTrue(model.onFinishedLine)
         XCTAssertNil(model.selected)
