@@ -2,32 +2,106 @@ import HelmWire
 import PocketKit
 import SwiftUI
 
-/// home: each workspace and the sessions on its bench Pocket can talk to, its orchestrators
-/// (the sessions the operator started) first and the rest dimmed under them.
+/// home: a search field, then each workspace as a section that collapses, the ones that need him
+/// first. A section shows its running sessions, orchestrators (the sessions he started) first and
+/// the rest dimmed under them, and its finished ones behind a disclosure.
 struct HomeView: View {
     @EnvironmentObject private var model: PocketModel
     let talk: (String) -> Void
+    @State private var query = ""
+    /// The collapsed sections' paths, one per line: kept across launches.
+    @AppStorage("collapsed") private var collapsedPaths = ""
+    @State private var showingFinished: Set<String> = []
+
+    private var collapsed: Set<String> {
+        Set(collapsedPaths.split(separator: "\n").map(String.init))
+    }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(PocketHome.groups(workspaces: model.workspaces, sessions: model.sessions)) {
-                    group in
-                    Text(group.name.uppercased())
-                        .font(Mono.group).tracking(1).foregroundStyle(Palette.dim)
-                        .padding(.top, 10)
-                    if group.rows.isEmpty {
-                        Text("no agents").font(Mono.small).foregroundStyle(Palette.faint)
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("", text: $query, prompt: Text("search").foregroundStyle(Palette.faint))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(Mono.body).foregroundStyle(Palette.text)
+                .padding(.horizontal, 16).padding(.bottom, 6)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(
+                        PocketHome.sections(
+                            workspaces: model.workspaces, sessions: model.sessions, query: query)
+                    ) { section in
+                        SectionView(
+                            section: section,
+                            open: !collapsed.contains(section.path) || !query.isEmpty,
+                            showingFinished: showingFinished.contains(section.path)
+                                || !query.isEmpty,
+                            toggle: { toggle(section.path) },
+                            toggleFinished: {
+                                showingFinished.formSymmetricDifference([section.path])
+                            },
+                            talk: talk)
                     }
-                    ForEach(group.rows) { row in
-                        SessionRowView(row: row, detail: "\(row.harness) · \(row.model ?? "?")")
-                            .opacity(row.isOrchestrator ? 1 : 0.6)
-                            .onTapGesture { row.screen.map(talk) }
-                    }
+                    Failure()
                 }
-                Failure()
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
+        }
+    }
+
+    private func toggle(_ path: String) {
+        var paths = collapsed
+        paths.formSymmetricDifference([path])
+        collapsedPaths = paths.sorted().joined(separator: "\n")
+    }
+}
+
+/// One workspace: its header (▾ open, ▸ collapsed, ● when something needs him), its running
+/// sessions, and the finished ones behind "finished (n)".
+struct SectionView: View {
+    let section: PocketSection
+    let open: Bool
+    let showingFinished: Bool
+    let toggle: () -> Void
+    let toggleFinished: () -> Void
+    let talk: (String) -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(open ? "▾" : "▸")
+                Text(section.name.uppercased()).tracking(1)
+                if section.needsHim { Text("●").foregroundStyle(Palette.asking) }
+                Spacer()
+                Text("\(section.running.count)")
+            }
+            .font(Mono.group).foregroundStyle(Palette.dim)
+            .padding(.top, 10)
+            .contentShape(Rectangle())
+        }
+        if open {
+            if section.running.isEmpty {
+                Text("nothing running").font(Mono.small).foregroundStyle(Palette.faint)
+            }
+            ForEach(section.running) { row in
+                SessionRowView(row: row, detail: "\(row.harness) · \(row.model ?? "?")")
+                    .opacity(row.isOrchestrator ? 1 : 0.6)
+                    .onTapGesture { row.screen.map(talk) }
+            }
+            if section.finishedCount > 0 {
+                Button(action: toggleFinished) {
+                    Text("\(showingFinished ? "▾" : "▸") finished (\(section.finishedCount))")
+                        .font(Mono.small).foregroundStyle(Palette.faint)
+                }
+            }
+            if showingFinished {
+                ForEach(section.finished) { row in
+                    SessionRowView(
+                        row: row, detail: "\(row.harness) · \(row.model ?? "?")",
+                        age: BenchSessionRow.age(sinceMs: row.lastMs, now: Date())
+                    )
+                    .opacity(0.6)
+                }
+            }
         }
     }
 }

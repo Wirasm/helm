@@ -71,29 +71,6 @@ final class PocketRowsTests: XCTestCase {
         XCTAssertNil(row("e", running("busy"), open: .transcript(path: "/t", parent: "a")).screen)
     }
 
-    /// Home: each workspace in the document's order, named by its folder, holding the sessions
-    /// Pocket can talk to: the operator's orchestrators first, then the rest, each in benchd's
-    /// order. A workspace with none still shows, empty.
-    func testHomePinsTheOperatorsOrchestratorsInEachWorkspace() {
-        let sessions: [String: [BenchSessionRow]] = [
-            "/w/helm": [
-                row(
-                    "asking", running("waiting", "permission prompt"), spawner: .agent(handle: "o")),
-                row("ended", .finished(atMs: 1), open: .resume(argv: ["claude"], cwd: "/w/helm")),
-                row("job", running("busy"), open: .claudeAttach(job: "j")),
-                row("busy", running("busy")),
-                row("lead", running("busy"), spawner: .operator),
-            ],
-            "/w/prp": [row("prp-lead", running("idle"), spawner: .operator)],
-        ]
-        let groups = PocketHome.groups(
-            workspaces: ["/w/prp", "/w/helm", "/w/kild"], sessions: sessions)
-        XCTAssertEqual(groups.map(\.name), ["prp", "helm", "kild"])
-        XCTAssertEqual(
-            groups.map { $0.rows.map(\.id) }, [["prp-lead"], ["lead", "asking", "busy"], []])
-        XCTAssertEqual(groups[1].rows.map(\.isOrchestrator), [true, false, false])
-    }
-
     /// A session two workspaces list (one inside the other) belongs to the most specific one its
     /// cwd is in (operator, 2026-10-03), so home and agents list it once. One whose cwd is in
     /// neither, a worktree elsewhere, stays with the first workspace that listed it.
