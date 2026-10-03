@@ -59,32 +59,7 @@ extension BenchSessionRow {
     }
 }
 
-/// One workspace on the home screen: its folder's name and the sessions Pocket can talk to.
-package struct PocketGroup: Equatable, Sendable, Identifiable {
-    package var path: String
-    package var rows: [BenchSessionRow]
-
-    package var id: String { path }
-    package var name: String { URL(fileURLWithPath: path).lastPathComponent }
-}
-
 package enum PocketHome {
-    /// Each workspace in the document's order, with its sessions that have a screen: the
-    /// orchestrators first, then the rest, each in benchd's order (`sessions/all`: running first,
-    /// newest first).
-    package static func groups(
-        workspaces: [String], sessions: [String: [BenchSessionRow]]
-    )
-        -> [PocketGroup]
-    {
-        workspaces.map { path in
-            let rows = (sessions[path] ?? []).filter { $0.screen != nil }
-            return PocketGroup(
-                path: path,
-                rows: rows.filter(\.isOrchestrator) + rows.filter { !$0.isOrchestrator })
-        }
-    }
-
     /// Each session under one workspace: of those `sessions/all` listed it under, the most
     /// specific one its cwd is in, else the first in `workspaces` (a worktree outside every
     /// workspace's folder). benchd lists a session under every workspace whose folder or git

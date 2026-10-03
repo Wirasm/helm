@@ -52,9 +52,10 @@ struct TalkView: View {
         }
     }
 
+    /// The running sessions of the workspace this one is in: switching stays there.
     private var talkable: [BenchSessionRow] {
-        PocketHome.groups(workspaces: model.workspaces, sessions: model.sessions)
-            .flatMap(\.rows)
+        PocketHome.sections(workspaces: model.workspaces, sessions: model.sessions, query: "")
+            .first { $0.running.contains { $0.screen == target } }?.running ?? []
     }
 
     private var pills: some View {
