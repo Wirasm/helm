@@ -12,7 +12,7 @@ package struct PocketSection: Equatable, Sendable, Identifiable {
     package var finished: [BenchSessionRow]
     /// Every finished session, shown or not.
     package var finishedCount: Int
-    /// Something in it waits on the operator or finished a turn he has not seen.
+    /// A running session it shows waits on the operator or finished a turn he has not seen.
     package var needsHim: Bool
     /// When anything in it last changed.
     package var lastActive: UInt64
@@ -52,7 +52,8 @@ extension PocketHome {
             path: path,
             running: running.filter(\.isOrchestrator) + running.filter { !$0.isOrchestrator },
             finished: Array(finished.prefix(finishedShown)), finishedCount: finished.count,
-            needsHim: rows.contains { [.asking, .finished].contains(Attention($0)) },
+            // Of what it shows: a session with no screen to open cannot be what he is sent to.
+            needsHim: running.contains { [.asking, .finished].contains(Attention($0)) },
             lastActive: rows.map(\.lastMs).max() ?? 0)
     }
 }

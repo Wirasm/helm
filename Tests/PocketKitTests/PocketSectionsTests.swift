@@ -54,6 +54,18 @@ final class PocketSectionsTests: XCTestCase {
         XCTAssertEqual(order, ["/w/asking", "/w/quiet", "/w/old", "/w/empty"])
     }
 
+    /// "Needs him" is about what the section shows: a session waiting with no screen to open (a
+    /// background job) does not put ● on a section that lists nothing to tap.
+    func testASectionNeedsHimOnlyForARowItShows() throws {
+        var job = row("job", running("waiting"))
+        job.open = .claudeAttach(job: "j")
+        let section = try XCTUnwrap(
+            PocketHome.sections(workspaces: ["/w/bg"], sessions: ["/w/bg": [job]], query: "")
+                .first)
+        XCTAssertTrue(section.running.isEmpty)
+        XCTAssertFalse(section.needsHim)
+    }
+
     /// The search keeps the sessions whose name, handle, branch or model has the words, running or
     /// finished, and drops the sections left with none.
     func testSearchFiltersByNameBranchOrModel() {
