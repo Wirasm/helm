@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The sessions list (#384): one line per running session, as benchd orders them, then the
 /// finished ones behind a disclosure, the newest few (`SessionsModel.listed`). Keyboard first:
-/// ↑↓ move, Return opens, ⌫ dismisses a finished one. A click opens too.
+/// ↑↓ move (the finished line is a stop), Return opens a row or opens and closes the finished
+/// line, ⌫ dismisses a finished one. A click opens too.
 struct SessionsView: View {
     @ObservedObject var model: SessionsModel
     let holdsKeyboard: Bool
@@ -36,7 +37,7 @@ struct SessionsView: View {
         .focused($focused)
         .onKeyPress(.upArrow) { move(-1) }
         .onKeyPress(.downArrow) { move(1) }
-        .onKeyPress(.return) { act { await model.open($0) } }
+        .onKeyPress(.return) { open() }
         .onKeyPress(.delete) { act { await model.dismiss($0) } }
         .onAppear { focused = holdsKeyboard }
         .onChange(of: holdsKeyboard) { focused = holdsKeyboard }
@@ -51,7 +52,7 @@ struct SessionsView: View {
                     if !model.finished.isEmpty {
                         FinishedDisclosure(
                             count: model.finished.count, isOpen: model.showsFinished,
-                            toggle: model.toggleFinished)
+                            isSelected: model.onFinishedLine, toggle: model.toggleFinished)
                     }
                     if model.showsFinished {
                         ForEach(model.finished.prefix(SessionsModel.finishedListed)) { row in
@@ -84,12 +85,16 @@ struct SessionsView: View {
     }
 
     private func move(_ step: Int) -> KeyPress.Result {
-        let listed = model.listed
-        guard !listed.isEmpty else { return .ignored }
-        let current = listed.firstIndex { $0.id == model.selected } ?? -1
-        let next = min(max(current + step, 0), listed.count - 1)
-        model.selected = listed[next].id
-        return .handled
+        model.move(step) ? .handled : .ignored
+    }
+
+    /// Return: open the row, or open or close the finished line the keyboard is on.
+    private func open() -> KeyPress.Result {
+        if model.onFinishedLine {
+            model.toggleFinished()
+            return .handled
+        }
+        return act { await model.open($0) }
     }
 
     private func act(_ action: @escaping (BenchSessionRow) async -> Void) -> KeyPress.Result {
@@ -105,6 +110,7 @@ struct SessionsView: View {
 private struct FinishedDisclosure: View {
     let count: Int
     let isOpen: Bool
+    let isSelected: Bool
     let toggle: () -> Void
 
     var body: some View {
@@ -119,6 +125,7 @@ private struct FinishedDisclosure: View {
             .foregroundStyle(Color.textMuted)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
+            .background(isSelected ? Color.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.chrome)

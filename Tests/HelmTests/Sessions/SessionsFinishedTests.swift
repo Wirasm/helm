@@ -68,11 +68,47 @@ final class SessionsFinishedTests: XCTestCase {
         model.toggleFinished()
         XCTAssertEqual(model.selected, "run-a")
 
+        // The keyboard reaches the finished line: ↓ past the running rows lands on it, Return
+        // there opens it, and ↓ goes on into the finished rows.
+        model.selected = "run-b"
+        XCTAssertTrue(model.move(1))
+        XCTAssertTrue(model.onFinishedLine)
+        XCTAssertNil(model.selected)
+        model.toggleFinished()
+        XCTAssertTrue(model.move(1))
+        XCTAssertEqual(model.selected, "done-1")
+        XCTAssertTrue(model.move(-1))
+        XCTAssertTrue(model.onFinishedLine)
+        model.toggleFinished()
+
         // Per workspace: opened in one, still closed in another.
         model.toggleFinished()
         workspace = WorkspacePath("/w/two")
         XCTAssertFalse(model.showsFinished)
         workspace = WorkspacePath("/w/one")
         XCTAssertTrue(model.showsFinished)
+    }
+}
+
+extension SessionsFinishedTests {
+    /// With nothing running, the keyboard starts on the finished line, so Return still reaches a
+    /// finished session to resume.
+    func testWithNothingRunningTheKeyboardStartsOnTheFinishedLine() async throws {
+        let server = try FakeBenchd(
+            document: BenchFixture.document(
+                "/w/one", BenchFixture.bench([BenchFixture.terminal()]), seq: 1))
+        defer { server.stop() }
+        server.answer = { request in
+            [
+                "id": request["id"] ?? "", "status": "ok",
+                "data": ["rows": [Self.row("done-1", finishedAt: 5)]],
+            ]
+        }
+        let model = model(server)
+        await model.refresh()
+        XCTAssertTrue(model.onFinishedLine, "nothing running: the finished line has the keyboard")
+        model.toggleFinished()
+        XCTAssertTrue(model.move(1))
+        XCTAssertEqual(model.selected, "done-1")
     }
 }

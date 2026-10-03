@@ -20,8 +20,10 @@ final class SessionsModel: ObservableObject {
     /// Why the list may be incomplete or stale: benchd unreachable or refusing, or files it could
     /// not read. nil when the list is whole.
     @Published private(set) var problem: String?
-    /// The row the keyboard is on.
+    /// The row the keyboard is on; nil while it is on the finished line.
     @Published var selected: BenchSessionRow.ID?
+    /// The keyboard is on the "finished" line, where Return opens or closes it.
+    @Published private(set) var onFinishedLine = false
     /// The workspaces whose finished sessions the operator has opened, by path.
     @Published private var finishedOpen: Set<String> = []
 
@@ -50,6 +52,7 @@ final class SessionsModel: ObservableObject {
         guard let workspace else {
             rows = []
             problem = "No workspace is open."
+            keepSelectionListed()
             return
         }
         let list = actions.list
@@ -89,11 +92,39 @@ final class SessionsModel: ObservableObject {
         keepSelectionListed()
     }
 
-    /// The keyboard stays on a row the drawer shows.
+    /// Where ↑↓ stop: the running rows, the finished line when there is anything finished, then
+    /// the finished rows it lists once opened. nil is the finished line.
+    var stops: [BenchSessionRow.ID?] {
+        running.map(\.id) + (finished.isEmpty ? [] : [nil])
+            + (showsFinished ? finished.prefix(Self.finishedListed).map(\.id) : [])
+    }
+
+    /// Move the keyboard `step` stops, stopping at either end. false when there is nowhere to go.
+    func move(_ step: Int) -> Bool {
+        let stops = stops
+        guard !stops.isEmpty else { return false }
+        let here = onFinishedLine ? nil : selected
+        let current = stops.firstIndex { $0 == here } ?? -1
+        land(on: stops[min(max(current + step, 0), stops.count - 1)])
+        return true
+    }
+
+    private func land(on stop: BenchSessionRow.ID?) {
+        onFinishedLine = stop == nil
+        selected = stop
+    }
+
+    /// The keyboard stays on something the drawer shows: its row, else the first stop (the
+    /// finished line, in a workspace where nothing runs).
     private func keepSelectionListed() {
-        let listed = listed
-        if selected.map({ id in !listed.contains { $0.id == id } }) ?? true {
-            selected = listed.first?.id
+        let stops = stops
+        let somewhere = onFinishedLine || selected != nil
+        if somewhere, stops.contains(onFinishedLine ? nil : selected) { return }
+        if let first = stops.first {
+            land(on: first)
+        } else {
+            selected = nil
+            onFinishedLine = false
         }
     }
 
