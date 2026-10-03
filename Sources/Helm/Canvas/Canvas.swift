@@ -922,23 +922,14 @@ extension CanvasModel {
         guard let live = liveFile else {
             return .failure(CanvasFileFailure(reason: "only an HTML canvas has a live file"))
         }
-        switch files.write(
-            write.text, to: live.path, expect: .unchanged(write.base ?? ""), notify: write.notify)
-        {
-        case .written:
-            liveSeen = .bytes(Data(write.text.utf8))
-            return .success(.written(write.text))
-        case let .changed(now):
-            guard let text = CanvasText.decode(now) else {
-                return .failure(
-                    CanvasFileFailure(
-                        reason: "\(live.lastPathComponent) changed, and is not UTF-8 text"))
-            }
-            liveSeen = .bytes(now)
-            return .success(.changed(text))
-        case let .failed(why):
-            return .failure(CanvasFileFailure(reason: why))
+        let answer = files.writeLive(write, to: live.path)
+        // Either way the page now holds this text, and it is the file's bytes (`writeLive`).
+        switch answer {
+        case let .success(.written(text)), let .success(.changed(text)):
+            liveSeen = .bytes(Data(text.utf8))
+        case .failure: break
         }
+        return answer
     }
 
     /// benchd says the live file changed, or helm is reading everything again. Bytes the page has

@@ -164,14 +164,7 @@ struct CanvasWebView: UIViewRepresentable {
         if let live = BenchLiveFile.path(for: path) {
             let channel = CanvasDataChannel(host: CanvasAddress.host(for: standardized)) {
                 write in
-                switch files.write(
-                    write.text, to: live, expect: .unchanged(write.base ?? ""),
-                    notify: write.notify)
-                {
-                case .written: .success(.written(write.text))
-                case let .changed(data): .success(.changed(String(decoding: data, as: UTF8.self)))
-                case let .failed(why): .failure(CanvasFileFailure(reason: why))
-                }
+                files.writeLive(write, to: live)
             }
             configuration.userContentController.addScriptMessageHandler(
                 channel, contentWorld: .page, name: CanvasDataWrite.handlerName)
