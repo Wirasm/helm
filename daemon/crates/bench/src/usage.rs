@@ -4,6 +4,8 @@
 //! - **Claude Code** publishes `rate_limits` only to its statusline command (measured on
 //!   2.1.286: no hook payload carries it). `bench statusline [command...]` is wired as that
 //!   command: it reports the limits and runs the operator's own statusline on the same input.
+//!   Claude runs it with its own environment, so `CLAUDE_CONFIG_DIR` there says which login's
+//!   plan the limits are (measured on 2.1.288).
 //! - **codex** writes them into its rollout, which every hook payload names
 //!   (`transcript_path`), so `bench hook codex` reads the newest record there.
 
@@ -35,10 +37,11 @@ pub fn statusline(command: &[String]) -> i32 {
         .take(STATUSLINE_STDIN_MAX)
         .read_to_end(&mut input);
     // Reported first, so a statusline command that cannot start loses only itself.
-    if let Some(usage) = serde_json::from_slice::<Value>(&input)
+    if let Some(mut usage) = serde_json::from_slice::<Value>(&input)
         .ok()
         .and_then(|payload| Usage::from_claude_statusline(&payload, now_ms()))
     {
+        usage.account = claude_account(std::env::var_os("CLAUDE_CONFIG_DIR"));
         let _ = crate::quiet_request("usage/report", json!(usage));
     }
     let child = match command.split_first() {
@@ -68,6 +71,14 @@ pub fn statusline(command: &[String]) -> i32 {
         Some(Ok(status)) => status.code().unwrap_or(1),
         Some(Err(_)) => 1,
     }
+}
+
+/// Which Claude login a statusline runs for: its session's `CLAUDE_CONFIG_DIR` as spelled, or
+/// none for the default login. Empty counts as unset, as it does for Claude's keychain lookup.
+fn claude_account(config_dir: Option<std::ffi::OsString>) -> Option<String> {
+    config_dir
+        .map(|d| d.to_string_lossy().into_owned())
+        .filter(|d| !d.is_empty())
 }
 
 /// What a codex hook reports about its plan's limits: the newest record in its rollout, on the

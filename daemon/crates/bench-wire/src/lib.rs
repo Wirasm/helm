@@ -1421,9 +1421,18 @@ mod tests {
             "a finished turn and mail to the operator, so helm's decoder is pinned too"
         );
         assert_eq!(
-            reply.usage.iter().map(|u| u.harness).collect::<Vec<_>>(),
-            [Harness::Claude, Harness::Codex],
-            "the sample carries both harnesses' limits, one without a reset time"
+            reply
+                .usage
+                .iter()
+                .map(|u| (u.harness, u.account.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                (Harness::Claude, None),
+                (Harness::Claude, Some("/Users/op/.claude-b")),
+                (Harness::Codex, None)
+            ],
+            "the sample carries both harnesses' limits, a second Claude login's, and one without \
+             a reset time"
         );
     }
 

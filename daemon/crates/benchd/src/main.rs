@@ -344,8 +344,8 @@ struct Core {
     /// (Claude's `SessionEnd` on the hangup), and that must not erase the pane records `bench
     /// restore` needs after the restart.
     stopping: bool,
-    /// Each harness's plan limits as last reported (#143, `usage`).
-    usage: std::collections::BTreeMap<bench_wire::Harness, bench_wire::Usage>,
+    /// Each harness's plan limits as last reported, per account (#143, `usage`).
+    usage: std::collections::BTreeMap<(bench_wire::Harness, Option<String>), bench_wire::Usage>,
     /// The one codex app-server every codex agent is a thread on (#466), started on first use.
     codex: Arc<codex::Host>,
     /// Who spawned each benchd session, by session id (`attention::spawner`): what a conversation

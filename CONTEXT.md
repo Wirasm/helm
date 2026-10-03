@@ -242,8 +242,9 @@ _Avoid_: caffeinate (the command-line tool), insomnia, no-sleep
 **plan limits**:
 How close the operator's Claude and codex subscriptions are to their limits: per window (Claude's
 five hours and seven days, codex's week), the share used and when it resets, as the harness itself
-published it. benchd holds them (`usage` in `sessions`); the status bar shows one capsule with
-each harness's fullest window, faint once 15 minutes old.
+published it, per account when the operator has two Claude logins (the second named by its
+config dir). benchd holds them (`usage` in `sessions`); the status bar shows one capsule with
+each harness's and account's fullest window, faint once 15 minutes old.
 _Avoid_: quota, rate limit (that is an API key's throughput), usage (spend)
 
 **keymap file**:

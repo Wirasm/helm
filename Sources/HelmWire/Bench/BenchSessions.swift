@@ -393,10 +393,14 @@ package struct BenchLiveSessions: Decodable, Equatable, Sendable {
 package struct BenchUsage: Decodable, Equatable, Sendable {
     /// `claude` or `codex`, as benchd spells it.
     package var harness: String
+    /// Which of the harness's logins this plan is: for Claude, the config dir its session ran
+    /// under (`CLAUDE_CONFIG_DIR`). nil for the default login, and for codex.
+    package var account: String?
     package var windows: [Window]
 
-    package init(harness: String, windows: [Window]) {
+    package init(harness: String, account: String? = nil, windows: [Window]) {
         self.harness = harness
+        self.account = account
         self.windows = windows
     }
 
