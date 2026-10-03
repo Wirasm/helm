@@ -1,8 +1,10 @@
 //! Where a resumed conversation runs when the folder it ran in is gone (#621).
 //!
 //! A finished agent stays resumable, but its record names the worktree it ran in, and the merge
-//! queue prunes that worktree after the merge. Every route that resumes (`spawn --resume`,
-//! `restore`, `resume`) asks [`start`] first, outside the core lock since it may run git:
+//! queue prunes that worktree after the merge. Both routes that resume (`spawn --resume` and
+//! `restore`) ask [`plan`], outside the core lock since it may run git. A resume that is refused
+//! (its conversation is live elsewhere) is refused before [`start`], so it recreates nothing.
+//! [`start`] finds the folder:
 //!
 //! - **The folder is there**: it, as before.
 //! - **It is gone, its parent is not, git ignores it, and the agent's branch still exists**:
@@ -19,10 +21,12 @@
 //! the spawn has its pane, so a spawn refused after that (a taken `--name`, a placement refusal)
 //! leaves it in place: the folder the next resume of that conversation would recreate anyway.
 
-use bench_session::AgentKind;
+use crate::Core;
+use bench_session::{AgentKind, Posture};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Where a resume runs, and what its notice says about it when that is not where it ran.
@@ -30,6 +34,31 @@ use std::time::{Duration, Instant};
 pub struct Start {
     pub cwd: String,
     pub note: Option<String>,
+}
+
+/// Whether conversation `conversation` of `agent`, recorded in `cwd`, may be resumed, and how:
+/// refused while a live process holds it ([`crate::restore::refusal`]), else in the posture it
+/// was spawned in (a fork's is read-only, #531), in the folder [`start`] finds, which a codex must
+/// trust. The refusal comes first, so a resume that will not run brings back no worktree.
+pub fn plan(
+    core: &Arc<Mutex<Core>>,
+    agent: AgentKind,
+    conversation: &str,
+    cwd: &str,
+) -> Result<(Start, Posture), String> {
+    let forked_from = {
+        let c = core.lock().unwrap();
+        if let Some(why) = crate::restore::refusal(&c, agent.name(), conversation) {
+            return Err(why);
+        }
+        crate::sessions::recorded(&c, agent.name(), conversation)
+            .and_then(|h| h.forked_from.clone())
+    };
+    let start = start(agent, conversation, cwd)?;
+    if agent == AgentKind::Codex {
+        crate::codex_trust::may_run(&start.cwd)?;
+    }
+    Ok((start, Posture::resuming(forked_from.as_deref())))
 }
 
 /// Where conversation `conversation` of `agent`, recorded in `cwd`, resumes. The branch it is

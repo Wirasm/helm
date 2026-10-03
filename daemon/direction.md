@@ -14,7 +14,7 @@ operator and the agents are equal owners; every verb exists in an addressed, non
 form; both parties go through the same socket. Migration is strangler-style inside this
 repo: one vertical at a time, old code unwired only when the new is proven.
 
-**Where it stands: M0 + M5a + mail + the shared browser + the bench document's daemon half.** The daemon owns the mailroom (`bench-mail`:
+**Where it stands: M0 to M5c have landed except M1 attention, which is in progress (How it grows, below).** The daemon owns the mailroom (`bench-mail`:
 files are the record, notices carry the path never the body, retire-never-delete,
 metadata-only listings) and delivery by the recipient's own state (#358, below): nothing is
 typed into a pty, and the loop cap is a per-recipient token bucket on the turns benchd starts —
@@ -107,7 +107,7 @@ process of the session each terminal pane in the document shows, or by the pane 
 report), benchd's own sessions, Claude Code `--bg` jobs, running subagents, and finished
 sessions — the last only from `sessions/hosted.json`, benchd's record of what it and helm
 hosted, because no harness file says where a session ran. `bench sessions dismiss` hides a
-finished row. helm's drawer is the next step.
+finished row. helm draws the list in its Sessions drawer.
 
 **And the sensor (#358, first half of M2 finish).** `bench hook <claude|codex|pi>` is one
 command wired into an agent's own hooks. On every event it reports the agent's state over the
@@ -208,10 +208,11 @@ shell (`shells.rs`), with the environment helm's panes gave their shells and Gho
 integration built in (`shell_env.rs`); and a session no pane shows any more ends. After a restart
 the panes keep their records, and `restore` (`bench restore --all`, `just resume-all`) gives
 each a session again from that record alone: the agent's conversation resumed, else a shell in the
-pane's last directory. Every resume benchd starts (`restore`, `bench resume`, `spawn --resume` with
-no prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
+pane's last directory. Every resume benchd starts (`restore`, and `spawn --resume` with no
+prompt) sends the agent a fresh notice as its first message (`spawn::wire`): its last turn was
 interrupted, carry on and re-arm what it had running. It never sends an earlier spawn's prompt.
-Each of them asks `resume_dir::start` where the conversation runs first (#621): a folder that is
+Both ask `resume_dir::plan` first. It refuses a conversation a live process holds (below) before
+it looks for the folder, so a refused resume brings back nothing; then (#621) a folder that is
 gone (the merge queue prunes a worktree after its merge) comes back as a worktree on the local
 branch the harness last recorded, when git ignores that folder (`.worktrees/`) and its parent is
 still there; else a claude or codex starts in the repository root, and the notice
@@ -223,7 +224,7 @@ a claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which 
 in another terminal after a restart. A registry row of a live process that cannot be read refuses
 too, saying so: it could be the holder. codex refuses a thread another process writes by itself; pi
 records no holder, so a pi outside benchd is seen only once its hook reports. `restore` gives that
-pane a shell that says why, `spawn --resume` and `bench resume` refuse. benchd writes both: which agent is in a pane from that agent's own hook
+pane a shell that says why, and `spawn --resume` refuses. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 
@@ -248,9 +249,8 @@ is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<por
 `BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
 Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed
 in seconds. There is no auth: bind a tailnet address, never a public one.
-`scripts/benchd-agent.sh install --listen tailscale` writes it into the login agent: the Mac's
-tailnet address, or 127.0.0.1 where Tailscale runs in userspace mode and forwards the tailnet
-there, which makes every loopback port reachable from the tailnet (`Pocket/README.md`). With `BENCH_URL` set
+`scripts/benchd-agent.sh install --listen tailscale` writes the Mac's tailnet address into the
+login agent, and a later install keeps it until `--no-listen` (`Pocket/README.md`). With `BENCH_URL` set
 helm runs its own `bench` for a pane, since the one `status` names is on benchd's machine. And
 `bench attach --in-pane` no longer reads "no answer" as "the session ended": it says it cannot
 reach benchd and asks again with a capped backoff until benchd answers, then attaches and
@@ -374,8 +374,9 @@ about that agent and once a second besides (Claude's registry row can change wit
 Esc), judging work and idle from that report alone, until the agent waits, finishes a turn (after
 `--after`), goes idle without finishing one after the watch saw it working (a failed or interrupted
 turn, which ends with no `Stop`), or its session ends, with no model turn spent; an idle report
-counts only when it is newer than the work it follows, so a report with no time waits for the
-timeout.
+counts when it is no older than the work the watch saw (a turn that fails in the millisecond it
+started stamps both alike, #629), or newer than the work benchd announced, so a report with no time
+waits for the timeout.
 
 **Where it stood before mail: M0 + M5a.** A suite-aware record root, an append-only event log, one
 unix socket, eight verbs, a CLI speaking helm's exit-code discipline, and a conformance
@@ -383,8 +384,8 @@ gate that runs the real binaries. M5a is the pty core: `spawn` puts a real inter
 agent (claude, codex, pi — the allowlist) into a daemon-owned pty with posture, model
 and effort flags spelled once in `bench-session`, prompt by file, runtime session id
 minted at spawn; `attach` is a dtach-grade raw relay with ring replay and Ctrl-\ detach;
-`close` is drain-then-die; `resume` re-enters an exited session where the runtime mints
-its id (claude, pi — codex refuses with the reason). Nothing helm does today is owned
+`close` is drain-then-die; `resume` re-entered an exited session where the runtime mints
+its id (retired 2026-10-03: `spawn --resume` and `restore <pane>` cover it). Nothing helm does today is owned
 here yet; mail is next, waking agents by pasting into ptys this daemon now owns.
 
 ## The spine
@@ -476,10 +477,10 @@ this workspace:
 
 ## How it grows
 
-Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), and M4 (the bench
-document in benchd, and helm as its only client: #354). Next, in order (tracking issue #362):
-M2 finish, one mailroom (helm's mail hooks become sensors) →
-M3 `bench` as the whole agent surface → drawers, keymap and rules → M1 attention → M5b every pane a benchd session
-→ M5c helm reaches benchd over the tailnet → M7 the agents' own machine. Each milestone: new event
+Landed: M0 skeleton, M5a daemon ptys, mail, the shared browser (#350), M4 (the bench document in
+benchd, and helm as its only client: #354), M2 (one mailroom, helm's mail hooks become sensors),
+M3 (`bench` as the whole agent surface), drawers, keymap and rules, M5b (every pane a benchd
+session) and M5c (helm reaches benchd by address); their tracking issue #362 is closed. In
+progress: M1 attention (#357). Then M7, the agents' own machine. Each milestone: new event
 kinds, new verbs, same spine. The roadmap is the sequence; the operator names the milestone
 that starts.

@@ -76,14 +76,17 @@ session, such as Ghostty outside helm (`just benchd-install` refuses with `BENCH
 every bench session has):
 
 ```text
-just benchd-install      # cargo install bench and benchd, restart the login agent, browser back
+just benchd-install      # cargo install bench and benchd, restart the login agent, panes and browser back
 make release             # then the badge, as above
-just resume-all          # every recorded agent resumed in its pane, every other pane a shell
 ```
 
-`just release-resume <session-id>` was the one-command form for an operator who is away. Since
-M5b it refuses every session in a helm pane (it requires the session to descend from helm's
-process, and pane sessions descend from benchd's), so do not reach for it until that is fixed.
+The install keeps Pocket's listener (`BENCH_LISTEN`) as the installed agent had it; only
+`--no-listen` stops it. It brings back every pane the restart ended (`bench restore --all`) and
+prints what each got; `just resume-all` does the same by hand if that restore failed.
+
+`just release-resume <session-id>` is the one-command form for an operator who is away: it
+builds, restarts helm and benchd, and resumes that session and every other pane
+(`docs/running-helm.md`). The session may be one in a helm pane, which runs inside benchd.
 
 After a release, mail each resumed workstream where it stands.
 

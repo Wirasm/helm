@@ -184,7 +184,8 @@ struct Scanned {
 }
 
 /// The number in the `s<N>` a `session/spawned` or `session/resumed` event started, if it
-/// is one. Both take their id from `next_session`.
+/// is one. Both took their id from `next_session`; `session/resumed` was `bench resume`'s, retired
+/// 2026-10-03, and is still read in the logs written before that.
 fn started_session_number(ev: &Event) -> Option<u64> {
     if ev.kind != "session/spawned" && ev.kind != "session/resumed" {
         return None;
@@ -1054,79 +1055,23 @@ fn answered(req: &Request, result: Result<Value, String>) -> (Response, AfterRes
     (response, AfterResponse::Done)
 }
 
-/// `bench resume <session>`: re-enter an exited session's conversation as a new session, under
-/// its handle, in the posture it ran in.
-fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Status, String)> {
-    let refused = |why: String| (Status::Refused, why);
-    let errored = |why: String| (Status::Error, why);
-    let parsed: SessionArgs = serde_json::from_value(req.args.clone())
-        .map_err(|e| refused(format!("resume args: {e}")))?;
-    let sid = parsed.session.as_str();
-    let old = core.lock().unwrap().sessions.get(sid).cloned();
-    let Some(old) = old else {
-        return Err(refused(format!(
-            "no session {sid:?} in this daemon's lifetime — resume across a daemon restart is not built yet"
-        )));
-    };
-    if old.is_live() {
-        return Err(refused(format!(
-            "session {sid} is still live — `bench attach {sid}` instead"
-        )));
+/// Why an exited session cannot be attached, and how its conversation comes back: `spawn
+/// --resume`, the one route besides `restore <pane>`.
+fn exited(session: &Session) -> String {
+    let sid = &session.id;
+    match session.spec.conversation.id() {
+        // A spawn takes a handle no session in this daemon holds, so the resume gets a new one.
+        Some(id) => format!(
+            "session {sid} has exited — `bench spawn --agent {} --cwd '{}' --resume {id}` \
+             re-enters its conversation, under a new mailbox",
+            session.agent.name(),
+            session.cwd.replace('\'', "'\\''"),
+        ),
+        None => format!(
+            "session {sid} has exited, and {} has no conversation to resume",
+            session.agent.name()
+        ),
     }
-    // The same conversation, and the same posture: a fork stays read-only (#531). Never the
-    // spawn's first prompt: `spawn::wire` gives the resume its notice instead.
-    let Some(runtime) = old.spec.conversation.id() else {
-        return Err(refused(format!(
-            "{} has no conversation to resume",
-            old.spec.agent.name()
-        )));
-    };
-    // Two processes on one conversation fork it, as `restore` and `spawn --resume` say too.
-    if let Some(why) = restore::refusal(&core.lock().unwrap(), old.spec.agent.name(), runtime) {
-        return Err(refused(why));
-    }
-    let mut spec = old.spec.resuming(runtime.to_string());
-    // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
-    let start = resume_dir::start(spec.agent, runtime, &spec.cwd).map_err(refused)?;
-    spec.cwd = start.cwd;
-    if spec.agent == bench_session::AgentKind::Codex {
-        codex_trust::may_run(&spec.cwd).map_err(refused)?;
-    }
-    let (id, root, notices) = {
-        let mut c = core.lock().unwrap();
-        let id = format!("s{}", c.next_session);
-        c.next_session += 1;
-        (id, c.root.clone(), c.notices.clone())
-    };
-    spawn::wire(&mut spec, &root, start.note.as_deref()).map_err(errored)?;
-    spawn::codex_thread(core, &mut spec, &id, &old.handle).map_err(errored)?;
-    let session = Session::spawn(
-        id.clone(),
-        old.handle.clone(),
-        &spec,
-        40,
-        140,
-        &spawn::agent_env(&root, &id, &old.handle),
-        notices,
-    )
-    .map_err(|why| {
-        codex::abandon(core, &spec);
-        refused(why)
-    })?;
-    let mut c = core.lock().unwrap();
-    c.sessions.remove(sid);
-    c.sessions.insert(id.clone(), Arc::clone(&session));
-    hook::serve_codex(&mut c, &session);
-    c.append(
-        "session/resumed",
-        json!({ "session": id, "from": sid, "runtime_session": session.runtime_session }),
-    )
-    .map_err(errored)?;
-    Ok(json!({
-        "session": session.id,
-        "from": sid,
-        "pid": session.pid,
-    }))
 }
 
 #[expect(clippy::too_many_lines, reason = "legacy (#418): 588 lines, limit 100")]
@@ -1324,12 +1269,7 @@ fn dispatch(
                 );
             };
             if !session.is_live() {
-                return (
-                    refused(format!(
-                        "session {sid} has exited — `bench resume {sid}` re-enters it where the runtime supports that"
-                    )),
-                    AfterResponse::Done,
-                );
+                return (refused(exited(&session)), AfterResponse::Done);
             }
             let raw = match stream.try_clone() {
                 Ok(s) => s,
@@ -1359,20 +1299,6 @@ fn dispatch(
         }
 
         Some(Verb::Close) => (close_session(core, req), AfterResponse::Done),
-
-        Some(Verb::Resume) => {
-            let (status, reason, data) = match resume_session(core, req) {
-                Ok(data) => (Status::Ok, None, Some(data)),
-                Err((status, why)) => (status, Some(why), None),
-            };
-            let response = Response {
-                id: req.id.clone(),
-                status,
-                reason,
-                data,
-            };
-            (response, AfterResponse::Done)
-        }
 
         Some(Verb::MailSend) => {
             let parsed: MailSendArgs = match serde_json::from_value(req.args.clone()) {
@@ -1921,4 +1847,23 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "unknown".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_id_counts_whether_it_was_spawned_or_resumed() {
+        // `session/resumed` is no longer written, but a log from before still holds its ids.
+        let event = |kind: &str| Event {
+            seq: 1,
+            at: String::new(),
+            kind: kind.into(),
+            data: json!({ "session": "s7" }),
+        };
+        assert_eq!(started_session_number(&event("session/spawned")), Some(7));
+        assert_eq!(started_session_number(&event("session/resumed")), Some(7));
+        assert_eq!(started_session_number(&event("session/exited")), None);
+    }
 }

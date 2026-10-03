@@ -133,8 +133,8 @@ BUSY = (
 
 
 def settle(bench, handles, want, after_seq, wait):
-    """Wait until every agent's hooks, since `after_seq`, have said busy and last said `want`:
-    a turn that started and, for `idle`, ended."""
+    """Wait until every agent's reported activity (`agent/state`), since `after_seq`, has said busy
+    and last said `want`: a turn that started and, for `idle`, ended."""
     deadline = time.time() + wait
     while True:
         state, worked = {}, set()
@@ -146,8 +146,8 @@ def settle(bench, handles, want, after_seq, wait):
         if all(state.get(h) == want and h in worked for h in handles):
             return
         if time.time() > deadline:
-            # A codex turn refused by a usage limit fires no Stop, so its hooks last said busy.
-            # Go on anyway: benchd asks the thread's own status once mail is waiting for it.
+            # An agent that never reported this far (a harness stopped at a prompt, say) must not
+            # hang the ring: go on, and the mail that never arrives names it.
             print(f"mail-ring: going on although not every agent reported {want}: {state}")
             return
         time.sleep(1)

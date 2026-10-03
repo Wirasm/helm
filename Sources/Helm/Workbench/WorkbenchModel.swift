@@ -155,9 +155,9 @@ final class WorkbenchModel: ObservableObject {
 
     // MARK: - What has each pane's terminal
 
-    /// Ask benchd, every two seconds until cancelled, what has each terminal pane's terminal
-    /// (`SessionForegrounds`): presence and the snapshot join Claude's registry on it. Driven from
-    /// `WorkbenchView`'s `.task`, so its lifetime is the window's.
+    /// Ask benchd, every two seconds until cancelled, what has each terminal pane's terminal and
+    /// what its agent says it is doing (`SessionForegrounds`); helm reads no registry of its own.
+    /// Driven from `WorkbenchView`'s `.task`, so its lifetime is the window's.
     ///
     /// Which agent a pane held is benchd's record now (M5b), written from the agents' own hooks;
     /// helm no longer writes it.
