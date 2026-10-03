@@ -141,7 +141,7 @@ fn mark(c: &mut Core, key: &SessionKey, how: Value) -> Result<u64, String> {
 }
 
 /// Whether an activity is work the agent is doing, which no finished turn survives.
-fn working(activity: &Activity) -> bool {
+pub fn working(activity: &Activity) -> bool {
     !matches!(activity, Activity::Idle | Activity::Unknown)
 }
 

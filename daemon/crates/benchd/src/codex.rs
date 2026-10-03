@@ -455,12 +455,14 @@ pub struct Early {
 }
 
 impl Early {
-    fn take(&mut self, method: &str, transition: &bench_wire::hook::Transition) {
-        if method == "turn/started" {
-            self.ended = false;
-        }
-        if matches!(transition, bench_wire::hook::Transition::TurnEnded) {
-            self.ended = true;
+    /// The same rule attention applies live (`attention::turn`): a turn end is done until the
+    /// agent is at work again.
+    fn take(&mut self, transition: &bench_wire::hook::Transition) {
+        use bench_wire::hook::Transition;
+        match transition {
+            Transition::TurnEnded => self.ended = true,
+            Transition::To(now) if crate::attention::working(now) => self.ended = false,
+            _ => {}
         }
         if let Some(now) = transition.activity() {
             self.activity = Some(now);
@@ -556,7 +558,7 @@ fn read_loop(
                         .unwrap()
                         .entry(thread)
                         .or_default()
-                        .take(method, &transition);
+                        .take(&transition);
                 }
                 on_note(method, params);
             }
