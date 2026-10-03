@@ -1081,6 +1081,12 @@ fn resume_session(core: &Arc<Mutex<Core>>, req: &Request) -> Result<Value, (Stat
             old.spec.agent.name()
         )));
     };
+    // Two processes on one conversation fork it, as `restore` and `spawn --resume` say too.
+    if let Some(by) = restore::holder(&core.lock().unwrap(), runtime) {
+        return Err(refused(format!(
+            "conversation {runtime} is already live in {by}"
+        )));
+    }
     let mut spec = old.spec.resuming(runtime.to_string());
     // The folder it ran in may be gone since: the merge queue prunes worktrees (#621).
     let start = resume_dir::start(spec.agent, runtime, &spec.cwd).map_err(refused)?;

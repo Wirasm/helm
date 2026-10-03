@@ -213,7 +213,13 @@ gone (the merge queue prunes a worktree after its merge) comes back as a worktre
 branch the harness last recorded, when git ignores that folder (`.worktrees/`) and its parent is
 still there; else a claude or codex starts in the repository root, and the notice
 says which; pi re-enters a conversation only where it ran, so its resume is refused instead. The
-sessions drawer resumes a finished row through `spawn --resume` for the same reason. benchd writes both: which agent is in a pane from that agent's own hook
+sessions drawer resumes a finished row through `spawn --resume` for the same reason. None of
+them re-enters a conversation a live process holds, since two processes on one conversation fork
+it (`restore::holder`): a benchd session, an agent whose hook reported since benchd started, or a
+claude anywhere by Claude's registry (`~/.claude/sessions/<pid>.json`), which is what catches one
+in another terminal after a restart. codex refuses a thread another process writes by itself; pi
+records no holder, so a pi outside benchd is seen only once its hook reports. `restore` gives that
+pane a shell that says why, `spawn --resume` and `bench resume` refuse. benchd writes both: which agent is in a pane from that agent's own hook
 (claude, codex and pi alike; cleared at its `SessionEnd`, except while benchd itself is stopping),
 and the shell's directory read off its process (`Surface::Terminal::cwd`). Sessions do not outlive benchd: ruled 2026-09-27, resume instead.
 

@@ -134,7 +134,10 @@ SLOT=$("$BENCH" get pane "$PANE" | python3 -c 'import json,sys; print(json.load(
   workspace whose folder is gone still closes. It never touches the folder, its files or git.
 - A benchd restart ends every session. The panes stay; `just resume-all` (`bench restore --all`)
   gives each a session again: the agent recorded there resumed (claude, codex or pi, recorded from
-  its own hook), else a shell in the directory the pane's shell was last working in.
+  its own hook), else a shell in the directory the pane's shell was last working in. A
+  conversation a live process already holds (a `claude --resume` in another terminal) is never
+  resumed a second time: that pane gets a shell whose first line says why, and `bench resume` and
+  `bench spawn --resume` refuse it.
 - Every codex benchd starts is a thread on benchd's one codex app-server; its pane attaches
   to it. benchd starts that server trusting the hooks codex says need review, so no codex pane
   opens on "Hooks need review"; nothing is saved. A `~/.codex/hooks.json` changed after the
