@@ -71,9 +71,9 @@ pub struct Server {
     /// first turn benchd started on it: never let go, and stopped if the spawn fails
     /// ([`Server::abandon`]) so no agent runs that no pane shows.
     pending: Mutex<HashMap<String, FirstTurn>>,
-    /// Each thread's status as codex last said, so one that changed before its session was
-    /// registered is not lost ([`Server::claim`]).
-    statuses: Mutex<HashMap<String, String>>,
+    /// What codex said about each thread lately, so a turn that ended or a status that changed
+    /// before its session was registered is not lost ([`Server::claim`]).
+    early: Mutex<HashMap<String, Early>>,
     gone: Mutex<bool>,
 }
 
@@ -233,7 +233,7 @@ impl Server {
             next_id: AtomicU64::new(1),
             subscribed: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
-            statuses: Mutex::new(HashMap::new()),
+            early: Mutex::new(HashMap::new()),
             gone: Mutex::new(false),
         });
         Ok((server, frames))
@@ -349,9 +349,9 @@ impl Server {
 
     /// The session for thread `id` is registered: it is no longer pending, and this is what
     /// codex last said its status was, if anything.
-    pub fn claim(&self, id: &str) -> Option<String> {
+    pub fn claim(&self, id: &str) -> Early {
         self.pending.lock().unwrap().remove(id);
-        self.statuses.lock().unwrap().remove(id)
+        self.early.lock().unwrap().remove(id).unwrap_or_default()
     }
 
     /// The spawn of thread `id` failed after the thread was made: stop the turn benchd started
@@ -376,7 +376,7 @@ impl Server {
     }
 
     fn unsubscribe(&self, id: &str) {
-        self.statuses.lock().unwrap().remove(id);
+        self.early.lock().unwrap().remove(id);
         if self.subscribed.lock().unwrap().remove(id) {
             let _ = self.call("thread/unsubscribe", json!({ "threadId": id }));
         }
@@ -446,10 +446,28 @@ impl From<Failure> for String {
     }
 }
 
-/// Whether a thread status says no turn is running: `idle`, or `systemError` after a turn that
-/// failed (a usage limit fires no `Stop`, measured on codex 0.157.0).
-pub fn stopped(status: &str) -> bool {
-    matches!(status, "idle" | "systemError")
+/// What codex said about a thread before benchd had an agent to tell: its last activity, and
+/// whether a turn completed since the last one started.
+#[derive(Default)]
+pub struct Early {
+    pub activity: Option<bench_wire::Activity>,
+    pub ended: bool,
+}
+
+impl Early {
+    /// The same rule attention applies live (`attention::turn`): a turn end is done until the
+    /// agent is at work again.
+    fn take(&mut self, transition: &bench_wire::hook::Transition) {
+        use bench_wire::hook::Transition;
+        match transition {
+            Transition::TurnEnded => self.ended = true,
+            Transition::To(now) if crate::attention::working(now) => self.ended = false,
+            _ => {}
+        }
+        if let Some(now) = transition.activity() {
+            self.activity = Some(now);
+        }
+    }
 }
 
 fn thread_id(answer: Value) -> Result<String, String> {
@@ -531,17 +549,16 @@ fn read_loop(
         ) {
             (Some(method), None) => {
                 let params = &message["params"];
-                if method == "thread/status/changed"
-                    && let (Some(thread), Some(status)) = (
-                        params["threadId"].as_str(),
-                        params["status"]["type"].as_str(),
-                    )
+                if let Some((thread, transition)) =
+                    bench_wire::hook::codex_server_transition(method, params)
                 {
                     server
-                        .statuses
+                        .early
                         .lock()
                         .unwrap()
-                        .insert(thread.to_string(), status.to_string());
+                        .entry(thread)
+                        .or_default()
+                        .take(&transition);
                 }
                 on_note(method, params);
             }

@@ -620,8 +620,9 @@ pub struct SessionEntry {
     pub operator_mail: Option<OperatorMail>,
 }
 
-/// An agent whose turn ended (Claude's and codex's `Stop`, pi's `agent_settled`) and that has not
-/// started another (M1, #357). Present whether or not anybody looked, so `bench watch` can wait on
+/// An agent whose turn ended (Claude's `Stop`; for a codex on benchd's app-server its
+/// `turn/completed`, else its `Stop`; pi's `agent_settled`) and that has not started another (M1,
+/// #357). Present whether or not anybody looked, so `bench watch` can wait on
 /// it; `seen` says whether the operator did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Done {
