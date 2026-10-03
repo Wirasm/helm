@@ -8284,6 +8284,123 @@ fn restore_never_resumes_a_conversation_a_live_session_already_holds() {
     assert_eq!(holders, 1, "one process on the conversation");
 }
 
+/// `pid` holds Claude conversation `id`, as Claude's own registry says: the row a live claude
+/// keeps at `~/.claude/sessions/<pid>.json`.
+fn claude_holds(home: &Path, pid: u32, id: &str) {
+    let started = bench_sessions::process::started_at_secs(pid).unwrap() * 1000;
+    let row = home.join(format!(".claude/sessions/{pid}.json"));
+    fs::create_dir_all(row.parent().unwrap()).unwrap();
+    fs::write(
+        &row,
+        serde_json::json!({"pid": pid, "sessionId": id, "cwd": "/tmp", "startedAt": started,
+            "status": "idle"})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn restore_never_resumes_a_claude_conversation_a_process_outside_benchd_holds() {
+    // 2026-10-02: the orchestrator ran as `claude --resume <id>` in a terminal outside helm, and
+    // had once been hosted in a pane. Every restore after a benchd restart resumed it in that pane
+    // too: benchd knew holders only by its own sessions and the hooks it had heard since it
+    // started, and an idle claude elsewhere had said nothing yet. Claude's registry knows.
+    let home = TestHome::claim("m5b-outside");
+    let ws = workspace(&home.dir).display().to_string();
+    let (pane, runtime) = {
+        let daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+        ok_data(layout(
+            &daemon.socket,
+            "workspace/open",
+            serde_json::json!({ "path": ws }),
+            operator(),
+            false,
+        ));
+        let spawned = json_of(&bench(
+            &home.dir,
+            &["spawn", "--agent", "claude", "--cwd", &ws],
+        ));
+        (
+            spawned["pane"].as_str().unwrap().to_string(),
+            spawned["runtime_session"].as_str().unwrap().to_string(),
+        )
+    };
+    fake_transcript(&home.dir, &runtime);
+    let outside = Detached::start();
+    claude_holds(&home.dir, outside.0.id(), &runtime);
+    let _daemon = DaemonGuard::start_with_script(&home.dir, "claude", ARGV_CLAUDE);
+
+    let restored = json_of(&bench(&home.dir, &["restore", "--all"]));
+    let row = restored["restored"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["pane"] == pane.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("{restored}"));
+    assert_eq!(row["how"], "shell", "{restored}");
+    assert!(
+        row["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("already live")),
+        "the answer says why it was not resumed: {restored}"
+    );
+    let holder = format!("already live in process {}", outside.0.id());
+    let screen = screen_until(&home.dir, &pane, |l| l.contains(&holder));
+    assert!(
+        screen["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str().unwrap().contains(&holder)),
+        "the pane says so too, naming the holder: {screen}"
+    );
+}
+
+#[test]
+fn no_resume_route_re_enters_a_claude_conversation_a_process_outside_benchd_holds() {
+    // `bench spawn --resume` (what the Sessions drawer sends) and `bench resume` refuse it as
+    // restore does, and take it once the holder is gone.
+    let home = TestHome::claim("outside-resume");
+    let h = &home.dir;
+    let ws = workspace(h).display().to_string();
+    let _daemon = DaemonGuard::start_with_script(h, "claude", ARGV_CLAUDE);
+    let spawned = json_of(&bench(h, &["spawn", "--agent", "claude", "--cwd", &ws]));
+    let sid = spawned["session"].as_str().unwrap().to_string();
+    let runtime = spawned["runtime_session"].as_str().unwrap().to_string();
+    let pid = spawned["pid"].as_i64().unwrap() as i32;
+    libc_kill(pid);
+    wait_until("the session exits", Duration::from_secs(5), || {
+        !libc_alive(pid)
+    });
+    let outside = Detached::start();
+    claude_holds(h, outside.0.id(), &runtime);
+
+    let spawn = bench(
+        h,
+        &[
+            "spawn", "--agent", "claude", "--cwd", &ws, "--resume", &runtime,
+        ],
+    );
+    assert_eq!(spawn.code, 3, "{}", spawn.stderr);
+    assert!(spawn.stderr.contains("already live"), "{}", spawn.stderr);
+    let resume = bench(h, &["resume", &sid]);
+    assert_eq!(resume.code, 3, "{}", resume.stderr);
+    assert!(resume.stderr.contains("already live"), "{}", resume.stderr);
+
+    // A live process's row that cannot be read could be the holder: refused, and saying why.
+    let row = h.join(format!(".claude/sessions/{}.json", outside.0.id()));
+    fs::write(&row, "{\"pid\":").unwrap();
+    let resume = bench(h, &["resume", &sid]);
+    assert_eq!(resume.code, 3, "{}", resume.stderr);
+    assert!(resume.stderr.contains("cannot tell"), "{}", resume.stderr);
+
+    // The row outlives its process: a stale row holds nothing, read or not.
+    drop(outside);
+    let resume = bench(h, &["resume", &sid]);
+    assert_eq!(resume.code, 0, "{}", resume.stderr);
+}
+
 /// The agent recorded in a pane, from the document.
 fn pane_agent(home: &Path, pane: &str) -> serde_json::Value {
     json_of(&bench(home, &["get", "pane", pane]))["pane"]["surface"]["agent"].clone()

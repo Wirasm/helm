@@ -145,6 +145,73 @@ pub fn row_of(home: &Path, pid: u32) -> Option<Registered> {
         .filter(|r| r.pid == pid && crate::process::alive(pid, Some(r.started_ms)))
 }
 
+/// The live process holding conversation `session`, by its registry row: how benchd learns that
+/// a claude it did not start (`claude --resume` in another terminal) holds it. Only `pid`,
+/// `sessionId` and `startedAt` are read, so a row whose status this build does not know still
+/// holds. `Err` when it cannot tell: a row without those fields whose process (the pid its file is
+/// named after) lives could be the holder, and so could any row of a registry it cannot list.
+pub fn holder(home: &Path, session: &str) -> Result<Option<u32>, String> {
+    let dir = home.join(".claude/sessions");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot list {}: {e}", dir.display())),
+    };
+    let mut unreadable = Vec::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        match holder_fields(&path) {
+            Ok((id, pid, started)) if id == session => {
+                if crate::process::alive(pid, Some(started)) {
+                    return Ok(Some(pid));
+                }
+            }
+            Ok(_) => {}
+            Err(why) => {
+                let owner = path.file_stem().and_then(|n| n.to_str()?.parse().ok());
+                if owner.is_some_and(|pid| crate::process::alive(pid, None)) {
+                    unreadable.push(format!("{}: {why}", path.display()));
+                }
+            }
+        }
+    }
+    if unreadable.is_empty() {
+        return Ok(None);
+    }
+    Err(format!(
+        "Claude's registry cannot be read ({})",
+        unreadable.join("; ")
+    ))
+}
+
+/// A registry row's `sessionId`, `pid` and `startedAt`, or what is wrong with it. Claude rewrites
+/// a row in place (its inode survives every status change), so a row that does not parse may be
+/// mid-write and is read again.
+fn holder_fields(path: &Path) -> Result<(String, u32, u64), String> {
+    let read = || {
+        let row: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("not JSON: {e}"))?;
+        let field = |k: &str| row.get(k).ok_or(format!("no {k:?}"));
+        let pid = field("pid")?
+            .as_u64()
+            .and_then(|p| u32::try_from(p).ok())
+            .ok_or("\"pid\" is not a pid")?;
+        let session = field("sessionId")?
+            .as_str()
+            .ok_or("\"sessionId\" is not text")?;
+        let started = field("startedAt")?
+            .as_u64()
+            .ok_or("\"startedAt\" is not a number")?;
+        Ok((session.to_string(), pid, started))
+    };
+    read().or_else(|_: String| {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        read()
+    })
+}
+
 fn registered(path: &Path) -> Result<Registered, String> {
     let v: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("not JSON: {e}"))?;
@@ -630,5 +697,34 @@ mod tests {
             mangle("/Users/r/sild/helm/.worktrees/ws_15"),
             "-Users-r-sild-helm--worktrees-ws-15"
         );
+    }
+
+    #[test]
+    fn a_live_row_holds_its_conversation_whatever_its_status() {
+        let home = std::env::temp_dir().join(format!("claude-holder-{}", std::process::id()));
+        let dir = home.join(".claude/sessions");
+        fs::create_dir_all(&dir).unwrap();
+        let pid = std::process::id();
+        let started = crate::process::started_at_secs(pid).unwrap() * 1000;
+        let row = |session: &str, started: u64| {
+            serde_json::json!({"pid": pid, "sessionId": session, "startedAt": started,
+                "status": "a-status-from-a-later-claude"})
+            .to_string()
+        };
+        fs::write(dir.join(format!("{pid}.json")), row("held", started)).unwrap();
+        // A row left by a process since gone, its pid now another process's.
+        fs::write(dir.join("stale.json"), row("stale", started - 3_600_000)).unwrap();
+        // A row nobody can read, of a process that is gone: it holds nothing.
+        fs::write(dir.join("99999999.json"), "{\"pid\":").unwrap();
+        let held = holder(&home, "held");
+        let stale = holder(&home, "stale");
+        // The same, of a process that lives: it could be anyone's.
+        fs::write(dir.join(format!("{pid}.json")), "{\"pid\":").unwrap();
+        let unknown = holder(&home, "stale");
+        fs::remove_dir_all(&home).unwrap();
+        assert_eq!(held, Ok(Some(pid)));
+        assert_eq!(stale, Ok(None));
+        let unknown = unknown.unwrap_err();
+        assert!(unknown.contains("not JSON"), "says why: {unknown}");
     }
 }
