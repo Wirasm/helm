@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # benchd as a user LaunchAgent (#407): it starts at login and launchd restarts it after a crash.
 #
-#   scripts/benchd-agent.sh install [--no-build] [--listen <host:port|tailscale[:port]>]
+#   scripts/benchd-agent.sh install [--no-build] [--listen tailscale[:port] | --no-listen]
 #                                                    (or: just benchd-install …)
 #   scripts/benchd-agent.sh uninstall                (or: just benchd-uninstall)
 #
 # install builds bench and benchd into cargo's bin (as release-resume does), writes
 # ~/Library/LaunchAgents/com.wirasm.benchd.plist, stops a hand-started benchd if one answers,
-# loads the agent, and starts the shared browser once. After that benchd brings the browser back
+# loads the agent, brings back the panes a stopped benchd ended (`bench restore --all`), and
+# starts the shared browser once. After that benchd brings the browser back
 # by itself: it stays wanted until `bench browser stop` (daemon/direction.md).
 #
-# --listen also has benchd listen on TCP (BENCH_LISTEN), for Pocket on the operator's phone (#625).
-# `tailscale` is this Mac's tailnet address (`tailscale ip -4`), port 4519 unless given, or
-# 127.0.0.1 where Tailscale runs in userspace mode and forwards the tailnet there; either way the
+# --listen tailscale also has benchd listen on TCP (BENCH_LISTEN), for Pocket on the operator's
+# phone (#625): this Mac's tailnet address (`tailscale ip -4`), port 4519 unless given, and the
 # installer prints the tcp:// URL Pocket dials. The port has no login, so the tailnet is the trust
-# boundary: `tailscale` that cannot be resolved stops the install, and never falls back to
-# 0.0.0.0 or a LAN address. `<host>:<port>` is taken as the operator gives it, except an address
-# that is every interface. An install without --listen writes an agent that does not listen, and
-# says so when the one it replaces did.
+# boundary: an address that cannot be resolved, or that no interface here carries (Tailscale in
+# userspace mode), stops the install, which never falls back to 0.0.0.0, a LAN address or one
+# typed by hand. An install without --listen keeps the address the installed agent listens on,
+# so a release (`just benchd-install`) never cuts Pocket off; --no-listen stops it.
 #
 # KeepAlive restarts benchd on a crash or a kill, not on a clean exit, so `bench stop` still
 # stops it until the next login or `launchctl kickstart`. Output goes to ~/Library/Logs/benchd.log.
@@ -68,18 +68,12 @@ tailscale_cli() {
   [ -x "$app" ] && printf '%s\n' "$app"
 }
 
-# resolve_listen <host:port|tailscale[:port]>: "<bind> <url>", the address benchd listens on and
-# the URL Pocket dials, or a refusal on stderr and a non-zero status.
-#
-# `tailscale` is accepted only as an address in 100.64.0.0/10, where Tailscale puts every node;
-# anything else it answers is not the tailnet. Where an interface carries that address, benchd
-# binds it. In userspace mode (tailscaled --tun=userspace-networking, a user agent with its socket
-# at ~/.tailscale/tailscaled.sock) none does: tailscaled takes the tailnet's connections itself and
-# forwards each to 127.0.0.1 on the same port, so benchd binds loopback and Pocket still dials the
-# tailnet address.
+# resolve_listen <tailscale[:port]>: "<host>:<port>", this Mac's tailnet address, or a refusal on
+# stderr and a non-zero status. Accepted only as an address in 100.64.0.0/10, where Tailscale puts
+# every node, and only where an interface here carries it: Tailscale in userspace mode delivers
+# to no interface, so benchd could not bind it and would fail to start.
 resolve_listen() {
-  local spec="$1" host port cli bind
-  local socket="$HOME/.tailscale/tailscaled.sock"
+  local spec="$1" host port cli
   case "$spec" in
   tailscale | tailscale:*)
     port="${spec#tailscale}"
@@ -89,9 +83,7 @@ resolve_listen() {
       echo "benchd-agent: --listen tailscale needs Tailscale; it is not installed" >&2
       return 2
     }
-    local ask=("$cli")
-    [ -e "$socket" ] && ask+=(--socket "$socket")
-    host="$(timeout 10 "${ask[@]}" ip -4 2>&1)" || {
+    host="$(timeout 10 "$cli" ip -4 2>&1)" || {
       echo "benchd-agent: Tailscale has no address for this Mac (is it running and signed in?): $host" >&2
       return 2
     }
@@ -106,29 +98,13 @@ resolve_listen() {
       echo "benchd-agent: could not list this Mac's interfaces (ifconfig), so cannot tell where Tailscale delivers; not listening" >&2
       return 2
     fi
-    if grep -qw "inet $host" <<<"$interfaces"; then
-      bind="$host"
-    else
-      bind=127.0.0.1
-      echo "benchd-agent: Tailscale runs in userspace mode here: it forwards tailnet connections to 127.0.0.1, so benchd listens there, and every port this Mac serves on 127.0.0.1 is reachable from your tailnet devices" >&2
-    fi
-    ;;
-  *:*)
-    host="${spec%:*}"
-    port="${spec##*:}"
-    # A dotted IPv4 address, a bracketed IPv6 one or a hostname, and never all zeros: whatever
-    # else the resolver would read (0.0, 0x0, *, nothing) can mean every interface.
-    local bare="${host#[}"
-    bare="${bare%]}"
-    if ! [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$host" =~ ^\[[0-9A-Fa-f:.]+\]$ ||
-      "$host" =~ ^[A-Za-z][A-Za-z0-9.-]*$ ]] || [[ "$bare" =~ ^[0.:]+$ ]]; then
-      echo "benchd-agent: --listen $spec listens on every interface, and the port has no login; name the tailnet address, or use --listen tailscale" >&2
+    if ! grep -qw "inet $host" <<<"$interfaces"; then
+      echo "benchd-agent: no interface here carries $host (is Tailscale in userspace mode?), so benchd could not listen on it; run the Tailscale app" >&2
       return 2
     fi
-    bind="$host"
     ;;
   *)
-    echo "benchd-agent: --listen takes <host>:<port> or tailscale[:<port>], not '$spec'" >&2
+    echo "benchd-agent: --listen takes tailscale[:<port>], the tailnet being the only lock on the port, not '$spec'" >&2
     return 2
     ;;
   esac
@@ -136,7 +112,7 @@ resolve_listen() {
     echo "benchd-agent: --listen $spec: '$port' is not a port" >&2
     return 2
   fi
-  printf '%s:%s tcp://%s:%s\n' "$bind" "$port" "$host" "$port"
+  printf '%s:%s\n' "$host" "$port"
 }
 
 # write_plist <path> <label> <benchd> <log> [suite] [listen]
@@ -182,12 +158,13 @@ await_bench() {
 bench_pid() { timeout 5 "$1" status 2>/dev/null | plutil -extract pid raw - 2>/dev/null; }
 
 agent_install() {
-  local build=1 listen=""
+  local build=1 listen="" stop=0
   while [ $# -gt 0 ]; do
     case "$1" in
     --no-build) build=0 ;;
+    --no-listen) stop=1 ;;
     --listen)
-      [ $# -ge 2 ] || { echo "benchd-agent: --listen needs <host>:<port> or tailscale" >&2; return 1; }
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "benchd-agent: --listen needs tailscale[:<port>]" >&2; return 1; }
       listen="$2"
       shift
       ;;
@@ -203,12 +180,14 @@ agent_install() {
     return 3
   fi
 
+  if [ -n "$listen" ] && [ "$stop" -eq 1 ]; then
+    echo "benchd-agent: --listen and --no-listen together: pick one" >&2
+    return 1
+  fi
   # Before anything is built or touched: an address that cannot be resolved changes nothing.
-  local url=""
   if [ -n "$listen" ]; then
-    read -r listen url <<<"$(resolve_listen "$listen")"
-    [ -n "$listen" ] || return 2
-    echo "benchd-agent: benchd will listen on $listen; Pocket's URL is $url"
+    listen="$(resolve_listen "$listen")" || return 2
+    echo "benchd-agent: benchd will listen on $listen"
   fi
 
   local bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" crate
@@ -228,15 +207,25 @@ agent_install() {
   plist="$HOME/Library/LaunchAgents/$label.plist"
   logfile="$HOME/Library/Logs/benchd.log"
   mkdir -p "$(dirname "$plist")" "$(dirname "$logfile")"
+  # Kept unless told otherwise: the release recipe reinstalls with no flags.
   local listened
   listened="$(plutil -extract EnvironmentVariables.BENCH_LISTEN raw -o - "$plist" 2>/dev/null)"
-  if [ -n "$listened" ] && [ -z "$listen" ]; then
-    echo "benchd-agent: benchd no longer listens on $listened: Pocket cannot reach it until you install with --listen again"
+  if [ "$stop" -eq 1 ]; then
+    [ -z "$listened" ] || echo "benchd-agent: benchd no longer listens on $listened; Pocket cannot reach it"
+  elif [ -z "$listen" ] && [ -n "$listened" ]; then
+    listen="$listened"
+    echo "benchd-agent: benchd still listens on $listen (--no-listen stops it)"
+    # One written before --listen took only the tailnet is kept too, but named for what it is.
+    [[ "${listen%:*}" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] ||
+      echo "benchd-agent: $listen is not a tailnet address; reinstall with --listen tailscale, or --no-listen" >&2
   fi
   write_plist "$plist" "$label" "$bin/benchd" "$logfile" "" "$listen" ||
     { echo "benchd-agent: could not write $plist" >&2; return 4; }
 
+  # A benchd stopped here ended every session it ran; its panes come back once the new one answers.
+  local restarted=0
   if agent_loaded "$label"; then
+    restarted=1
     echo "benchd-agent: reloading $label"
     timeout 30 launchctl bootout "$domain/$label" 2>/dev/null
     await_bench "$bin/bench" 20 down || { echo "benchd-agent: the old agent's benchd did not stop" >&2; return 4; }
@@ -244,6 +233,7 @@ agent_install() {
   # Anything still answering was started by hand. One daemon per root: it goes, and launchd's
   # benchd replaces it.
   if timeout 5 "$bin/bench" status >/dev/null 2>&1; then
+    restarted=1
     echo "benchd-agent: stopping the hand-started benchd (pid $(bench_pid "$bin/bench"))"
     timeout 20 "$bin/bench" stop >/dev/null
     await_bench "$bin/bench" 20 down || { echo "benchd-agent: the running benchd did not stop; nothing loaded" >&2; return 4; }
@@ -252,12 +242,30 @@ agent_install() {
   timeout 30 launchctl bootstrap "$domain" "$plist" || { echo "benchd-agent: launchctl bootstrap failed" >&2; return 4; }
   await_bench "$bin/bench" 20 || { echo "benchd-agent: benchd did not come up; see $logfile" >&2; return 4; }
   echo "benchd-agent: $label loaded, benchd pid $(bench_pid "$bin/bench"), log $logfile"
-  [ -z "$url" ] || echo "benchd-agent: type $url into Pocket's connect sheet"
+  [ -z "$listen" ] || echo "benchd-agent: type tcp://$listen into Pocket's connect sheet"
+  [ "$restarted" -eq 0 ] || agent_restore_panes "$bin/bench"
 
   # Marks the browser wanted, so every later benchd brings it back without being asked.
   timeout 90 "$bin/bench" browser start >/dev/null ||
     { echo "benchd-agent: benchd is up but bench browser start failed" >&2; return 4; }
   echo "benchd-agent: shared browser running; it comes back with benchd until \`bench browser stop\`"
+}
+
+# Every pane whose session the restart ended gets one again (`bench restore --all`, what
+# `just resume-all` runs, as release-resume does): its recorded agent resumed, else a shell.
+# A restore that fails leaves benchd running and says how to finish by hand.
+# Named apart from release-resume.sh's own restore_panes, which sources this file.
+agent_restore_panes() {
+  local bench="$1" answer count i
+  if ! answer="$(timeout 120 "$bench" restore --all)"; then
+    echo "benchd-agent: benchd is up, but bench restore --all failed; run \`just resume-all\` to bring the panes back" >&2
+    return 0
+  fi
+  count="$(plutil -extract restored raw -o - - <<<"$answer" 2>/dev/null)" || count=0
+  echo "benchd-agent: restored $count panes"
+  for ((i = 0; i < count; i++)); do
+    echo "benchd-agent:   $(plutil -extract "restored.$i.pane" raw -o - - <<<"$answer"): $(plutil -extract "restored.$i.how" raw -o - - <<<"$answer")"
+  done
 }
 
 agent_uninstall() {
@@ -275,6 +283,6 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   case "${1:-}" in
   install) shift; agent_install "$@" ;;
   uninstall) agent_uninstall ;;
-  *) echo "usage: benchd-agent.sh install [--no-build] [--listen <host:port|tailscale[:port]>] | uninstall" >&2; exit 1 ;;
+  *) echo "usage: benchd-agent.sh install [--no-build] [--listen tailscale[:port] | --no-listen] | uninstall" >&2; exit 1 ;;
   esac
 fi

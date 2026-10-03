@@ -249,9 +249,8 @@ is bytes on a stream and reads no peer credentials. `BENCH_URL=tcp://<host>:<por
 `BenchEndpoint`, one table for both in `fixtures/bench-url.json`); unset or empty is the socket.
 Both clients set `TCP_NODELAY` and a short keepalive, so a link that died in a sleep is noticed
 in seconds. There is no auth: bind a tailnet address, never a public one.
-`scripts/benchd-agent.sh install --listen tailscale` writes it into the login agent: the Mac's
-tailnet address, or 127.0.0.1 where Tailscale runs in userspace mode and forwards the tailnet
-there, which makes every loopback port reachable from the tailnet (`Pocket/README.md`). With `BENCH_URL` set
+`scripts/benchd-agent.sh install --listen tailscale` writes the Mac's tailnet address into the
+login agent, and a later install keeps it until `--no-listen` (`Pocket/README.md`). With `BENCH_URL` set
 helm runs its own `bench` for a pane, since the one `status` names is on benchd's machine. And
 `bench attach --in-pane` no longer reads "no answer" as "the session ended": it says it cannot
 reach benchd and asks again with a capped backoff until benchd answers, then attaches and
