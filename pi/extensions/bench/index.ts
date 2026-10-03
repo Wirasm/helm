@@ -27,9 +27,13 @@
  * The standing rule (what a notice is and what to do with one) goes into the system prompt of
  * every run, for the same reason: told once in `context`, it would be gone by the next run.
  *
- * Every failure is silence: no `bench`, no daemon, no mailbox. pi keeps working either way.
+ * Only pi's TUI reports (`ctx.mode === "tui"`). A print, json or rpc session belongs to a
+ * program driving pi, such as an Archon workflow node, and gets no mailbox.
  *
- * Verified against pi 0.84.4.
+ * Every failure is silence: no `bench`, no daemon, no mailbox, a stale ctx. Nothing here may
+ * throw into pi's host, which can be one process running many sessions.
+ *
+ * Verified against pi 0.84.4. `ctx.mode` and the stale-ctx throw were read in pi 0.99.2 and 1.0.0.
  */
 
 import { execFile } from "node:child_process";
@@ -156,6 +160,18 @@ function install(pi: ExtensionAPI): void {
 	let poll: ReturnType<typeof setInterval> | undefined;
 	let asking = false;
 
+	/**
+	 * Only pi's own TUI is an agent on the bench. A print, json or rpc session is driven by a
+	 * program, such as an Archon workflow node, and mail must not start turns inside it.
+	 */
+	function interactive(ctx: ExtensionContext): boolean {
+		try {
+			return ctx?.mode === "tui";
+		} catch {
+			return false;
+		}
+	}
+
 	function status(): string {
 		return `${NAME} v${VERSION}: ${handle ? `you are ${handle} on the bench` : "no bench mailbox for this session"}`;
 	}
@@ -165,10 +181,23 @@ function install(pi: ExtensionAPI): void {
 		if (who) void report(event, who);
 	}
 
-	/** Mail landed while idle: ask for it, and start a turn with whatever benchd hands over. */
+	/**
+	 * Mail landed while idle: ask for it, and start a turn with whatever benchd hands over.
+	 *
+	 * The inbox watch calls this with the ctx its session started with, and drops the promise,
+	 * so nothing here may throw: a rejection would kill pi's host. A ctx that throws belongs to
+	 * a session pi has replaced (pi 1.0 makes every use of a stale ctx throw), so the watch
+	 * stops; the session that replaced it started a watch of its own.
+	 */
 	async function wake(ctx: ExtensionContext): Promise<void> {
 		if (!who || asking || !hasMethod(pi, "sendUserMessage")) return;
-		if (typeof ctx?.isIdle === "function" && !ctx.isIdle()) return;
+		try {
+			if (typeof ctx?.isIdle === "function" && !ctx.isIdle()) return;
+		} catch (error) {
+			stopWatching();
+			warn("this session's ctx is stale; stopped watching its inbox", error);
+			return;
+		}
 		asking = true;
 		let context: string | undefined;
 		try {
@@ -231,6 +260,7 @@ function install(pi: ExtensionAPI): void {
 	if (present.includes("on")) {
 		step("session_start handler", () =>
 			pi.on("session_start", async (_event, ctx) => {
+				if (!interactive(ctx)) return announce(ctx, status());
 				who = identity(ctx);
 				const reply = who ? await report("session_start", who) : undefined;
 				handle = reply?.handle;

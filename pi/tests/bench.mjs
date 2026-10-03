@@ -106,6 +106,7 @@ function recordingCtx(sessionId = "019f-aaaa-bbbb", cwd = "/tmp/pi-bench-cwd") {
 	return {
 		ctx: {
 			ui: { notify: (message) => messages.push(message) },
+			mode: "tui",
 			cwd,
 			sessionManager: { getSessionId: () => sessionId, getCwd: () => cwd },
 			isIdle: () => idle.value,
@@ -121,6 +122,18 @@ function capturingStderr(body) {
 	console.error = (...args) => lines.push(args.join(" "));
 	try {
 		body();
+	} finally {
+		console.error = original;
+	}
+	return lines;
+}
+
+async function capturingStderrAsync(body) {
+	const lines = [];
+	const original = console.error;
+	console.error = (...args) => lines.push(args.join(" "));
+	try {
+		await body();
 	} finally {
 		console.error = original;
 	}
@@ -302,6 +315,63 @@ await test("benchd saying no (no context) starts no turn", async () => {
 		await record.handlers.get("agent_settled")({}, ctx);
 		check(record.sent.length === 0, "a turn started without mail handed over");
 		record.handlers.get("session_shutdown")({}, ctx);
+	} finally {
+		bench.done();
+	}
+});
+
+await test("a ctx gone stale under the inbox watch neither throws nor keeps watching", async () => {
+	// Archon runs one pi session per workflow node in one process. A replaced session's ctx
+	// throws on every use (pi 1.0's assertActive), and a rejection that escaped the watch's
+	// `void wake(ctx)` killed the whole host.
+	const bench = fakeBench();
+	const rejections = [];
+	const onRejection = (error) => rejections.push(error);
+	process.on("unhandledRejection", onRejection);
+	try {
+		const inbox = path.join(bench.dir, "inbox");
+		bench.answer({ handle: "h", inbox });
+		const { record, ctx } = started();
+		await record.handlers.get("session_start")({}, ctx);
+		bench.answer({ handle: "h", inbox, context: "You have mail from a: /x/m1.md" });
+		ctx.isIdle = () => {
+			throw new Error("This extension ctx is stale after session replacement or reload.");
+		};
+		const warnings = await capturingStderrAsync(async () => {
+			fs.writeFileSync(path.join(inbox, "m1.md"), "x");
+			await sleep(300);
+		});
+		check(rejections.length === 0, `rejected: ${rejections.map(String).join("; ")}`);
+		check(warnings.some((line) => line.includes("stale")), `said nothing: ${JSON.stringify(warnings)}`);
+		check(!bench.requests().some((r) => r.hook_event_name === "wake"), "asked for mail through a stale ctx");
+
+		// It stopped watching: mail landing later, even with a ctx that answers, starts nothing.
+		ctx.isIdle = () => true;
+		fs.writeFileSync(path.join(inbox, "m2.md"), "x");
+		await sleep(300);
+		check(record.sent.length === 0, `kept watching after the ctx went stale: ${JSON.stringify(record.sent)}`);
+	} finally {
+		process.off("unhandledRejection", onRejection);
+		bench.done();
+	}
+});
+
+await test("only pi's own TUI gets a mailbox: a print, json or rpc session (an Archon node) reports nothing to benchd", async () => {
+	const bench = fakeBench();
+	try {
+		for (const mode of ["print", "json", "rpc"]) {
+			bench.answer({ handle: "h", inbox: path.join(bench.dir, `inbox-${mode}`), rule: "a rule", context: "mail" });
+			const { record, ctx, messages } = started();
+			ctx.mode = mode;
+			await record.handlers.get("session_start")({}, ctx);
+			check(bench.requests().length === 0, `${mode}: reported ${JSON.stringify(bench.requests())}`);
+			check(!fs.existsSync(path.join(bench.dir, `inbox-${mode}`)), `${mode}: watched an inbox`);
+			check(messages[0] === "bench v1: no bench mailbox for this session", `${mode}: said ${JSON.stringify(messages)}`);
+			check((await record.handlers.get("context")({ messages: [user("go")] }, ctx)) === undefined, `${mode}: injected`);
+			check(record.handlers.get("before_agent_start")({ systemPrompt: "base" }, ctx) === undefined, `${mode}: ruled`);
+			await record.handlers.get("agent_settled")({}, ctx);
+			check(record.sent.length === 0, `${mode}: started a turn`);
+		}
 	} finally {
 		bench.done();
 	}
