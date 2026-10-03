@@ -4,9 +4,12 @@ import HelmWire
 /// The sessions drawer's list (#384): every agent session in the active workspace, as benchd's
 /// `sessions/all` answers it, and the one action each row opens with.
 ///
-/// **No rules of its own.** Which sessions belong to the workspace, their order (running first,
-/// then newest), whether a subagent is still listed, and what opening a row does are all
-/// benchd's (`bench_sessions`). This carries the answer out and says when it could not ask.
+/// **Which sessions belong, and their order, are benchd's.** Which sessions belong to the
+/// workspace, their order (running first, then newest), whether a subagent is still listed, and
+/// what opening a row does are all benchd's (`bench_sessions`). The one rule here is how much of
+/// that the drawer shows: running sessions always, finished ones only once the operator opens
+/// them for this workspace, the newest few (`listed`). benchd's answer stays whole, as `bench
+/// sessions --all` gives it to agents, who resume finished sessions from it.
 ///
 /// **Polled while it is on screen, and only then.** benchd pushes no event when a session
 /// changes, so the view's `.task` calls `watch`, which asks every few seconds and stops when the
@@ -19,6 +22,12 @@ final class SessionsModel: ObservableObject {
     @Published private(set) var problem: String?
     /// The row the keyboard is on.
     @Published var selected: BenchSessionRow.ID?
+    /// The workspaces whose finished sessions the operator has opened, by path.
+    @Published private var finishedOpen: Set<String> = []
+
+    /// How many finished sessions the drawer lists once opened: the newest. A workspace an
+    /// agent harness runs tests in can hold ninety.
+    static let finishedListed = 10
 
     private let actions: SessionsActions
 
@@ -53,11 +62,38 @@ final class SessionsModel: ObservableObject {
                 list.unreadable.isEmpty
                 ? nil
                 : "\(list.unreadable.count) session file(s) benchd could not read were skipped."
-            if selected.map({ id in !rows.contains { $0.id == id } }) ?? true {
-                selected = rows.first?.id
-            }
+            keepSelectionListed()
         case let .failure(error):
             problem = "Could not list sessions: \(error)"
+        }
+    }
+
+    /// The running sessions, in benchd's order.
+    var running: [BenchSessionRow] { rows.filter(SessionLine.isRunning) }
+    /// The finished sessions, newest first as benchd orders them.
+    var finished: [BenchSessionRow] { rows.filter { !SessionLine.isRunning($0) } }
+
+    /// Whether this workspace's finished sessions are open.
+    var showsFinished: Bool { workspace.map { finishedOpen.contains($0.value) } ?? false }
+
+    /// What the drawer lists, in order: every running session, then, once opened, the newest
+    /// finished ones up to `finishedListed`.
+    var listed: [BenchSessionRow] {
+        running + (showsFinished ? Array(finished.prefix(Self.finishedListed)) : [])
+    }
+
+    /// Open or close this workspace's finished sessions.
+    func toggleFinished() {
+        guard let path = workspace?.value else { return }
+        if finishedOpen.remove(path) == nil { finishedOpen.insert(path) }
+        keepSelectionListed()
+    }
+
+    /// The keyboard stays on a row the drawer shows.
+    private func keepSelectionListed() {
+        let listed = listed
+        if selected.map({ id in !listed.contains { $0.id == id } }) ?? true {
+            selected = listed.first?.id
         }
     }
 

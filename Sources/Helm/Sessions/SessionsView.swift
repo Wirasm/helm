@@ -1,9 +1,9 @@
 import HelmWire
 import SwiftUI
 
-/// The sessions list (#384): one line per session, the running ones first and then the newest,
-/// as benchd orders them. Keyboard first: ↑↓ move, Return opens, ⌫ dismisses a finished one.
-/// A click opens too.
+/// The sessions list (#384): one line per running session, as benchd orders them, then the
+/// finished ones behind a disclosure, the newest few (`SessionsModel.listed`). Keyboard first:
+/// ↑↓ move, Return opens, ⌫ dismisses a finished one. A click opens too.
 struct SessionsView: View {
     @ObservedObject var model: SessionsModel
     let holdsKeyboard: Bool
@@ -47,13 +47,24 @@ struct SessionsView: View {
         ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.rows) { row in
-                        SessionRowView(
-                            row: row, isSelected: row.id == model.selected,
-                            open: { Task { await model.open(row) } },
-                            dismiss: { Task { await model.dismiss(row) } }
-                        )
-                        .id(row.id)
+                    ForEach(model.running) { row in line(row) }
+                    if !model.finished.isEmpty {
+                        FinishedDisclosure(
+                            count: model.finished.count, isOpen: model.showsFinished,
+                            toggle: model.toggleFinished)
+                    }
+                    if model.showsFinished {
+                        ForEach(model.finished.prefix(SessionsModel.finishedListed)) { row in
+                            line(row)
+                        }
+                        let older = model.finished.count - SessionsModel.finishedListed
+                        if older > 0 {
+                            Text("\(older) older not listed")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Color.textFaint)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                        }
                     }
                 }
             }
@@ -63,20 +74,55 @@ struct SessionsView: View {
         }
     }
 
+    private func line(_ row: BenchSessionRow) -> some View {
+        SessionRowView(
+            row: row, isSelected: row.id == model.selected,
+            open: { Task { await model.open(row) } },
+            dismiss: { Task { await model.dismiss(row) } }
+        )
+        .id(row.id)
+    }
+
     private func move(_ step: Int) -> KeyPress.Result {
-        guard !model.rows.isEmpty else { return .ignored }
-        let current = model.rows.firstIndex { $0.id == model.selected } ?? -1
-        let next = min(max(current + step, 0), model.rows.count - 1)
-        model.selected = model.rows[next].id
+        let listed = model.listed
+        guard !listed.isEmpty else { return .ignored }
+        let current = listed.firstIndex { $0.id == model.selected } ?? -1
+        let next = min(max(current + step, 0), listed.count - 1)
+        model.selected = listed[next].id
         return .handled
     }
 
     private func act(_ action: @escaping (BenchSessionRow) async -> Void) -> KeyPress.Result {
-        guard let row = model.rows.first(where: { $0.id == model.selected }) else {
+        guard let row = model.listed.first(where: { $0.id == model.selected }) else {
             return .ignored
         }
         Task { await action(row) }
         return .handled
+    }
+}
+
+/// The line that opens or closes this workspace's finished sessions.
+private struct FinishedDisclosure: View {
+    let count: Int
+    let isOpen: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                Text("finished \(count)")
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(Color.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.chrome)
+        .help(isOpen ? "Hide finished sessions" : "Show the newest finished sessions")
     }
 }
 
