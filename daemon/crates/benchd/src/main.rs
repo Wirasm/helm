@@ -125,6 +125,11 @@ fn run() -> i32 {
     let bench_dir = std::env::var("BENCH_DIR").ok();
     let root = resolve_root(bench_dir.as_deref(), suite.as_ref(), &home);
     let listen = std::env::var("BENCH_LISTEN").ok().filter(|a| !a.is_empty());
+    // The address is benchd's alone: no session, shell, just run or command it starts inherits
+    // it, or a test benchd an agent starts there would try to bind the operator's address and
+    // refuse to start. Taken out of the process's own environment, so every child is covered.
+    // SAFETY: no other thread exists yet; `boot`, below, starts the first.
+    unsafe { std::env::remove_var("BENCH_LISTEN") };
 
     match boot(root, suite, home, listen) {
         Ok(code) => code,
