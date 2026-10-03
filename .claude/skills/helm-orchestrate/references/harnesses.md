@@ -75,8 +75,10 @@ with `account` set to its config dir; no `account` is the default login.
 | Codex, one subscription | 7 days | stopped a delivery until 2026-09-28 (E1) | every `codex` spawn, and `pi` on `openai-codex/*` (pi's own login to the same subscription) |
 | MiniMax, OpenRouter | none: API keys, paid per token | | `pi` on `minimax/*` or `openrouter/*` |
 
-- Only the operator switches Claude accounts. A stopped agent is resumed after the reset or the
-  switch (`bench restore <pane>` or a mail), not replaced: four dead baseline runs cost $16.43 (E3).
+- benchd picks the Claude login per spawn, by quota, once the second is set up (README, "A
+  second Claude account"); you pick only the model. A resume stays on its conversation's login,
+  and goes to the other when that one is spent. A stopped agent is resumed, not replaced: four
+  dead baseline runs cost $16.43 (E3).
 - When Claude's fullest window is near its limit, put the next deliveries on `gpt-6.1-sol` (pi or
   codex) rather than queue them. The two families do not share a limit.
 - API list prices per million tokens in and out (claude-api skill, 2026-09-25): fable $10/$50,

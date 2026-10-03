@@ -158,6 +158,11 @@ The skills are the guides: `bench-panes`, `bench-mail`, `bench-browser`, `bench-
 - **A spawned agent runs unattended, but some prompts no flag removes** (#283: a bypass-immune
   `rm` guard sat for six and a half hours). When one goes quiet, read its report
   (`bench sessions --all`) rather than adding a flag. A fork (`--fork`) is read-only on purpose.
+- **benchd picks the Claude login, never you** (README, "A second Claude account"). A `claude`
+  spawn may start on the operator's second subscription; the reply's `account` names it, and a
+  resume or fork stays on its conversation's login. Never set `CLAUDE_CONFIG_DIR` yourself, and
+  never edit a second login's dir: it is links into `~/.claude` plus that login's own state
+  (`.claude.json`, its keychain item), which `just claude-account seed` keeps in step.
 - **A spawn's prompt is a file that outlives the spawn**: `ps` shows its path, never its text
   (#93). Claude Code must already trust `--cwd`; run `cd <dir> && claude` once by hand. codex
   must trust `--cwd` or the git repository it is a subfolder or worktree of (no other parent
