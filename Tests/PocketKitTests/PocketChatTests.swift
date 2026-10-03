@@ -35,6 +35,21 @@ final class PocketChatTests: XCTestCase {
         XCTAssertTrue(prompt.canEscape)
     }
 
+    /// Claude's plan approval prints the plan, often numbered, right above its own options: the
+    /// buttons are the prompt's options only, whose digits answer it.
+    func testANumberedPlanAboveThePromptIsNotItsChoices() throws {
+        let lines = [
+            "Here is the plan:", "1. Read the file", "2. Edit the file", "3. Run tests",
+            "Would you like to proceed?",
+            "❯ 1. Yes, and auto-accept edits", "2. Yes, and manually approve edits",
+            "3. No, keep planning",
+        ]
+        let prompt = try XCTUnwrap(PromptChoices.read(lines))
+        XCTAssertEqual(prompt.question, "Would you like to proceed?")
+        XCTAssertEqual(prompt.choices.map(\.keys), ["1", "2", "3"])
+        XCTAssertEqual(prompt.choices.last?.label, "No, keep planning")
+    }
+
     /// codex's hook review asks no question, and offers Esc only while its hint says so.
     func testAPromptWithoutAQuestionOrAnEscHint() throws {
         let lines = try screen("codex-hook-review")

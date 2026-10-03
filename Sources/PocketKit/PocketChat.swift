@@ -29,12 +29,19 @@ package struct PromptChoices: Equatable, Sendable {
         let options = bottom.enumerated().compactMap { offset, line in
             option(line).map { (offset, $0) }
         }
-        guard let first = options.first, options.count >= 2 else { return nil }
+        // The prompt's own options are the last run numbered 1, 2, 3…: a numbered list above it
+        // (the plan Claude asks to proceed with) is the agent's text, and its digits answer
+        // nothing.
+        guard let start = options.lastIndex(where: { $0.1.keys == "1" }) else { return nil }
+        let run = options[start...]
+        guard run.count >= 2, run.map(\.1.keys) == (1...run.count).map(String.init),
+            let first = run.first
+        else { return nil }
         let question = bottom[..<first.0].last { $0.hasSuffix("?") }
         let words = bottom[first.0...].joined(separator: " ").lowercased()
             .split { !$0.isLetter }
         return PromptChoices(
-            question: question, choices: options.map(\.1),
+            question: question, choices: run.map(\.1),
             canEscape: words.contains("esc"))
     }
 

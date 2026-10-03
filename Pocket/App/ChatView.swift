@@ -127,21 +127,28 @@ struct ChatPane: View {
         if let row, Attention(row) == .finished {
             _ = await model.markSeen(harness: row.harness, session: row.id)
         }
+        var behind = false
         while !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(1500))
-            await load(log.newest.map { .after($0) } ?? .last)
+            // Behind after a long burst (the phone slept): the next page at once.
+            if !behind { try? await Task.sleep(for: .milliseconds(1500)) }
+            behind = await load(log.newest.map { .after($0) } ?? .last)
             prompt = await choices()
         }
     }
 
-    private func load(_ page: BenchSessionLogRequest.Page) async {
+    /// Reads `page` into the chat; true when the transcript holds more after it.
+    @discardableResult
+    private func load(_ page: BenchSessionLogRequest.Page) async -> Bool {
         switch await model.log(chat, page: page) {
         case let .success(next):
             failure = nil
             log.merge(next)
-            if let newest = log.newest { memory.read(chat, through: newest, of: next.total) }
+            guard let newest = log.newest else { return false }
+            memory.read(chat, through: newest, of: next.total)
+            return newest < next.total - 1
         case let .failure(why):
             failure = why.description
+            return false
         }
     }
 
