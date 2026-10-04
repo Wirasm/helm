@@ -450,6 +450,10 @@ pub struct MailSendArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     pub body: String,
+    /// Hold it for whoever claims `to` later. Without it, mail to a handle no live agent holds
+    /// is refused rather than left unread behind an `ok`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queue: bool,
 }
 
 /// `mail/list`'s payload: whose mailbox. Metadata only comes back — sender, subject,

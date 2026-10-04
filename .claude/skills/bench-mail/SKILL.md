@@ -87,6 +87,12 @@ $BENCH mail send --to operator --subject demo --body "one line is fine"
 - `operator` is always addressable and belongs to the operator.
 - A recipient benchd cannot start a turn for is not woken; the response says
   `"wake": "next-turn"` and the mail waits in their box.
+- **Mail to a handle no live agent holds is refused** (exit 3), so it never looks delivered
+  while nobody reads it: a session that ended, a handle from before a restart, a name nobody
+  took. The reason names the handle that agent answers to now, when benchd still knows it;
+  send there. `--queue` holds the mail for whoever claims the handle later, and only then.
+- The response's `reader` is who will read it: the handle, or `null` for mail held with
+  `--queue`.
 
 ## Listing and reading
 

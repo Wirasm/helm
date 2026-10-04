@@ -50,7 +50,7 @@ pub struct Agent {
     pub pid: u32,
     /// When `pid` started, read when the pid was reported, so a pid the kernel has since given
     /// another process is not taken for this agent ([`Agent::is_running`]).
-    started_ms: Option<u64>,
+    pub started_ms: Option<u64>,
     /// The helm pane it runs in now, as its last report from a terminal said: what `mail/who`
     /// answers. `None` outside helm, and in a benchd session. See [`locate`].
     pub pane: Option<PaneId>,
@@ -101,8 +101,7 @@ impl Agent {
 
     /// Its process is alive, and is the one its hook reported.
     pub fn is_running(&self) -> bool {
-        self.started_ms
-            .is_some_and(|ms| bench_sessions::process::alive(self.pid, Some(ms)))
+        running(self.pid, self.started_ms)
     }
 
     /// benchd can start a turn for it: a channel it reported, not known to hold pushes.
@@ -144,6 +143,12 @@ impl Agent {
         self.activity = Some(now);
         self.activity_since_ms = sessions::now_ms();
     }
+}
+
+/// [`Agent::is_running`] on the two facts it reads, for a caller that copied them out from under
+/// the core lock before probing the process.
+pub fn running(pid: u32, started_ms: Option<u64>) -> bool {
+    started_ms.is_some_and(|ms| bench_sessions::process::alive(pid, Some(ms)))
 }
 
 /// Every codex benchd starts is an agent from the moment its session is: benchd created its

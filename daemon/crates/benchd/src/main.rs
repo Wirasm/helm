@@ -56,13 +56,13 @@ mod usage;
 mod waiting;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
-use bench_session::{Notice, Session};
+use bench_session::{AgentKind, Notice, Session};
 use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
     FILE_REQUEST_MAX_BYTES, KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs,
-    MailSendArgs, Request, Response, SessionArgs, Status, SuiteName, Verb, browser_endpoint_path,
-    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
-    validate_handle,
+    MailSendArgs, OPERATOR_HANDLE, Request, Response, SessionArgs, Status, SuiteName, Verb,
+    browser_endpoint_path, browser_wanted_path, check_socket_path, events_path, resolve_root,
+    socket_path, validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame, attach};
 use serde_json::{Value, json};
@@ -1326,6 +1326,11 @@ fn dispatch(
                     return (refused(format!("{role}: {why}")), AfterResponse::Done);
                 }
             }
+            let reader = mail_reader(core, &parsed.to);
+            if reader.is_none() && !parsed.queue {
+                let why = unread_by_anyone(&core.lock().unwrap(), &parsed.to);
+                return (refused(why), AfterResponse::Done);
+            }
             match send_mail(
                 core,
                 &parsed.from,
@@ -1333,7 +1338,10 @@ fn dispatch(
                 parsed.subject.as_deref(),
                 &parsed.body,
             ) {
-                Ok(sent) => (ok(sent), AfterResponse::Done),
+                Ok(mut sent) => {
+                    sent["reader"] = json!(reader);
+                    (ok(sent), AfterResponse::Done)
+                }
                 Err(why) => (errored(why), AfterResponse::Done),
             }
         }
@@ -1813,6 +1821,70 @@ fn respond_keep_open(mut stream: &UnixStream, response: &Response) {
         line.push('\n');
         let _ = stream.write_all(line.as_bytes());
     }
+}
+
+/// Who reads mail sent to `to` now: the operator, or the live agent that holds the handle (an
+/// agent session benchd runs, or one whose hook claimed it). `None` when nobody does: a session
+/// that ended, a handle from before a restart, a name nobody took, or a pane's plain shell, whose
+/// session id is a handle no agent reads. Takes the core lock to copy what it needs and probes
+/// claimed agents' processes off it.
+fn mail_reader(core: &Arc<Mutex<Core>>, to: &str) -> Option<String> {
+    let (session, agents): (bool, Vec<(u32, Option<u64>)>) = {
+        let c = core.lock().unwrap();
+        let session = c
+            .sessions
+            .values()
+            .any(|s| s.handle == to && s.is_live() && s.agent != AgentKind::Shell);
+        let agents = c
+            .agents
+            .values()
+            .flatten()
+            .filter(|a| a.handle == to)
+            .map(|a| (a.pid, a.started_ms))
+            .collect();
+        (session, agents)
+    };
+    let agent = || {
+        agents
+            .iter()
+            .any(|(pid, started)| hook::running(*pid, *started))
+    };
+    (to == OPERATOR_HANDLE || session || agent()).then(|| to.to_string())
+}
+
+/// Why `mail/send` refuses `to`: nobody would read it, and, when benchd still knows the
+/// conversation that answered to it, the handle that conversation answers to now.
+fn unread_by_anyone(c: &Core, to: &str) -> String {
+    let now = mail_moved_to(c, to)
+        .map(|h| format!("; the agent that held it now answers as {h:?}"))
+        .unwrap_or_default();
+    format!(
+        "no live agent holds the handle {to:?}, so nobody would read this mail{now}. \
+         Pass --queue to hold it for whoever claims {to:?} later."
+    )
+}
+
+/// The live handle of a conversation that once answered to `to`: recorded under it (a hook's
+/// claim or a spawn), or run by a session of this daemon's that had it.
+fn mail_moved_to(c: &Core, to: &str) -> Option<String> {
+    let mut conversations: Vec<String> = c
+        .session_records
+        .hosted
+        .iter()
+        .filter(|h| h.handle() == Some(to))
+        .map(|h| h.id.clone())
+        .collect();
+    conversations.extend(
+        c.sessions
+            .values()
+            .filter(|s| s.handle == to)
+            .filter_map(|s| s.runtime_session.clone()),
+    );
+    c.sessions
+        .values()
+        .filter(|s| s.is_live() && s.handle != to && s.agent != AgentKind::Shell)
+        .find(|s| hook::conversation(c, s).is_some_and(|id| conversations.contains(&id)))
+        .map(|s| s.handle.clone())
 }
 
 /// Deliver one mail and log it (`mail/send`, and benchd's own mail: the live file's, helm #532).
