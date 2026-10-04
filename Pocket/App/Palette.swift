@@ -30,6 +30,8 @@ enum Mono {
     static let group = Font.system(size: 11, design: .monospaced)
     static let screen = Font.system(size: 10, design: .monospaced)
     static let title = Font.system(size: 13, weight: .semibold, design: .monospaced)
+    /// The composer's send arrow, in its circle.
+    static let send = Font.system(size: 16, weight: .bold, design: .monospaced)
 }
 
 extension Color {
