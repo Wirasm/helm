@@ -73,6 +73,10 @@ package struct ChatLog: Equatable, Sendable {
     /// Whether the transcript holds entries before the oldest read.
     package var hasOlder: Bool { (oldest ?? 0) > 0 }
 
+    /// Entries a chat opens with, and each older page brings: the latest first, the rest as he
+    /// scrolls up to them. A chat holds what he has scrolled through, not the whole transcript.
+    package static let page = 30
+
     /// A page whose transcript holds no more entries than the newest read means the file was
     /// rewritten under the cursor: what was read is dropped, and the next ask starts over.
     package mutating func merge(_ page: BenchSessionLog) {
