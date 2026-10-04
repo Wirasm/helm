@@ -118,8 +118,9 @@ const USAGE: &str = "usage: bench [--suite <name>] <verb> [args]  (bench --versi
      \x20     file write <path> --expect <f>      stdin over <path>, only if it still holds what\n\
      \x20                                         <f> holds (what you read); exit 3 when it changed\n\
      \x20                                         since. A new file: --expect /dev/null\n\
-     \x20     mail send --to <h> --body <text>    deliver mail; a live recipient is woken\n\
-     \x20               [--body-file <p>] [--subject <s>] [--from <h>]\n\
+     \x20     mail send --to <h> --body <text>    deliver mail; a live recipient is woken; a handle\n\
+     \x20               [--body-file <p>] [--subject <s>] [--from <h>] no live agent holds is refused\n\
+     \x20               [--queue]                 unless --queue holds it for a later owner\n\
      \x20     mail list [--handle <h>]            metadata only, unread first\n\
      \x20     mail read <id> [--handle <h>]       body + retirement (inbox -> read)\n\
      \x20     mail who --pane <uuid>              the mailbox of the agent in a helm pane\n\

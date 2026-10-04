@@ -56,7 +56,7 @@ mod usage;
 mod waiting;
 
 use bench_browser::{Browser, ExitInfo, LaunchError, Launched, default_candidates};
-use bench_session::{Notice, Session};
+use bench_session::{AgentKind, Notice, Session};
 use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
     FILE_REQUEST_MAX_BYTES, KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs,
@@ -1326,17 +1326,11 @@ fn dispatch(
                     return (refused(format!("{role}: {why}")), AfterResponse::Done);
                 }
             }
-            let reader = {
-                let c = core.lock().unwrap();
-                let reader = mail_reader(&c, &parsed.to);
-                if reader.is_none() && !parsed.queue {
-                    return (
-                        refused(unread_by_anyone(&c, &parsed.to)),
-                        AfterResponse::Done,
-                    );
-                }
-                reader
-            };
+            let reader = mail_reader(core, &parsed.to);
+            if reader.is_none() && !parsed.queue {
+                let why = unread_by_anyone(&core.lock().unwrap(), &parsed.to);
+                return (refused(why), AfterResponse::Done);
+            }
             match send_mail(
                 core,
                 &parsed.from,
@@ -1829,21 +1823,33 @@ fn respond_keep_open(mut stream: &UnixStream, response: &Response) {
     }
 }
 
-/// Deliver one mail and log it (`mail/send`, and benchd's own mail: the live file's, helm #532).
-/// The inbox file is the delivery: the wake reactor reads inboxes, not this event, so mail sent
-/// here reaches an idle agent exactly as a `mail/send` does. Takes the core lock itself, twice,
-/// and writes the file off it.
-/// Who reads mail sent to `to` now: the operator, or the live agent that holds the handle (a
-/// benchd session's, or one its hook claimed). `None` when nobody does: a session that ended, a
-/// handle from before a restart, a name nobody took.
-fn mail_reader(c: &Core, to: &str) -> Option<String> {
-    let session = c.sessions.values().any(|s| s.handle == to && s.is_live());
-    let agent = c
-        .agents
-        .values()
-        .flatten()
-        .any(|a| a.handle == to && bench_sessions::process::alive(a.pid, None));
-    (to == OPERATOR_HANDLE || session || agent).then(|| to.to_string())
+/// Who reads mail sent to `to` now: the operator, or the live agent that holds the handle (an
+/// agent session benchd runs, or one whose hook claimed it). `None` when nobody does: a session
+/// that ended, a handle from before a restart, a name nobody took, or a pane's plain shell, whose
+/// session id is a handle no agent reads. Takes the core lock to copy what it needs and probes
+/// claimed agents' processes off it.
+fn mail_reader(core: &Arc<Mutex<Core>>, to: &str) -> Option<String> {
+    let (session, agents): (bool, Vec<(u32, Option<u64>)>) = {
+        let c = core.lock().unwrap();
+        let session = c
+            .sessions
+            .values()
+            .any(|s| s.handle == to && s.is_live() && s.agent != AgentKind::Shell);
+        let agents = c
+            .agents
+            .values()
+            .flatten()
+            .filter(|a| a.handle == to)
+            .map(|a| (a.pid, a.started_ms))
+            .collect();
+        (session, agents)
+    };
+    let agent = || {
+        agents
+            .iter()
+            .any(|(pid, started)| hook::running(*pid, *started))
+    };
+    (to == OPERATOR_HANDLE || session || agent()).then(|| to.to_string())
 }
 
 /// Why `mail/send` refuses `to`: nobody would read it, and, when benchd still knows the
@@ -1876,11 +1882,15 @@ fn mail_moved_to(c: &Core, to: &str) -> Option<String> {
     );
     c.sessions
         .values()
-        .filter(|s| s.is_live() && s.handle != to)
+        .filter(|s| s.is_live() && s.handle != to && s.agent != AgentKind::Shell)
         .find(|s| hook::conversation(c, s).is_some_and(|id| conversations.contains(&id)))
         .map(|s| s.handle.clone())
 }
 
+/// Deliver one mail and log it (`mail/send`, and benchd's own mail: the live file's, helm #532).
+/// The inbox file is the delivery: the wake reactor reads inboxes, not this event, so mail sent
+/// here reaches an idle agent exactly as a `mail/send` does. Takes the core lock itself, twice,
+/// and writes the file off it.
 pub(crate) fn send_mail(
     core: &Arc<Mutex<Core>>,
     from: &str,

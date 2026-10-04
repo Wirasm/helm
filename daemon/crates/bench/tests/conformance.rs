@@ -13881,3 +13881,34 @@ fn mail_to_a_resumed_agents_old_handle_names_its_new_one() {
         sent.stderr
     );
 }
+
+/// A pane's plain shell is a live session under its own id, and no agent reads that handle:
+/// mail to it is refused like mail to nobody.
+#[test]
+fn mail_to_a_pane_shells_session_id_is_refused() {
+    let home = TestHome::claim("mail-shell");
+    let h = &home.dir;
+    let daemon = DaemonGuard::start(h, None);
+    let ws = workspace(h).display().to_string();
+    ok_data(layout(
+        &daemon.socket,
+        "workspace/open",
+        serde_json::json!({ "path": ws }),
+        operator(),
+        false,
+    ));
+    let pane = json_of(&bench(h, &["open", "terminal"]))["pane"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sid = pane_session(h, &pane).expect("the new pane names a session");
+    assert_eq!(live_entry(h, &sid)["agent"], "shell");
+    let sent = bench(
+        h,
+        &[
+            "mail", "send", "--from", "orch", "--to", &sid, "--body", "x",
+        ],
+    );
+    assert_eq!(sent.code, 3, "{}", sent.stdout);
+    assert!(sent.stderr.contains(&sid), "{}", sent.stderr);
+}
