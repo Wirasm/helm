@@ -246,8 +246,9 @@ struct MessagesView: View {
 }
 
 /// One transcript entry as a message: his prompts on the right in their own colour, the agent's
-/// replies as simple markdown, each with its time under it; a tool call as one dim line, an error
-/// in the asking colour, a message another session sent as one line naming it. Each can be
+/// replies as markdown, each with its time under it; a tool call as one dim line, an error
+/// in the asking colour, a message another session sent as one line naming it; what a slash
+/// command printed as one faint line under it, and a compaction as a divider. Each can be
 /// selected in part and copied, or copied whole (`SelectableText`).
 struct MessageRow: View {
     let entry: BenchLogEntry
@@ -288,6 +289,15 @@ struct MessageRow: View {
             SelectableText(
                 text: "✗ \(entry.tool.map { "\($0): " } ?? "")\(entry.text)",
                 font: Mono.smallUI, color: Palette.asking, lines: 3, copy: entry.text)
+        case .result:
+            // Under the slash command he typed, on his side: it ran, and what it said.
+            let said = entry.text.split(separator: "\n").first.map(String.init) ?? ""
+            Text("✓ \(said.isEmpty ? "done" : said)").font(Mono.small)
+                .foregroundStyle(Palette.faint).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        case .compacted:
+            Text("— compacted —").font(Mono.small).foregroundStyle(Palette.faint)
+                .frame(maxWidth: .infinity)
         }
     }
 

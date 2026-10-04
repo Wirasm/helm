@@ -6,13 +6,14 @@ agents (● asking, ✓ finished, ○ working), a workspace with one asking firs
 asking ones, then the orchestrators; a row shows the last message, or the subject of mail it sent
 you that you have not read, and a dot when a reply came past what you last read. A chat is the
 agent's own transcript (`sessions/log`): your prompts on the right, its replies as markdown
-(headings, lists, code, quotes, tables), each with its time under it, a tool call as one line. The
-field below types into the agent with Return; while it asks, the prompt's choices are buttons.
-`screen` shows its terminal live, with keys (⏎ esc ^c 1 2 3 ⇥ and arrows). Swipe left or right for
-the next or previous chat of the workspace; the name opens a searchable switcher. The pages list
-holds each workspace's plan and review pages (its prp store's `.html` files), last edited first,
-searchable; a page opens as helm renders a canvas, with a reply box when an agent opened it. It is
-never a remote for helm's window.
+(headings, lists, code, quotes, tables), each with its time under it, a tool call as one line; a
+slash command you sent shows what it printed under it, and a compaction is a divider. The field
+below types into the agent with Return; while it asks, the prompt's choices are buttons. `screen`
+shows its terminal live, with keys (⏎ esc ^c 1 2 3 ⇥ and arrows). Swipe left or right for the next
+or previous chat of the workspace; the name opens a searchable switcher. The pages list holds each
+workspace's plan and review pages (its prp store's `.html` files), last edited first, searchable; a
+page opens as helm renders a canvas, with a reply box when an agent opened it. It is never a remote
+for helm's window.
 
 It shares helm's code rather than copying it:
 

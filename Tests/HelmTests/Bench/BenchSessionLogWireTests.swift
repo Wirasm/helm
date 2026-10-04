@@ -28,7 +28,7 @@ final class BenchSessionLogWireTests: XCTestCase {
         let reply = try JSONDecoder().decode(
             BenchSessionLog.self,
             from: JSONSerialization.data(withJSONObject: XCTUnwrap(samples["reply"])))
-        XCTAssertEqual(reply.total, 6)
+        XCTAssertEqual(reply.total, 8)
         XCTAssertEqual(
             reply.entries,
             [
@@ -45,6 +45,10 @@ final class BenchSessionLogWireTests: XCTestCase {
                 BenchLogEntry(
                     index: 5, atMs: 1_791_028_900_000, kind: .user,
                     text: "You have mail from lead: /m/1.md", from: "bench"),
+                BenchLogEntry(index: 6, atMs: 1_791_028_920_000, kind: .compacted, text: "manual"),
+                BenchLogEntry(
+                    index: 7, atMs: 1_791_028_921_000, kind: .result,
+                    text: "Compacted (ctrl+o to see full summary)"),
             ])
     }
 }
