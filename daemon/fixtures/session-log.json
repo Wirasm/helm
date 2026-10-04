@@ -11,7 +11,7 @@
   "reply": {
     "harness": "claude",
     "id": "c-7e2d",
-    "total": 5,
+    "total": 6,
     "entries": [
       {
         "index": 1,
@@ -38,6 +38,13 @@
         "at_ms": 1791028860000,
         "kind": "agent",
         "text": "The gate is **green**.\n\n- lint PASS\n- swift PASS"
+      },
+      {
+        "index": 5,
+        "at_ms": 1791028900000,
+        "kind": "user",
+        "text": "You have mail from lead: /m/1.md",
+        "from": "bench"
       }
     ],
     "unreadable": 0

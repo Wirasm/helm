@@ -75,19 +75,26 @@ package struct BenchLogEntry: Decodable, Equatable, Sendable, Identifiable {
     package var kind: Kind
     package var tool: String?
     package var text: String
+    /// A prompt another session sent: the sender its envelope names. `text` is the message
+    /// alone.
+    package var from: String?
 
     package var id: Int { index }
 
     private enum CodingKeys: String, CodingKey {
-        case index, kind, tool, text
+        case index, kind, tool, text, from
         case atMs = "at_ms"
     }
 
-    package init(index: Int, atMs: UInt64, kind: Kind, tool: String? = nil, text: String) {
+    package init(
+        index: Int, atMs: UInt64, kind: Kind, tool: String? = nil, text: String,
+        from: String? = nil
+    ) {
         self.index = index
         self.atMs = atMs
         self.kind = kind
         self.tool = tool
         self.text = text
+        self.from = from
     }
 }

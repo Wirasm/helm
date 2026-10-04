@@ -11,13 +11,33 @@ final class PocketPagesTests: XCTestCase {
         BenchPrpArtifact(path: "/s/\(relative)", relative: relative, modifiedMs: ms)
     }
 
-    /// The `.html` pages of every store once, newest first; markdown is not a page here.
-    func testPagesAreTheStoresHTMLNewestFirstOnce() {
-        let helm = [file("plans/a.plan.html", 30), file("plans/a.plan.md", 31)]
-        let prp = [file("reviews/pr-1-review.html", 40), file("plans/a.plan.html", 30)]
-        let pages = PocketPages.pages(files: [helm, prp])
-        XCTAssertEqual(pages.map(\.path), ["/s/reviews/pr-1-review.html", "/s/plans/a.plan.html"])
-        XCTAssertEqual(pages.map(\.title), ["reviews/pr-1-review", "plans/a.plan"])
+    /// A section per workspace's store, the one edited last first, each of its `.html` pages
+    /// newest first; markdown is not a page here, and a store two workspaces share is listed once,
+    /// under the first. A workspace with no page has no section.
+    func testPagesAreASectionPerWorkspaceNewestFirst() {
+        let helm = [file("plans/a.plan.html", 30), file("plans/a.plan.md", 31), file("b.html", 35)]
+        let prp = [file("reviews/pr-1-review.html", 40)]
+        let sections = PocketPages.sections([
+            ("/w/helm", helm), ("/w/prp", prp), ("/w/helm/.worktrees/x", helm),
+            ("/w/empty", [file("notes.md", 50)]),
+        ])
+        XCTAssertEqual(sections.map(\.path), ["/w/prp", "/w/helm"])
+        XCTAssertEqual(sections.map(\.name), ["prp", "helm"])
+        XCTAssertEqual(sections[1].pages.map(\.title), ["b", "plans/a.plan"])
+        XCTAssertEqual(sections[0].pages.map(\.path), ["/s/reviews/pr-1-review.html"])
+    }
+
+    /// A search keeps the pages whose title has it, in any case, and only the sections left with
+    /// one.
+    func testASearchKeepsTheMatchingPagesAndTheirSections() {
+        let sections = PocketPages.sections([
+            ("/w/helm", [file("plans/a.plan.html", 30), file("reviews/pr-2.html", 20)]),
+            ("/w/prp", [file("plans/c.plan.html", 10)]),
+        ])
+        XCTAssertEqual(sections.compactMap { $0.matching("") }, sections)
+        let found = sections.compactMap { $0.matching(" REVIEW ") }
+        XCTAssertEqual(found.map(\.path), ["/w/helm"])
+        XCTAssertEqual(found.flatMap(\.pages).map(\.title), ["reviews/pr-2"])
     }
 
     /// A reply is added to the live file's `replies`, every other key kept, written as a page

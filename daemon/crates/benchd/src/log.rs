@@ -124,6 +124,7 @@ fn entry(index: usize, e: &Entry) -> SessionLogEntry {
         kind: e.kind,
         tool: e.tool.clone(),
         text: e.text.clone(),
+        from: e.from.clone(),
     }
 }
 

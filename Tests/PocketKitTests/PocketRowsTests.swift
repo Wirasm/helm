@@ -103,25 +103,6 @@ final class PocketRowsTests: XCTestCase {
         XCTAssertEqual(owners["/w/helm2"]?.map(\.id), ["sibling"])
     }
 
-    /// Agents: every session, by what it wants from the operator (asking, finished and not seen,
-    /// working, seen, ended), newest first within each.
-    func testAgentsListsEverySessionByAttention() {
-        let done = BenchDone(since: Date(timeIntervalSince1970: 1), to: "operator", seen: false)
-        let sessions: [String: [BenchSessionRow]] = [
-            "/w/helm": [
-                row("idle", running("idle"), at: 95), row("shared", running("busy"), at: 50),
-                row("ended", .finished(atMs: 99)),
-                row("unseen", running("idle"), at: 10, done: done),
-            ],
-            "/w/helm/.worktrees/x": [
-                row("new", running("busy"), at: 70), row("ask", running("waiting"), at: 1),
-            ],
-        ]
-        XCTAssertEqual(
-            PocketHome.agents(sessions: sessions).map(\.id),
-            ["ask", "unseen", "new", "shared", "idle", "ended"])
-    }
-
     /// A session is called by its mailbox handle, the name it is mailed by, before anything else.
     func testASessionIsCalledByItsHandleFirst() {
         var r = row("0b9e3f2a-1c4d", running("busy"))

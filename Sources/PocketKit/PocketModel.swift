@@ -20,8 +20,9 @@ package final class PocketModel: ObservableObject {
     @Published package private(set) var state: BenchClient.State = .disconnected("not connected")
     /// Why the last sessions poll failed for a workspace, until one succeeds for all of them.
     @Published package private(set) var failure: String?
-    /// The plan and review pages in the workspaces' stores, newest first (`loadPages`).
-    @Published package private(set) var pages: [PocketPage] = []
+    /// The plan and review pages in the workspaces' stores, a section per workspace
+    /// (`loadPages`).
+    @Published package private(set) var pages: [PocketPageSection] = []
     /// Each running chat's last message, by session id (`sessions/log`), for the chats list.
     @Published package private(set) var previews: [String: ChatPreview] = [:]
     /// When each preview was last asked for, and the row's `updatedAtMs` then (`refreshPreviews`).
@@ -152,29 +153,32 @@ package final class PocketModel: ObservableObject {
         return nil
     }
 
-    /// The `.html` pages of every workspace's prp store (`prp/stores`, then `prp/artifacts`),
-    /// newest first. nil once listed, else why not; the last list stays.
+    /// The `.html` pages of every workspace's prp store (`prp/stores`, then `prp/artifacts`), a
+    /// section per workspace. nil once listed, else why not; the last list stays.
     package func loadPages() async -> Refusal? {
         guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
-        var keys: [String] = []
+        // Each store once, under the first workspace that has it.
+        var stores: [(workspace: String, key: String)] = []
         for workspace in workspaces {
             let request = BenchPrpRequest(id: Self.id("stores"), .stores(workspace: workspace))
             switch await Self.ask(request, at: endpoint, BenchPrpStores.self) {
-            case let .success(stores):
-                if let key = stores.workspace, !keys.contains(key) { keys.append(key) }
+            case let .success(answer):
+                if let key = answer.workspace, !stores.contains(where: { $0.key == key }) {
+                    stores.append((workspace, key))
+                }
             case let .failure(why): return why
             }
         }
-        var listings: [[BenchPrpArtifact]] = []
-        for key in keys {
+        var listings: [(workspace: String, files: [BenchPrpArtifact])] = []
+        for (workspace, key) in stores {
             let request = BenchPrpRequest(id: Self.id("artifacts"), .artifacts(store: key))
             switch await Self.ask(request, at: endpoint, BenchPrpArtifacts.self) {
-            case let .success(artifacts): listings.append(artifacts.files)
+            case let .success(artifacts): listings.append((workspace, artifacts.files))
             case let .failure(why): return why
             }
         }
         guard client === asked else { return nil }
-        pages = PocketPages.pages(files: listings)
+        pages = PocketPages.sections(listings)
         return nil
     }
 

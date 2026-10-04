@@ -1,11 +1,10 @@
 import Foundation
 import HelmWire
 
-/// What a session wants from the operator, in the order the agents tab lists it: ● it waits on
-/// him, ✓ its turn ended and he has not looked, ○ it works, then, dimmed, ✓ a turn he has seen and
-/// ✓ a session that ended. From what benchd says of the row (#623): `done`, mail to him, and the
+/// What a session wants from the operator: ● it waits on him, ✓ its turn ended and he has not
+/// looked, ○ it works, then, dimmed, ✓ a turn he has seen and ✓ a session that ended. From what benchd says of the row (#623): `done`, mail to him, and the
 /// harness's own activity word.
-package enum Attention: Comparable, Sendable {
+package enum Attention: Sendable {
     case asking
     case finished
     case working
@@ -88,16 +87,6 @@ package enum PocketHome {
             owned[workspace] = (listed[workspace] ?? []).filter { owner($0) == workspace }
         }
         return owned
-    }
-
-    /// Every session (each listed once, by `owners`), by its `Attention`, newest first within
-    /// each.
-    package static func agents(sessions: [String: [BenchSessionRow]]) -> [BenchSessionRow] {
-        sessions.values.joined().sorted { a, b in
-            let (aWants, bWants) = (Attention(a), Attention(b))
-            if aWants != bWants { return aWants < bWants }
-            return a.lastMs > b.lastMs
-        }
     }
 }
 

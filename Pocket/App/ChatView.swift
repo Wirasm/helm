@@ -246,33 +246,63 @@ struct MessagesView: View {
 }
 
 /// One transcript entry as a message: his prompts on the right in their own colour, the agent's
-/// replies as simple markdown, a tool call as one dim line, an error in the asking colour.
+/// replies as simple markdown, each with its time under it; a tool call as one dim line, an error
+/// in the asking colour, a message another session sent as one line naming it. Each can be
+/// selected in part and copied, or copied whole (`SelectableText`).
 struct MessageRow: View {
     let entry: BenchLogEntry
 
     var body: some View {
         switch entry.kind {
         case .user:
-            HStack {
-                Spacer(minLength: 40)
-                Text(entry.text).font(Mono.body).foregroundStyle(Palette.finished)
-                    .textSelection(.enabled)
+            if let from = entry.from {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    SelectableText(
+                        text: "✉ \(from)  \(entry.text)", font: Mono.smallUI,
+                        color: Palette.dim, lines: 1, copy: entry.text)
+                    stamp
+                }
+            } else {
+                HStack {
+                    Spacer(minLength: 40)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        SelectableText(
+                            text: entry.text, font: Mono.bodyUI,
+                            color: Palette.finished)
+                        stamp
+                    }
+                }
             }
         case .agent:
-            Text(Self.markdown(entry.text)).font(Mono.body).foregroundStyle(Palette.text)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                SelectableText(
+                    text: entry.text, markdown: true, font: Mono.bodyUI, color: Palette.text)
+                stamp
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
-            Text("· \(entry.tool ?? "tool")  \(entry.text)").font(Mono.small)
-                .foregroundStyle(Palette.faint).lineLimit(1)
+            SelectableText(
+                text: "· \(entry.tool ?? "tool")  \(entry.text)",
+                font: Mono.smallUI, color: Palette.faint, lines: 1, copy: entry.text)
         case .error:
-            Text("✗ \(entry.tool.map { "\($0): " } ?? "")\(entry.text)").font(Mono.small)
-                .foregroundStyle(Palette.asking).lineLimit(3)
+            SelectableText(
+                text: "✗ \(entry.tool.map { "\($0): " } ?? "")\(entry.text)",
+                font: Mono.smallUI, color: Palette.asking, lines: 3, copy: entry.text)
         }
     }
 
-    /// Inline markdown (bold, code, links), line breaks kept as written; anything it cannot read
-    /// stays plain text.
+    /// When the entry was written, in the phone's time zone and clock (hh:mm).
+    private var stamp: some View {
+        Text(
+            Date(timeIntervalSince1970: Double(entry.atMs) / 1000)
+                .formatted(date: .omitted, time: .shortened)
+        )
+        .font(Mono.stamp).foregroundStyle(Palette.faint)
+    }
+
+    /// Inline markdown (bold, code, links), line breaks kept as written, for a line in the chats
+    /// list (a chat draws its replies' blocks too, `ChatText`); anything it cannot read stays plain
+    /// text.
     static func markdown(_ text: String) -> AttributedString {
         (try? AttributedString(
             markdown: text,

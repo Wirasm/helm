@@ -91,7 +91,8 @@ package struct ChatLog: Equatable, Sendable {
     }
 }
 
-/// A chat row's last message: his or the agent's, never a tool line, cut to its first line.
+/// A chat row's last message: his or the agent's, never a tool line or another session's message,
+/// cut to its first line.
 package struct ChatPreview: Equatable, Sendable {
     package var text: String
     /// His own prompt, rather than the agent's reply.
@@ -101,7 +102,10 @@ package struct ChatPreview: Equatable, Sendable {
     package var atMs: UInt64
 
     package init?(_ log: BenchSessionLog) {
-        guard let last = log.entries.last(where: { $0.kind == .user || $0.kind == .agent })
+        guard
+            let last = log.entries.last(where: {
+                ($0.kind == .user && $0.from == nil) || $0.kind == .agent
+            })
         else { return nil }
         text = String(
             last.text.split(separator: "\n", omittingEmptySubsequences: true).first ?? "")

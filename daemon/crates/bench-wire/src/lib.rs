@@ -1354,9 +1354,14 @@ mod tests {
                 EntryKind::User,
                 EntryKind::Tool,
                 EntryKind::Error,
-                EntryKind::Agent
+                EntryKind::Agent,
+                EntryKind::User
             ],
             "every kind crosses the wire, so a rename on one side fails the other"
+        );
+        assert!(
+            reply.entries.iter().any(|e| e.from.is_some()),
+            "a message from another session pins `from`"
         );
     }
 

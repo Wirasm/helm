@@ -117,7 +117,9 @@ index in the whole transcript, which only grows, so the index is the cursor: no 
 `limit` (50, at most 200), `after` follows new ones, `before` pages back. It takes a session id as
 `sessions/all` lists it, never a path: it answers over TCP, and a path would read any file; a
 refusal names the id, not where benchd looked. benchd keeps each transcript it read while the
-file's length and mtime hold, since the phone asks every second or two.
+file's length and mtime hold, since the phone asks every second or two. A prompt another session
+sent (Claude Code's `<teammate-message>` envelope, or a peer `origin`) is a `user` entry with
+`from`, the sender the envelope names, and the message alone as its text.
 
 **And the sensor (#358, first half of M2 finish).** `bench hook <claude|codex|pi>` is one
 command wired into an agent's own hooks. On every event it reports the agent's state over the

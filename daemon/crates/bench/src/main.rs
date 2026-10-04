@@ -556,9 +556,10 @@ fn log(arg: Option<&String>, since: Option<&str>, count: Option<&str>, json_out:
             transcript::display_time(e.at_ms),
             kind_name(e.kind)
         );
-        let text = match &e.tool {
-            Some(tool) => format!("{tool}  {}", e.text),
-            None => e.text.clone(),
+        let text = match (&e.tool, &e.from) {
+            (Some(tool), _) => format!("{tool}  {}", e.text),
+            (None, Some(from)) => format!("from {from}: {}", e.text),
+            (None, None) => e.text.clone(),
         };
         // A pasted report or a task notification can run to a hundred lines; the tail stays
         // readable by cutting each entry, and --json carries the whole text.

@@ -9,13 +9,9 @@ struct ChatsView: View {
     @EnvironmentObject private var model: PocketModel
     let talk: (String) -> Void
     @State private var query = ""
-    /// The collapsed sections' paths, one per line: kept across launches.
+    /// The collapsed sections' paths (`Collapsed`): kept across launches.
     @AppStorage("collapsed") private var collapsedPaths = ""
     @State private var showingFinished: Set<String> = []
-
-    private var collapsed: Set<String> {
-        Set(collapsedPaths.split(separator: "\n").map(String.init))
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,10 +28,13 @@ struct ChatsView: View {
                     ) { section in
                         SectionView(
                             section: section,
-                            open: !collapsed.contains(section.path) || !query.isEmpty,
+                            open: !Collapsed.has(section.path, collapsedPaths)
+                                || !query.isEmpty,
                             showingFinished: showingFinished.contains(section.path)
                                 || !query.isEmpty,
-                            toggle: { toggle(section.path) },
+                            toggle: {
+                                collapsedPaths = Collapsed.toggling(section.path, collapsedPaths)
+                            },
                             toggleFinished: {
                                 showingFinished.formSymmetricDifference([section.path])
                             },
@@ -47,11 +46,42 @@ struct ChatsView: View {
             }
         }
     }
+}
 
-    private func toggle(_ path: String) {
-        var paths = collapsed
-        paths.formSymmetricDifference([path])
-        collapsedPaths = paths.sorted().joined(separator: "\n")
+/// The collapsed sections of a list, kept in `@AppStorage` as their paths, one per line.
+enum Collapsed {
+    static func has(_ path: String, _ paths: String) -> Bool {
+        paths.split(separator: "\n").contains { $0 == path }
+    }
+
+    static func toggling(_ path: String, _ paths: String) -> String {
+        var set = Set(paths.split(separator: "\n").map(String.init))
+        set.formSymmetricDifference([path])
+        return set.sorted().joined(separator: "\n")
+    }
+}
+
+/// A workspace's header in a list: ▾ open, ▸ collapsed, ● when something needs him, a count.
+struct SectionHeader: View {
+    let name: String
+    let open: Bool
+    var needsHim = false
+    let count: Int
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(open ? "▾" : "▸")
+                Text(name.uppercased()).tracking(1)
+                if needsHim { Text("●").foregroundStyle(Palette.asking) }
+                Spacer()
+                Text("\(count)")
+            }
+            .font(Mono.group).foregroundStyle(Palette.dim)
+            .padding(.top, 10)
+            .contentShape(Rectangle())
+        }
     }
 }
 
@@ -66,18 +96,9 @@ struct SectionView: View {
     let talk: (String) -> Void
 
     var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 6) {
-                Text(open ? "▾" : "▸")
-                Text(section.name.uppercased()).tracking(1)
-                if section.needsHim { Text("●").foregroundStyle(Palette.asking) }
-                Spacer()
-                Text("\(section.running.count)")
-            }
-            .font(Mono.group).foregroundStyle(Palette.dim)
-            .padding(.top, 10)
-            .contentShape(Rectangle())
-        }
+        SectionHeader(
+            name: section.name, open: open, needsHim: section.needsHim,
+            count: section.running.count, toggle: toggle)
         if open {
             if section.running.isEmpty {
                 Text("nothing running").font(Mono.small).foregroundStyle(Palette.faint)
@@ -106,40 +127,9 @@ struct SectionView: View {
     }
 }
 
-/// agents: every session on the bench once, by what it wants from the operator, with its age and
-/// what it waits for.
-struct AgentsView: View {
-    @EnvironmentObject private var model: PocketModel
-    let talk: (String) -> Void
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(PocketHome.agents(sessions: model.sessions)) { row in
-                    SessionRowView(
-                        row: row, detail: detail(row),
-                        age: BenchSessionRow.age(sinceMs: row.lastMs, now: Date())
-                    )
-                    .opacity(row.screen == nil ? 0.6 : 1)
-                    .onTapGesture { if row.screen != nil { talk(row.id) } }
-                }
-                Failure()
-            }
-            .padding(.horizontal, 16)
-        }
-    }
-
-    private func detail(_ row: BenchSessionRow) -> String {
-        if let mail = row.operatorMail, mail.unread > 0 {
-            return "mailed you: \(mail.subject ?? "\(mail.unread) unread")"
-        }
-        if case let .running(_, detail?) = row.state { return detail }
-        return "\(row.harness) · \(row.model ?? "?")"
-    }
-}
-
 /// One chat in the list: its glyph and name, harness and model, the last message's first line and
-/// its age, and a dot when the agent replied after he last opened it.
+/// its age, and a dot when the agent replied after he last opened it. Mail to him he has not read
+/// takes the last message's place.
 struct ChatRowView: View {
     @EnvironmentObject private var model: PocketModel
     @EnvironmentObject private var memory: ChatMemory
@@ -160,13 +150,18 @@ struct ChatRowView: View {
                     if unread { Text("●").font(Mono.small).foregroundStyle(Palette.finished) }
                     Text(age(preview)).font(Mono.small).foregroundStyle(Palette.dim)
                 }
-                Text(
-                    MessageRow.markdown(
-                        (preview?.mine == true ? "you: " : "") + (preview?.text ?? ""))
-                )
-                .font(Mono.small)
-                .foregroundStyle(unread ? Palette.text : Palette.dim)
-                .lineLimit(1)
+                if let mail = row.operatorMail, mail.unread > 0 {
+                    Text("mailed you: \(mail.subject ?? "\(mail.unread) unread")")
+                        .font(Mono.small).foregroundStyle(Palette.asking).lineLimit(1)
+                } else {
+                    Text(
+                        MessageRow.markdown(
+                            (preview?.mine == true ? "you: " : "") + (preview?.text ?? ""))
+                    )
+                    .font(Mono.small)
+                    .foregroundStyle(unread ? Palette.text : Palette.dim)
+                    .lineLimit(1)
+                }
             }
         }
         .font(Mono.body)

@@ -4,30 +4,49 @@ import PocketKit
 import SwiftUI
 import WebKit
 
-/// pages: the plan and review pages in the workspaces' prp stores, newest first.
+/// pages: a search field, then each workspace's plan and review pages as a section that
+/// collapses, last edited first.
 struct PagesView: View {
     @EnvironmentObject private var model: PocketModel
     @State private var refused: String?
+    @State private var query = ""
+    /// The collapsed sections' paths (`Collapsed`): kept across launches, apart from the chats'.
+    @AppStorage("collapsedPages") private var collapsedPaths = ""
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(model.pages) { page in
-                    NavigationLink {
-                        PageView(page: page)
-                    } label: {
-                        PageRow(page: page, opened: model.isOpened(page))
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("", text: $query, prompt: Text("search").foregroundStyle(Palette.faint))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(Mono.body).foregroundStyle(Palette.text)
+                .padding(.horizontal, 16).padding(.bottom, 6)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.pages.compactMap { $0.matching(query) }) { section in
+                        let open = !Collapsed.has(section.path, collapsedPaths) || !query.isEmpty
+                        SectionHeader(name: section.name, open: open, count: section.pages.count) {
+                            collapsedPaths = Collapsed.toggling(section.path, collapsedPaths)
+                        }
+                        if open {
+                            ForEach(section.pages) { page in
+                                NavigationLink {
+                                    PageView(page: page)
+                                } label: {
+                                    PageRow(page: page, opened: model.isOpened(page))
+                                }
+                            }
+                        }
+                    }
+                    if let refused {
+                        Text(refused).font(Mono.small).foregroundStyle(Palette.asking)
+                    } else if model.pages.isEmpty {
+                        Text("no pages").font(Mono.small).foregroundStyle(Palette.faint)
                     }
                 }
-                if let refused {
-                    Text(refused).font(Mono.small).foregroundStyle(Palette.asking)
-                } else if model.pages.isEmpty {
-                    Text("no pages").font(Mono.small).foregroundStyle(Palette.faint)
-                }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
+            .refreshable { refused = await model.loadPages()?.description }
         }
-        .refreshable { refused = await model.loadPages()?.description }
         .task(id: model.workspaces) { refused = await model.loadPages()?.description }
     }
 }
