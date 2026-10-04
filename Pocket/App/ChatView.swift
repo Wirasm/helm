@@ -137,7 +137,9 @@ struct ChatPane: View {
         while !Task.isCancelled {
             // Behind after a long burst (the phone slept): the next page at once.
             if !behind { try? await Task.sleep(for: .milliseconds(1500)) }
-            behind = await load(log.newest.map { .after($0) } ?? .last)
+            behind = await load(
+                log.newest.map { .after($0) } ?? .last,
+                limit: log.newest == nil ? ChatLog.page : 50)
             prompt = await choices()
         }
     }
@@ -181,6 +183,9 @@ struct MessagesView: View {
     /// so reading back is not pulled down by the agent's next line.
     @State private var shown: Int?
     @State private var loadingOlder = false
+    /// Failed asks for the page above: each one gives the top row a new identity, so it looks
+    /// again whether he can see it and retries.
+    @State private var olderFailures = 0
 
     var body: some View {
         ScrollViewReader { reader in
@@ -199,6 +204,10 @@ struct MessagesView: View {
                         } action: { visible in
                             if visible { Task { await older(reader) } }
                         }
+                        // A new row after a failed ask, so it looks again and retries. Not one
+                        // per page: a fresh row measures itself before the page above is placed,
+                        // and that chained every page of the transcript in at once (measured).
+                        .id("older-\(olderFailures)")
                     }
                     ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
                 }
@@ -224,7 +233,12 @@ struct MessagesView: View {
         guard
             case let .success(page) = await model.log(
                 chat, page: .before(oldest), limit: ChatLog.page)
-        else { return }
+        else {
+            // benchd unreachable for a moment: wait, then look again.
+            try? await Task.sleep(for: .seconds(2))
+            olderFailures += 1
+            return
+        }
         log.merge(page)
         // Where he was reading stays where it was: the older page goes above it.
         reader.scrollTo(oldest, anchor: .top)
