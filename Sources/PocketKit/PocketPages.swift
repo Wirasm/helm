@@ -2,13 +2,15 @@ import CanvasKit
 import Foundation
 import HelmWire
 
-/// A plan or review page in a workspace's prp store: an `.html` file benchd lists
-/// (`prp/artifacts`), rendered as helm renders a canvas (`CanvasSchemeHandler`).
-package struct PocketPage: Equatable, Sendable, Identifiable {
+/// A document in a named prp store: an `.html` page benchd lists (`prp/artifacts`) or a
+/// markdown/HTML document linked from chat. HTML renders as helm renders a canvas.
+package struct PocketPage: Hashable, Sendable, Identifiable {
     package var path: String
-    /// Under its store: `plans/foo.plan`, without `.html`.
+    /// Under its store: `plans/foo.plan`, without its document extension.
     package var title: String
     package var modifiedMs: UInt64
+    /// The named store the document is confined to when benchd reads it.
+    package var store: String
 
     package var id: String { path }
 }
@@ -38,10 +40,10 @@ package enum PocketPages {
     /// document's order; a store two workspaces share is listed under the first. A page is in one
     /// section, and a workspace with no page has none.
     package static func sections(
-        _ listings: [(workspace: String, files: [BenchPrpArtifact])]
+        _ listings: [(workspace: String, store: String, files: [BenchPrpArtifact])]
     ) -> [PocketPageSection] {
         var seen = Set<String>()
-        return listings.compactMap { workspace, files in
+        return listings.compactMap { workspace, store, files in
             let pages =
                 files
                 .filter { $0.path.lowercased().hasSuffix(".html") && seen.insert($0.path).inserted }
@@ -49,7 +51,7 @@ package enum PocketPages {
                 .map {
                     PocketPage(
                         path: $0.path, title: String($0.relative.dropLast(".html".count)),
-                        modifiedMs: $0.modifiedMs)
+                        modifiedMs: $0.modifiedMs, store: store)
                 }
             return pages.isEmpty ? nil : PocketPageSection(path: workspace, pages: pages)
         }

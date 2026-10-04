@@ -30,6 +30,8 @@ package final class PocketModel: ObservableObject {
     /// The canvases on the bench an agent opened, standardized: a reply to one is mailed to it.
     @Published private var opened: Set<String> = []
 
+    @Published package private(set) var storeLinks = StoreLinks()
+
     private var client: BenchClient?
     private var following: AnyCancellable?
 
@@ -46,6 +48,7 @@ package final class PocketModel: ObservableObject {
         previews = [:]
         previewed = [:]
         pages = []
+        storeLinks = StoreLinks()
         opened = []
         guard let endpoint = BenchEndpoint.tcp(url.trimmingCharacters(in: .whitespaces)) else {
             state = .disconnected("\(url) is not tcp://<host>:<port>")
@@ -158,28 +161,49 @@ package final class PocketModel: ObservableObject {
     package func loadPages() async -> Refusal? {
         guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
         // Each store once, under the first workspace that has it.
-        var stores: [(workspace: String, key: String)] = []
+        var stores: [(workspace: String, key: String, dir: String)] = []
         for workspace in workspaces {
             let request = BenchPrpRequest(id: Self.id("stores"), .stores(workspace: workspace))
             switch await Self.ask(request, at: endpoint, BenchPrpStores.self) {
             case let .success(answer):
-                if let key = answer.workspace, !stores.contains(where: { $0.key == key }) {
-                    stores.append((workspace, key))
+                if let key = answer.workspace,
+                    let store = answer.stores.first(where: { $0.key == key }),
+                    !stores.contains(where: { $0.key == key })
+                {
+                    stores.append((workspace, key, store.dir))
                 }
             case let .failure(why): return why
             }
         }
-        var listings: [(workspace: String, files: [BenchPrpArtifact])] = []
-        for (workspace, key) in stores {
+        var listings: [(workspace: String, store: String, files: [BenchPrpArtifact])] = []
+        for (workspace, key, dir) in stores {
             let request = BenchPrpRequest(id: Self.id("artifacts"), .artifacts(store: key))
             switch await Self.ask(request, at: endpoint, BenchPrpArtifacts.self) {
-            case let .success(artifacts): listings.append((workspace, artifacts.files))
+            case let .success(artifacts): listings.append((workspace, dir, artifacts.files))
             case let .failure(why): return why
             }
         }
         guard client === asked else { return nil }
         pages = PocketPages.sections(listings)
         return nil
+    }
+
+    /// The link authority is this connection's benchd, including its home for ~/ paths.
+    package func loadStoreLinks() async -> Refusal? {
+        guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
+        let stores = await Self.ask(
+            BenchPrpRequest(id: Self.id("stores"), .stores(workspace: nil)), at: endpoint,
+            BenchPrpStores.self)
+        let home = await Self.ask(
+            BenchPrpRequest(id: Self.id("home"), .resolvePath("~")), at: endpoint,
+            BenchPathResolved.self)
+        guard client === asked else { return nil }
+        switch (stores, home) {
+        case let (.success(stores), .success(home)):
+            storeLinks = StoreLinks(stores: stores.stores, home: home.path)
+            return nil
+        case let (.failure(why), _), let (_, .failure(why)): return why
+        }
     }
 
     /// Reply to `page`: an entry added to its live file, written over exactly what was read

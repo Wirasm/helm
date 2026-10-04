@@ -28,7 +28,12 @@ final class PocketPagesModelTests: XCTestCase {
             let args = request["args"] as? [String: Any] ?? [:]
             func ok(_ data: Any) -> [String: Any] { ["id": id, "status": "ok", "data": data] }
             switch request["verb"] as? String {
-            case "prp/stores": return ok(["stores": [], "workspace": "helm-1"])
+            case "prp/stores":
+                return ok([
+                    "stores": [["key": "helm-1", "name": "helm", "path": "/w/helm", "dir": "/s"]],
+                    "workspace": "helm-1",
+                ])
+            case "path/resolve": return ok(["path": "/remote/home", "kind": "directory"])
             case "prp/artifacts":
                 return ok([
                     "files": [

@@ -78,3 +78,23 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         # Set your own team in Xcode to install on a phone (README.md); the gate builds unsigned.
         CODE_SIGN_STYLE: Automatic
+  PocketUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Pocket
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Pocket
+
+schemes:
+  Pocket:
+    build:
+      targets:
+        Pocket: all
+    test:
+      targets:
+        - PocketUITests

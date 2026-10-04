@@ -14,6 +14,11 @@ holds each workspace's plan and review pages (its prp store's `.html` files), la
 searchable; a page opens as helm renders a canvas, with a reply box when an agent opened it. It is
 never a remote for helm's window.
 
+A document path in an agent's reply is tappable when it names an `.md` or `.html` file inside a
+store benchd serves. Absolute paths, `~/.prp/...`, inline code and markdown links open in Pocket:
+markdown uses the chat renderer, HTML uses the page viewer. Back returns to the same chat. The
+phone reads the document through benchd; paths outside its stores stay plain text.
+
 It shares helm's code rather than copying it:
 
 | Code | Where | What |
@@ -91,3 +96,15 @@ env -u BENCH_SESSION -u BENCH_HANDLE -u BENCH_ASKED -u HELM_PANE -u BENCH_URL \
   timeout 3600 daemon/target/debug/benchd
 xcrun simctl launch <udid> com.wirasm.pocket -benchURL tcp://127.0.0.1:52230
 ```
+
+To test chat document links, install the iPhone 17 / iOS 26.3 simulator runtime, then run:
+
+```
+timeout 1200 cargo build --manifest-path daemon/Cargo.toml -p benchd
+timeout 900 python3 Pocket/test-store-links.py /tmp/pocket-links-proof.xcresult
+```
+
+The fixture uses port 52247, a temporary home and a stub Claude session. It opens markdown and
+HTML, checks an HTML sibling script, and returns to the chat after both. It also checks keyboard
+dismissal, selection and the copy menu. Screenshots are attached to the result bundle. On exit,
+it removes its simulator, temporary files and UI DerivedData.

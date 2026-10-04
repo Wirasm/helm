@@ -1,3 +1,4 @@
+import PocketKit
 import SwiftUI
 import UIKit
 
@@ -9,6 +10,7 @@ import UIKit
 /// depends on its current frame, and a lazy stack that measures, places and measures again then
 /// never settles (the chat hung at 100% CPU).
 struct SelectableText: UIViewRepresentable {
+    @Environment(\.openURL) private var openURL
     let text: String
     /// Drawn as markdown, blocks and all (`ChatText.markdown`), rather than as written.
     var markdown = false
@@ -18,6 +20,7 @@ struct SelectableText: UIViewRepresentable {
     var lines = 0
     /// What "Copy message" copies, when not the text as drawn: the message as the agent wrote it.
     var copy: String?
+    var links = StoreLinks()
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -27,6 +30,11 @@ struct SelectableText: UIViewRepresentable {
         view.tintColor = UIColor(Palette.finished)
         view.linkTextAttributes = [.foregroundColor: UIColor(Palette.finished)]
         view.delegate = context.coordinator
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.dismissKeyboard(_:)))
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        view.addGestureRecognizer(tap)
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }
@@ -36,6 +44,7 @@ struct SelectableText: UIViewRepresentable {
     /// relays the stack out, which updates the view again.
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.whole = copy ?? text
+        context.coordinator.openURL = openURL
         let styled = context.coordinator.styled(self)
         guard context.coordinator.applied !== styled else { return }
         context.coordinator.applied = styled
@@ -67,25 +76,26 @@ struct SelectableText: UIViewRepresentable {
     /// Where every message is measured: never on screen, never resized.
     @MainActor private static let measure = textView(lines: 0)
 
-    final class Coordinator: NSObject, UITextViewDelegate {
-        private var shown: (text: String, styled: NSAttributedString)?
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
+        private var shown: (text: String, links: StoreLinks, styled: NSAttributedString)?
         /// The size at each width offered, for what is shown.
         private var sizes: [CGFloat: CGSize] = [:]
         /// What the view on screen was last given.
         var applied: NSAttributedString?
         /// What "Copy message" copies.
         var whole = ""
+        var openURL: OpenURLAction?
 
         /// The text styled, styled again only when it changed.
         func styled(_ view: SelectableText) -> NSAttributedString {
-            if let shown, shown.text == view.text { return shown.styled }
+            if let shown, shown.text == view.text, shown.links == view.links { return shown.styled }
             let color = UIColor(view.color)
             let styled =
                 view.markdown
-                ? ChatText.markdown(view.text, font: view.font, color: color)
+                ? ChatText.markdown(view.text, font: view.font, color: color, links: view.links)
                 : NSAttributedString(
                     string: view.text, attributes: [.font: view.font, .foregroundColor: color])
-            shown = (view.text, styled)
+            shown = (view.text, view.links, styled)
             sizes = [:]
             return styled
         }
@@ -103,6 +113,44 @@ struct SelectableText: UIViewRepresentable {
             let size = CGSize(width: min(ceil(fit.width), width), height: ceil(fit.height))
             sizes[width] = size
             return size
+        }
+
+        /// Dismiss for plain text only. Moving the text by changing focus during a link tap
+        /// cancels UIKit's pending action.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+        ) -> Bool {
+            guard let view = gestureRecognizer.view as? UITextView,
+                let range = view.characterRange(at: touch.location(in: view.textInputView))
+            else { return true }
+            let index = view.offset(from: view.beginningOfDocument, to: range.start)
+            guard index < view.attributedText.length else { return true }
+            return view.attributedText.attribute(.link, at: index, effectiveRange: nil) == nil
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool { true }
+
+        @objc func dismissKeyboard(_ recognizer: UITapGestureRecognizer) {
+            // Selection needs its responder for the edit menu, including "Copy message".
+            guard let view = recognizer.view as? UITextView, view.selectedRange.length == 0 else {
+                return
+            }
+            view.window?.endEditing(true)
+        }
+
+        func textView(
+            _ textView: UITextView, primaryActionFor textItem: UITextItem,
+            defaultAction: UIAction
+        ) -> UIAction? {
+            guard case let .link(url) = textItem.content, url.scheme == StoreLinks.scheme else {
+                return defaultAction
+            }
+            return UIAction { [weak self] _ in
+                self?.openURL?(url)
+            }
         }
 
         /// The system's actions for the selection, and "Copy message" for the whole of it.
