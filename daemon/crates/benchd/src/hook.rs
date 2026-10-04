@@ -145,15 +145,15 @@ impl Agent {
     }
 }
 
-/// Every codex benchd starts is an agent from the moment its session is: benchd created its
-/// thread (`spawn::codex_thread`), so the thread id is known before any hook reports, and benchd
-/// has just started its first turn on it, so it is busy. Its thread's typed events
 /// [`Agent::is_running`] on the two facts it reads, for a caller that copied them out from under
 /// the core lock before probing the process.
 pub fn running(pid: u32, started_ms: Option<u64>) -> bool {
     started_ms.is_some_and(|ms| bench_sessions::process::alive(pid, Some(ms)))
 }
 
+/// Every codex benchd starts is an agent from the moment its session is: benchd created its
+/// thread (`spawn::codex_thread`), so the thread id is known before any hook reports, and benchd
+/// has just started its first turn on it, so it is busy. Its thread's typed events
 /// ([`codex_notification`]) say what it does from there; its hooks only hand out mail.
 pub fn serve_codex(c: &mut Core, session: &bench_session::Session) {
     let (bench_session::AgentKind::Codex, Some(thread)) =
