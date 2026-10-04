@@ -47,45 +47,62 @@ struct ChoicesBar: View {
 
 /// The message field: multi-line, the keyboard up when the chat opens, its draft kept per chat.
 /// Send types it into the agent and presses Return (`screen/send`); one at a time, and a message
-/// benchd may have taken is cleared rather than offered twice.
+/// benchd may have taken is cleared rather than offered twice. Field and send button are one
+/// rounded control, the button at its bottom right as the field grows.
 struct Composer: View {
     @EnvironmentObject private var model: PocketModel
     @EnvironmentObject private var memory: ChatMemory
     let chat: String
     let target: String?
+    /// The chat's keyboard: the messages can take it away (`ChatPane`).
+    var typing: FocusState<Bool>.Binding
     @State private var draft = ""
     @State private var sending = false
     @State private var refused: String?
-    @FocusState private var typing: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let refused { Text(refused).font(Mono.small).foregroundStyle(Palette.asking) }
-            HStack(alignment: .bottom) {
+            HStack(alignment: .bottom, spacing: 6) {
                 TextField(
                     "", text: $draft, prompt: Text("message…").foregroundStyle(Palette.faint),
                     axis: .vertical
                 )
                 .lineLimit(1...6)
-                .focused($typing)
-                Button("↑", action: send)
-                    .foregroundStyle(sending || target == nil ? Palette.faint : Palette.finished)
-                    .disabled(sending || target == nil)
+                .focused(typing)
+                .font(Mono.body)
+                .foregroundStyle(Palette.text)
+                .padding(.vertical, 11)
+                Button(action: send) {
+                    Text("↑").font(Mono.send)
+                        .foregroundStyle(Palette.background)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(canSend ? Palette.finished : Palette.faint))
+                }
+                .disabled(!canSend)
+                .padding(.vertical, 4)
             }
-            .font(Mono.body)
-            .foregroundStyle(Palette.text)
+            .padding(.leading, 14)
+            .padding(.trailing, 4)
+            .background {
+                RoundedRectangle(cornerRadius: 19).fill(Palette.sheet).stroke(Palette.line)
+            }
+            // The whole control is the field: a tap on its padding brings the keyboard back too.
+            .contentShape(.rect(cornerRadius: 19))
+            .onTapGesture { typing.wrappedValue = true }
         }
-        .padding(.top, 10)
+        .padding(.top, 8)
         .padding(.bottom, 8)
-        .overlay(alignment: .top) { Palette.line.frame(height: 1) }
         .onAppear(perform: open)
         .onChange(of: draft) { memory.keep(draft, for: chat) }
     }
 
+    private var canSend: Bool { !sending && target != nil }
+
     private func open() {
         draft = memory.draft(chat)
         refused = nil
-        typing = true
+        typing.wrappedValue = true
     }
 
     private func send() {

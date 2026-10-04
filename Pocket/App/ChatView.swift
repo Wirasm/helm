@@ -91,6 +91,9 @@ struct ChatPane: View {
     @State private var log = ChatLog()
     @State private var prompt: PromptChoices?
     @State private var failure: String?
+    /// The keyboard: the field takes it, and the messages give it back (a tap, or a scroll that
+    /// drags it down).
+    @FocusState private var typing: Bool
 
     private var row: BenchSessionRow? {
         model.sessions.values.joined().first { $0.id == chat }
@@ -99,11 +102,14 @@ struct ChatPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let failure { Text(failure).font(Mono.small).foregroundStyle(Palette.asking) }
-            MessagesView(log: $log, chat: chat).simultaneousGesture(swiping)
+            MessagesView(log: $log, chat: chat)
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(TapGesture().onEnded { typing = false })
+                .simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
             }
-            Composer(chat: chat, target: row?.screen)
+            Composer(chat: chat, target: row?.screen, typing: $typing)
         }
         .task { await follow() }
     }
