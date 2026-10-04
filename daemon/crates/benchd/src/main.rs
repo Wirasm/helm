@@ -60,9 +60,9 @@ use bench_session::{Notice, Session};
 use bench_wire::{
     BrowserMode, DAEMON_IO_TIMEOUT, EVENTS_LOG_FORMAT, EVENTS_LOG_VERSION, Event,
     FILE_REQUEST_MAX_BYTES, KNOWN_VERBS, MAX_REQUEST_BYTES, MailListArgs, MailReadArgs,
-    MailSendArgs, Request, Response, SessionArgs, Status, SuiteName, Verb, browser_endpoint_path,
-    browser_wanted_path, check_socket_path, events_path, resolve_root, socket_path,
-    validate_handle,
+    MailSendArgs, OPERATOR_HANDLE, Request, Response, SessionArgs, Status, SuiteName, Verb,
+    browser_endpoint_path, browser_wanted_path, check_socket_path, events_path, resolve_root,
+    socket_path, validate_handle,
 };
 use bench_wire::{DOCUMENT_CHANGED, Frame, attach};
 use serde_json::{Value, json};
@@ -1326,6 +1326,17 @@ fn dispatch(
                     return (refused(format!("{role}: {why}")), AfterResponse::Done);
                 }
             }
+            let reader = {
+                let c = core.lock().unwrap();
+                let reader = mail_reader(&c, &parsed.to);
+                if reader.is_none() && !parsed.queue {
+                    return (
+                        refused(unread_by_anyone(&c, &parsed.to)),
+                        AfterResponse::Done,
+                    );
+                }
+                reader
+            };
             match send_mail(
                 core,
                 &parsed.from,
@@ -1333,7 +1344,10 @@ fn dispatch(
                 parsed.subject.as_deref(),
                 &parsed.body,
             ) {
-                Ok(sent) => (ok(sent), AfterResponse::Done),
+                Ok(mut sent) => {
+                    sent["reader"] = json!(reader);
+                    (ok(sent), AfterResponse::Done)
+                }
                 Err(why) => (errored(why), AfterResponse::Done),
             }
         }
@@ -1819,6 +1833,54 @@ fn respond_keep_open(mut stream: &UnixStream, response: &Response) {
 /// The inbox file is the delivery: the wake reactor reads inboxes, not this event, so mail sent
 /// here reaches an idle agent exactly as a `mail/send` does. Takes the core lock itself, twice,
 /// and writes the file off it.
+/// Who reads mail sent to `to` now: the operator, or the live agent that holds the handle (a
+/// benchd session's, or one its hook claimed). `None` when nobody does: a session that ended, a
+/// handle from before a restart, a name nobody took.
+fn mail_reader(c: &Core, to: &str) -> Option<String> {
+    let session = c.sessions.values().any(|s| s.handle == to && s.is_live());
+    let agent = c
+        .agents
+        .values()
+        .flatten()
+        .any(|a| a.handle == to && bench_sessions::process::alive(a.pid, None));
+    (to == OPERATOR_HANDLE || session || agent).then(|| to.to_string())
+}
+
+/// Why `mail/send` refuses `to`: nobody would read it, and, when benchd still knows the
+/// conversation that answered to it, the handle that conversation answers to now.
+fn unread_by_anyone(c: &Core, to: &str) -> String {
+    let now = mail_moved_to(c, to)
+        .map(|h| format!("; the agent that held it now answers as {h:?}"))
+        .unwrap_or_default();
+    format!(
+        "no live agent holds the handle {to:?}, so nobody would read this mail{now}. \
+         Pass --queue to hold it for whoever claims {to:?} later."
+    )
+}
+
+/// The live handle of a conversation that once answered to `to`: recorded under it (a hook's
+/// claim or a spawn), or run by a session of this daemon's that had it.
+fn mail_moved_to(c: &Core, to: &str) -> Option<String> {
+    let mut conversations: Vec<String> = c
+        .session_records
+        .hosted
+        .iter()
+        .filter(|h| h.handle() == Some(to))
+        .map(|h| h.id.clone())
+        .collect();
+    conversations.extend(
+        c.sessions
+            .values()
+            .filter(|s| s.handle == to)
+            .filter_map(|s| s.runtime_session.clone()),
+    );
+    c.sessions
+        .values()
+        .filter(|s| s.is_live() && s.handle != to)
+        .find(|s| hook::conversation(c, s).is_some_and(|id| conversations.contains(&id)))
+        .map(|s| s.handle.clone())
+}
+
 pub(crate) fn send_mail(
     core: &Arc<Mutex<Core>>,
     from: &str,

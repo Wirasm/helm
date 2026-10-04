@@ -1131,7 +1131,8 @@ fn a_session_row_says_where_to_mail_it_and_whether_a_send_will_wake_it() {
         serde_json::from_value(raw).unwrap()
     };
     let send = |to: &str| -> String {
-        let run = bench(h, &["mail", "send", "--to", to, "--body", "x"]);
+        // Held for a later owner too: rows here include sessions that have ended.
+        let run = bench(h, &["mail", "send", "--to", to, "--body", "x", "--queue"]);
         assert_eq!(run.code, 0, "stderr: {}", run.stderr);
         json_of(&run)["wake"].as_str().unwrap().to_string()
     };
@@ -1226,6 +1227,7 @@ fn mail_to_a_handle_nobody_hosts_waits_in_the_record() {
             "hello there",
             "--subject",
             "hi",
+            "--queue",
         ],
     );
     assert_eq!(send.code, 0, "stderr: {}", send.stderr);
@@ -1272,7 +1274,10 @@ fn mail_sent_before_a_restart_survives_mail_sent_after_it() {
     let home = TestHome::claim("restartmail");
     let h = &home.dir;
     let send = |body: &str| -> String {
-        let run = bench(h, &["mail", "send", "--to", "ghost", "--body", body]);
+        let run = bench(
+            h,
+            &["mail", "send", "--to", "ghost", "--body", body, "--queue"],
+        );
         assert_eq!(run.code, 0, "stderr: {}", run.stderr);
         json_of(&run)["id"].as_str().unwrap().to_string()
     };
@@ -1297,7 +1302,12 @@ fn mail_sent_before_a_restart_survives_mail_sent_after_it() {
     let n: u64 = second.trim_start_matches('m').parse().unwrap();
     let planted = inbox.join(format!("m{}.md", n + 1));
     fs::write(&planted, "planted").unwrap();
-    let run = bench(h, &["mail", "send", "--to", "ghost", "--body", "third"]);
+    let run = bench(
+        h,
+        &[
+            "mail", "send", "--to", "ghost", "--body", "third", "--queue",
+        ],
+    );
     assert_eq!(run.code, 4, "stdout: {} stderr: {}", run.stdout, run.stderr);
     assert!(
         run.stderr.contains("refusing to overwrite"),
@@ -1315,12 +1325,26 @@ fn mail_read_refuses_an_id_that_is_a_path_and_reads_nothing() {
     let home = TestHome::claim("readpath");
     let h = &home.dir;
     let _daemon = DaemonGuard::start(h, None);
-    let sent = bench(h, &["mail", "send", "--to", "other", "--body", "not yours"]);
+    let sent = bench(
+        h,
+        &[
+            "mail",
+            "send",
+            "--to",
+            "other",
+            "--body",
+            "not yours",
+            "--queue",
+        ],
+    );
     assert_eq!(sent.code, 0, "stderr: {}", sent.stderr);
     let id = json_of(&sent)["id"].as_str().unwrap().to_string();
     let other = h.join(".bench/mail/other/inbox").join(format!("{id}.md"));
     // `me` has read mail before, so its `read/` exists and `read/../../other/…` resolves.
-    let own = bench(h, &["mail", "send", "--to", "me", "--body", "mine"]);
+    let own = bench(
+        h,
+        &["mail", "send", "--to", "me", "--body", "mine", "--queue"],
+    );
     let own_id = json_of(&own)["id"].as_str().unwrap().to_string();
     assert_eq!(
         bench(h, &["mail", "read", &own_id, "--handle", "me"]).code,
@@ -13190,7 +13214,7 @@ fn mail_to_the_operator_shows_on_its_senders_session_until_read() {
     let other = bench(
         h,
         &[
-            "mail", "send", "--from", "reporter", "--to", "someone", "--body", "x",
+            "mail", "send", "--from", "reporter", "--to", "someone", "--body", "x", "--queue",
         ],
     );
     assert_eq!(other.code, 0);
@@ -13761,5 +13785,99 @@ fn a_spawned_session_does_not_inherit_bench_listen() {
     assert!(
         !env.lines().any(|l| l.starts_with("BENCH_LISTEN=")),
         "benchd's tcp address 127.0.0.1:{port} reached its child: {env}"
+    );
+}
+
+/// Mail to a handle no live agent holds does not look delivered (the 2026-10-03 incident: five
+/// messages to a resumed agent's old handle sat unread for ten hours behind an `ok`). The send
+/// is refused, naming the handle; `--queue` holds it for a later owner, and says nobody reads it
+/// yet. A live owner, and the operator, take mail as before.
+#[test]
+fn mail_to_a_handle_nobody_holds_is_refused_unless_queued() {
+    let home = TestHome::claim("mail-dead");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let send = |to: &str, extra: &[&str]| {
+        let mut args = vec!["mail", "send", "--from", "orch", "--to", to, "--body", "x"];
+        args.extend_from_slice(extra);
+        bench(h, &args)
+    };
+    let (sid, _) = terminal_process(h, "worker");
+    let live = send("worker", &[]);
+    assert_eq!(live.code, 0, "{}", live.stderr);
+    assert_eq!(json_of(&live)["reader"], "worker", "{}", live.stdout);
+    assert_eq!(send("operator", &[]).code, 0);
+
+    assert_eq!(bench(h, &["close", &sid]).code, 0);
+    let dead = send("worker", &[]);
+    assert_eq!(dead.code, 3, "{}", dead.stdout);
+    assert!(dead.stderr.contains("worker"), "{}", dead.stderr);
+    let never = send("nobody", &[]);
+    assert_eq!(never.code, 3, "{}", never.stderr);
+    let unread = |handle: &str| {
+        json_of(&bench(h, &["mail", "list", "--handle", handle]))["mail"]
+            .as_array()
+            .map_or(0, |m| m.iter().filter(|m| m["unread"] == true).count())
+    };
+    assert_eq!(
+        unread("worker"),
+        1,
+        "a refused send leaves nothing in the inbox"
+    );
+
+    let held = send("nobody", &["--queue"]);
+    assert_eq!(held.code, 0, "{}", held.stderr);
+    assert_eq!(
+        json_of(&held)["reader"],
+        serde_json::Value::Null,
+        "{}",
+        held.stdout
+    );
+    assert_eq!(unread("nobody"), 1);
+}
+
+/// The incident's shape: a conversation resumed under another handle. Mail to the old one is
+/// refused and the reason names where that agent answers now.
+#[test]
+fn mail_to_a_resumed_agents_old_handle_names_its_new_one() {
+    let home = TestHome::claim("mail-moved");
+    let h = &home.dir;
+    let _daemon = scripted_pi_daemon(h, "#!/bin/sh\nexec sleep 60\n");
+    let ws = workspace(h).display().to_string();
+    let first = json_of(&bench(
+        h,
+        &["spawn", "--agent", "pi", "--cwd", &ws, "--name", "s429"],
+    ));
+    let conv = first["runtime_session"].as_str().unwrap().to_string();
+    assert_eq!(
+        bench(h, &["close", first["session"].as_str().unwrap()]).code,
+        0
+    );
+    wait_until("the first session is gone", Duration::from_secs(10), || {
+        let list = json_of(&bench(h, &["sessions"]));
+        !list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"] == first["session"] && s["live"] == true)
+    });
+    let again = bench(
+        h,
+        &[
+            "spawn", "--agent", "pi", "--cwd", &ws, "--name", "pocket", "--resume", &conv,
+        ],
+    );
+    assert_eq!(again.code, 0, "{}", again.stderr);
+    let sent = bench(
+        h,
+        &[
+            "mail", "send", "--from", "orch", "--to", "s429", "--body", "x",
+        ],
+    );
+    assert_eq!(sent.code, 3, "{}", sent.stdout);
+    assert!(
+        sent.stderr.contains("now answers as \"pocket\""),
+        "{}",
+        sent.stderr
     );
 }

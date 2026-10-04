@@ -173,6 +173,7 @@ fn run() -> i32 {
     let mut count: Option<String> = None;
     let mut follow = false;
     let mut all = false;
+    let mut queue = false;
     let mut json_out = false;
     let mut in_pane = false;
     let mut asked = false;
@@ -197,6 +198,7 @@ fn run() -> i32 {
             "--follow" => follow = true,
             "--asked" => asked = true,
             "--all" => all = true,
+            "--queue" => queue = true,
             "--to" | "--from" | "--subject" | "--body" | "--body-file" | "--handle"
             | "--workspace" | "--harness" | "--pane" | "--surface" => {
                 let key = arg.trim_start_matches("--").replace('-', "_");
@@ -365,6 +367,7 @@ fn run() -> i32 {
                 from: flag("from").unwrap_or_else(own_handle),
                 subject: flag("subject"),
                 body,
+                queue,
             })
         }
         "sessions/all" => {
