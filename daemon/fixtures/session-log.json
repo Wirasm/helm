@@ -11,7 +11,7 @@
   "reply": {
     "harness": "claude",
     "id": "c-7e2d",
-    "total": 6,
+    "total": 8,
     "entries": [
       {
         "index": 1,
@@ -45,6 +45,18 @@
         "kind": "user",
         "text": "You have mail from lead: /m/1.md",
         "from": "bench"
+      },
+      {
+        "index": 6,
+        "at_ms": 1791028920000,
+        "kind": "compacted",
+        "text": "manual"
+      },
+      {
+        "index": 7,
+        "at_ms": 1791028921000,
+        "kind": "result",
+        "text": "Compacted (ctrl+o to see full summary)"
       }
     ],
     "unreadable": 0

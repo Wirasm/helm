@@ -79,7 +79,9 @@ $BENCH log "$SESSION" -n 20
 
 `$SESSION` is a row's `id`. `bench log` prints the conversation's tail, oldest first: `user`
 for a prompt, `agent` for a text reply, `tool` for a tool call (its name and a short
-argument), and `error` for a failed tool call or an API error. A message another session sent
+argument), `error` for a failed tool call or an API error, `result` for what a slash command
+printed (the command itself is the `user` line, as typed), and `compacted` where the conversation
+was compacted. A message another session sent
 is a `user` entry read `from <sender>: <message>` (in JSON, `from` and the message as `text`).
 Tool results and thinking are left out. Times are UTC. In this text form a long entry is cut at 12 lines.
 
