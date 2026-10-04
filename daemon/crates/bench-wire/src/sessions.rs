@@ -244,6 +244,11 @@ pub enum EntryKind {
     Tool,
     /// A failed tool call (`tool` names it) or an error the harness recorded.
     Error,
+    /// What a slash command the operator ran printed (`text`, empty when it printed nothing).
+    Result,
+    /// The conversation was compacted here: everything before it is a summary to the agent.
+    /// `text` is how it was started (`manual`, `auto`) when the harness says.
+    Compacted,
 }
 
 /// One entry of a transcript (`bench_sessions::transcript::Entry`) and its place in it.

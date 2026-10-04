@@ -1355,7 +1355,9 @@ mod tests {
                 EntryKind::Tool,
                 EntryKind::Error,
                 EntryKind::Agent,
-                EntryKind::User
+                EntryKind::User,
+                EntryKind::Compacted,
+                EntryKind::Result
             ],
             "every kind crosses the wire, so a rename on one side fails the other"
         );

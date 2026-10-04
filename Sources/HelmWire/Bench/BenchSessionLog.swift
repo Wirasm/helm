@@ -67,6 +67,10 @@ package struct BenchLogEntry: Decodable, Equatable, Sendable, Identifiable {
         case tool
         /// A failed tool call or an error the harness recorded.
         case error
+        /// What a slash command the operator ran printed; empty when it printed nothing.
+        case result
+        /// The conversation was compacted here; `text` is how it was started, when known.
+        case compacted
     }
 
     package var index: Int

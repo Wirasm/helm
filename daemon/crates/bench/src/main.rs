@@ -587,6 +587,8 @@ fn kind_name(kind: bench_sessions::transcript::Kind) -> &'static str {
         Kind::Agent => "agent",
         Kind::Tool => "tool",
         Kind::Error => "error",
+        Kind::Result => "result",
+        Kind::Compacted => "compacted",
     }
 }
 

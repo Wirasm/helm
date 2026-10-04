@@ -441,10 +441,92 @@ fn attribute<'a>(head: &'a str, name: &str) -> Option<&'a str> {
     Some(&head[start..start + len])
 }
 
+/// A slash command the operator ran, as Claude Code records it in a prompt or a `local_command`
+/// system record: the command and its arguments, tagged (`<command-name>`, `<command-args>`),
+/// read as the prompt he typed; what it printed (`<local-command-stdout>`) as a result, and what
+/// it printed to stderr as an error. None for any other text. Keyed on the tag that opens the
+/// text, so a prompt that only mentions one is a prompt.
+fn local_command(stamp: &Stamp, text: &str) -> Option<Vec<Entry>> {
+    let text = text.trim_start();
+    if text.starts_with("<command-name>") || text.starts_with("<command-message>") {
+        let name = tag(text, "command-name")?.trim();
+        let args = tag(text, "command-args").unwrap_or("").trim();
+        let typed = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name} {args}")
+        };
+        return Some(vec![stamp.entry(Kind::User, None, typed)]);
+    }
+    if text.starts_with("<local-command-stdout>") {
+        let printed = without_escapes(tag(text, "local-command-stdout")?);
+        return Some(vec![stamp.entry(
+            Kind::Result,
+            None,
+            printed.trim().to_string(),
+        )]);
+    }
+    if text.starts_with("<local-command-stderr>") {
+        let printed = without_escapes(tag(text, "local-command-stderr")?);
+        return Some(vec![stamp.entry(
+            Kind::Error,
+            None,
+            one_line(&printed, ERROR_CHARS),
+        )]);
+    }
+    None
+}
+
+/// What `<name>…</name>` holds in `text`.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let start = text.find(&open)? + open.len();
+    let len = text[start..].find(&format!("</{name}>"))?;
+    Some(&text[start..start + len])
+}
+
+/// `text` without terminal escapes (`ESC [`, parameters, then a final byte in `@`..=`~`), which a
+/// command prints for its colours.
+fn without_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// One Claude Code transcript line. `tools` maps tool-use ids to names, so an error result
 /// can say which call failed.
 fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Entry>, String> {
     let kind = record["type"].as_str().ok_or("no \"type\"")?;
+    if kind == "system" {
+        return match record["subtype"].as_str() {
+            Some("compact_boundary") => {
+                let trigger = record["compactMetadata"]["trigger"].as_str().unwrap_or("");
+                Ok(vec![Stamp::of(record)?.entry(
+                    Kind::Compacted,
+                    None,
+                    trigger.into(),
+                )])
+            }
+            Some("local_command") => {
+                let content = record["content"].as_str().unwrap_or("");
+                Ok(local_command(&Stamp::of(record)?, content).unwrap_or_default())
+            }
+            // Hook summaries, API retries and the like: not the conversation.
+            _ => Ok(Vec::new()),
+        };
+    }
     if kind != "user" && kind != "assistant" {
         return Ok(Vec::new());
     }
@@ -462,6 +544,10 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
             let mut entry = stamp.entry(Kind::User, None, message);
             entry.from = Some(from);
             return Ok(vec![entry]);
+        }
+        // A slash command he ran, and what it printed.
+        if let Some(entries) = local_command(&stamp, &plain_text(content)) {
+            return Ok(entries);
         }
         // Injected context (a skill body, a command caveat) and the summary a compaction
         // writes are not prompts.
@@ -527,8 +613,16 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
 
 /// One pi session line after the header.
 fn pi_record(record: &Value) -> Result<Vec<Entry>, String> {
-    if record["type"].as_str().ok_or("no \"type\"")? != "message" {
-        return Ok(Vec::new());
+    match record["type"].as_str().ok_or("no \"type\"")? {
+        "message" => {}
+        "compaction" => {
+            return Ok(vec![Stamp::of(record)?.entry(
+                Kind::Compacted,
+                None,
+                String::new(),
+            )]);
+        }
+        _ => return Ok(Vec::new()),
     }
     let stamp = Stamp::of(record)?;
     let message = &record["message"];
@@ -612,6 +706,13 @@ fn codex_record(record: &Value) -> Result<Vec<Entry>, String> {
         "event_msg" => {}
         "response_item" if payload["type"] == "agent_message" => {
             return codex_agent_message(&Stamp::of(record)?, payload);
+        }
+        "compacted" => {
+            return Ok(vec![Stamp::of(record)?.entry(
+                Kind::Compacted,
+                None,
+                String::new(),
+            )]);
         }
         _ => return Ok(Vec::new()),
     }
@@ -988,6 +1089,80 @@ mod tests {
 
     fn pi_header(id: &str) -> Value {
         json!({"type": "session", "version": 3, "id": id, "timestamp": AT, "cwd": "/r"})
+    }
+
+    /// A slash command is the prompt he typed, and what it printed is a result line, as Claude
+    /// Code writes both: tagged prompts or `local_command` system records. A compaction is a
+    /// divider; any other system record is not the conversation.
+    #[test]
+    fn a_slash_command_reads_as_its_prompt_and_its_result_and_a_compaction_as_a_divider() {
+        let system = |subtype: &str, content: &str| json!({"type": "system", "subtype": subtype, "timestamp": AT, "content": content});
+        let t = read_claude(&[
+            json!({"type": "system", "subtype": "compact_boundary", "timestamp": AT,
+                "content": "Conversation compacted", "compactMetadata": {"trigger": "manual"}}),
+            user(json!(
+                "<command-name>/compact</command-name>\n            <command-message>compact\
+                 </command-message>\n            <command-args>remember the plan</command-args>"
+            )),
+            user(json!(
+                "<local-command-stdout>\u{1b}[2mCompacted (ctrl+o to see full summary)\u{1b}[22m\
+                 </local-command-stdout>"
+            )),
+            system(
+                "local_command",
+                "<command-name>/remote-control</command-name>\n<command-message>remote-control\
+                 </command-message>\n<command-args></command-args>",
+            ),
+            system(
+                "local_command",
+                "<local-command-stdout></local-command-stdout>",
+            ),
+            user(json!(
+                "<local-command-stderr>\u{1b}[3~no such plugin</local-command-stderr>"
+            )),
+            system("stop_hook_summary", "hooks ran"),
+            user(json!("what does <command-name> do?")),
+        ]);
+        assert_eq!(
+            shape(&t),
+            [
+                (Kind::Compacted, None, "manual"),
+                (Kind::User, None, "/compact remember the plan"),
+                (Kind::Result, None, "Compacted (ctrl+o to see full summary)"),
+                (Kind::User, None, "/remote-control"),
+                (Kind::Result, None, ""),
+                (Kind::Error, None, "no such plugin"),
+                (Kind::User, None, "what does <command-name> do?"),
+            ]
+        );
+        assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
+    }
+
+    /// Codex's `compacted` record and pi's `compaction` entry are the same divider.
+    #[test]
+    fn a_codex_or_pi_compaction_is_a_divider() {
+        let home = Home::new();
+        home.write(
+            ".pi/agent/sessions/--r--/2026_p1.jsonl",
+            &[
+                pi_header("p1"),
+                json!({"type": "compaction", "id": "c", "timestamp": AT, "summary": "## Goal"}),
+            ],
+        );
+        let pi = read(&locate(&home.0, "p1").unwrap()).unwrap();
+        assert_eq!(shape(&pi), [(Kind::Compacted, None, "")]);
+        let id = "01a0f663-47f0-7d53-b41a-68f3a1f656ab";
+        home.write(
+            &format!(".codex/sessions/2026/10/01/rollout-2026-10-01T10-34-56-{id}.jsonl"),
+            &[
+                json!({"timestamp": AT, "type": "session_meta",
+                    "payload": {"id": id, "cli_version": "0.157.0", "cwd": "/r"}}),
+                json!({"timestamp": AT, "type": "compacted",
+                    "payload": {"message": "", "replacement_history": []}}),
+            ],
+        );
+        let codex = read(&locate(&home.0, id).unwrap()).unwrap();
+        assert_eq!(shape(&codex), [(Kind::Compacted, None, "")]);
     }
 
     #[test]
