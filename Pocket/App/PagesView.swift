@@ -70,7 +70,7 @@ struct PageRow: View {
     }
 }
 
-/// One page, rendered from its bytes as helm renders a canvas, and the operator's reply under it.
+/// One document: markdown as in chat, HTML as helm renders a canvas, with its reply under it.
 /// A reply goes into the page's live file, and benchd mails it to the agent that opened the page;
 /// a page no agent opened has nobody to mail, so it says so instead of offering to.
 struct PageView: View {
@@ -89,18 +89,22 @@ struct PageView: View {
                 Text(page.title).foregroundStyle(Palette.text).lineLimit(1).truncationMode(.head)
             }
             .font(Mono.body)
-            if let files = model.files {
+            if page.path.lowercased().hasSuffix(".md") {
+                MarkdownPageView(page: page)
+            } else if let files = model.files {
                 // A new connection is a new page: the old benchd's files are not this one's.
-                CanvasWebView(path: page.path, files: files, failed: $failed)
+                CanvasWebView(path: page.path, store: page.store, files: files, failed: $failed)
                     .id(model.endpoint?.description)
             }
             if let failed { Text(failed).font(Mono.small).foregroundStyle(Palette.asking) }
             if let said { Text(said).font(Mono.small).foregroundStyle(Palette.dim) }
-            if model.isOpened(page) {
-                replyBox
-            } else {
-                Text("no agent opened this page on the bench: a reply would reach nobody")
-                    .font(Mono.small).foregroundStyle(Palette.faint)
+            if !page.path.lowercased().hasSuffix(".md") {
+                if model.isOpened(page) {
+                    replyBox
+                } else {
+                    Text("no agent opened this page on the bench: a reply would reach nobody")
+                        .font(Mono.small).foregroundStyle(Palette.faint)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -148,6 +152,7 @@ struct PageView: View {
 /// page's script write its live file, as helm's HTML canvas does.
 struct CanvasWebView: UIViewRepresentable {
     let path: String
+    let store: String
     let files: any CanvasFiles
     /// Why the page did not load, for the view to say: a page benchd could not read is a failed
     /// navigation and an empty web view otherwise.
@@ -178,7 +183,10 @@ struct CanvasWebView: UIViewRepresentable {
         let standardized = StandardizedPath(path)
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(
-            CanvasSchemeHandler(artifact: artifact, files: files) { files.document(artifact) },
+            CanvasSchemeHandler(artifact: artifact, files: files) {
+                if case let .bytes(data) = files.read(path, within: store) { return data }
+                return nil
+            },
             forURLScheme: CanvasAddress.scheme)
         if let live = BenchLiveFile.path(for: path) {
             let channel = CanvasDataChannel(host: CanvasAddress.host(for: standardized)) {

@@ -91,6 +91,8 @@ struct ChatPane: View {
     @State private var log = ChatLog()
     @State private var prompt: PromptChoices?
     @State private var failure: String?
+    @State private var linkFailure: String?
+    @State private var page: PocketPage?
     /// The keyboard: the field takes it, and the messages give it back (a tap, or a scroll that
     /// drags it down).
     @FocusState private var typing: Bool
@@ -102,9 +104,11 @@ struct ChatPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let failure { Text(failure).font(Mono.small).foregroundStyle(Palette.asking) }
+            if let linkFailure {
+                Text(linkFailure).font(Mono.small).foregroundStyle(Palette.asking)
+            }
             MessagesView(log: $log, chat: chat)
                 .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(TapGesture().onEnded { typing = false })
                 .simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
@@ -112,6 +116,21 @@ struct ChatPane: View {
             Composer(chat: chat, target: row?.screen, typing: $typing)
         }
         .task { await follow() }
+        .task(id: model.state) {
+            guard model.state == .connected else { return }
+            linkFailure = await model.loadStoreLinks()?.description
+        }
+        .environment(
+            \.openURL,
+            OpenURLAction { url in
+                guard url.scheme == StoreLinks.scheme else { return .systemAction }
+                guard let document = model.storeLinks.page(at: url) else { return .discarded }
+                typing = false
+                page = document
+                return .handled
+            }
+        )
+        .navigationDestination(item: $page) { PageView(page: $0) }
     }
 
     /// Left for the next chat of this workspace, right for the previous. Not from the left edge,
@@ -251,6 +270,7 @@ struct MessagesView: View {
 /// command printed as one faint line under it, and a compaction as a divider. Each can be
 /// selected in part and copied, or copied whole (`SelectableText`).
 struct MessageRow: View {
+    @EnvironmentObject private var model: PocketModel
     let entry: BenchLogEntry
 
     var body: some View {
@@ -277,7 +297,8 @@ struct MessageRow: View {
         case .agent:
             VStack(alignment: .leading, spacing: 2) {
                 SelectableText(
-                    text: entry.text, markdown: true, font: Mono.bodyUI, color: Palette.text)
+                    text: entry.text, markdown: true, font: Mono.bodyUI, color: Palette.text,
+                    links: model.storeLinks)
                 stamp
             }
             .frame(maxWidth: .infinity, alignment: .leading)

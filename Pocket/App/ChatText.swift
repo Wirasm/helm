@@ -6,13 +6,24 @@ import UIKit
 /// selection runs across blocks. Everything is in the one monospaced face, which is what lines a
 /// table's columns up.
 enum ChatText {
-    static func markdown(_ text: String, font: UIFont, color: UIColor) -> NSAttributedString {
+    static func markdown(
+        _ text: String, font: UIFont, color: UIColor, links: StoreLinks = StoreLinks()
+    ) -> NSAttributedString {
         let out = NSMutableAttributedString()
         for (at, block) in ChatMarkdown.blocks(text).enumerated() {
             if at > 0 { out.append(NSAttributedString(string: "\n")) }
-            out.append(draw(block, font: font, color: color))
+            out.append(draw(linked(block, with: links), font: font, color: color))
         }
         return out
+    }
+
+    private static func linked(_ block: MarkdownBlock, with links: StoreLinks) -> MarkdownBlock {
+        var block = block
+        block.text = links.linking(block.text)
+        if case let .table(rows, header) = block.kind {
+            block.kind = .table(rows: rows.map { $0.map(links.linking) }, header: header)
+        }
+        return block
     }
 
     private static func draw(
@@ -39,12 +50,7 @@ enum ChatText {
             return paragraph(line, first: indent, rest: text)
         case .code:
             return paragraph(
-                NSAttributedString(
-                    string: String(block.text.characters),
-                    attributes: [
-                        .font: font, .foregroundColor: color,
-                        .backgroundColor: UIColor(Palette.sheet),
-                    ]))
+                code(block.text, font: font, color: color))
         case .quote:
             // The bar on every line of it; a wrapped line starts under the text.
             let bar = NSAttributedString(
@@ -65,6 +71,16 @@ enum ChatText {
         }
     }
 
+    private static func code(
+        _ text: AttributedString, font: UIFont, color: UIColor
+    ) -> NSAttributedString {
+        let out = inline(text, font: font, color: color)
+        out.addAttribute(
+            .backgroundColor, value: UIColor(Palette.sheet),
+            range: NSRange(location: 0, length: out.length))
+        return out
+    }
+
     /// Columns padded to their widest cell, the header bold and ruled off under it.
     private static func table(
         _ rows: [[AttributedString]], header: Bool, font: UIFont, color: UIColor
@@ -76,19 +92,20 @@ enum ChatText {
         }
         let bold = bolder(font)
         let out = NSMutableAttributedString()
-        for (index, row) in cells.enumerated() {
+        for index in cells.indices {
             if index > 0 { out.append(NSAttributedString(string: "\n")) }
-            let line = (0..<columns).map { column -> String in
-                let cell = row.indices.contains(column) ? row[column] : ""
-                return cell.padding(toLength: widths[column], withPad: " ", startingAt: 0)
-            }
-            .joined(separator: "  ")
             let isHeader = header && index == 0
-            out.append(
-                NSAttributedString(
-                    string: line,
-                    attributes: [.font: isHeader ? bold : font, .foregroundColor: color]
-                ))
+            for column in 0..<columns {
+                let cell =
+                    rows[index].indices.contains(column) ? rows[index][column] : AttributedString()
+                out.append(inline(cell, font: isHeader ? bold : font, color: color))
+                let padding =
+                    widths[column] - cell.characters.count + (column < columns - 1 ? 2 : 0)
+                out.append(
+                    NSAttributedString(
+                        string: String(repeating: " ", count: padding),
+                        attributes: [.font: font, .foregroundColor: color]))
+            }
             if isHeader {
                 let rule = widths.map { String(repeating: "─", count: $0) }.joined(separator: "  ")
                 out.append(

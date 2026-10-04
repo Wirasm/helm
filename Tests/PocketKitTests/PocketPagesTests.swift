@@ -18,8 +18,8 @@ final class PocketPagesTests: XCTestCase {
         let helm = [file("plans/a.plan.html", 30), file("plans/a.plan.md", 31), file("b.html", 35)]
         let prp = [file("reviews/pr-1-review.html", 40)]
         let sections = PocketPages.sections([
-            ("/w/helm", helm), ("/w/prp", prp), ("/w/helm/.worktrees/x", helm),
-            ("/w/empty", [file("notes.md", 50)]),
+            ("/w/helm", "/s", helm), ("/w/prp", "/s", prp), ("/w/helm/.worktrees/x", "/s", helm),
+            ("/w/empty", "/s", [file("notes.md", 50)]),
         ])
         XCTAssertEqual(sections.map(\.path), ["/w/prp", "/w/helm"])
         XCTAssertEqual(sections.map(\.name), ["prp", "helm"])
@@ -31,8 +31,8 @@ final class PocketPagesTests: XCTestCase {
     /// one.
     func testASearchKeepsTheMatchingPagesAndTheirSections() {
         let sections = PocketPages.sections([
-            ("/w/helm", [file("plans/a.plan.html", 30), file("reviews/pr-2.html", 20)]),
-            ("/w/prp", [file("plans/c.plan.html", 10)]),
+            ("/w/helm", "/s", [file("plans/a.plan.html", 30), file("reviews/pr-2.html", 20)]),
+            ("/w/prp", "/s", [file("plans/c.plan.html", 10)]),
         ])
         XCTAssertEqual(sections.compactMap { $0.matching("") }, sections)
         let found = sections.compactMap { $0.matching(" REVIEW ") }
