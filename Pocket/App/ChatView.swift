@@ -129,7 +129,7 @@ struct ChatPane: View {
     /// The last page, then every second and a half whatever came after it; and, while the agent
     /// waits on a prompt, its choices off the screen. Having the chat open is reading it.
     private func follow() async {
-        await load(.last)
+        await load(.last, limit: ChatLog.page)
         if let row, Attention(row) == .finished {
             _ = await model.markSeen(harness: row.harness, session: row.id)
         }
@@ -144,8 +144,8 @@ struct ChatPane: View {
 
     /// Reads `page` into the chat; true when the transcript holds more after it.
     @discardableResult
-    private func load(_ page: BenchSessionLogRequest.Page) async -> Bool {
-        switch await model.log(chat, page: page) {
+    private func load(_ page: BenchSessionLogRequest.Page, limit: Int = 50) async -> Bool {
+        switch await model.log(chat, page: page, limit: limit) {
         case let .success(next):
             failure = nil
             log.merge(next)
@@ -166,8 +166,13 @@ struct ChatPane: View {
     }
 }
 
-/// The conversation, newest at the bottom and kept there as entries arrive; older pages load from
-/// the top.
+/// The conversation, newest at the bottom and kept there as entries arrive; older pages load as
+/// he scrolls up to the top, and what he was reading stays where it was.
+///
+/// A plain `VStack`, not a lazy one: on a long transcript `LazyVStack` re-placed its rows forever
+/// at the bottom-anchored end (100% CPU, the chat frozen or blank, measured on a real 3,000-entry
+/// transcript), because tall rows never matched the heights it estimated. Paging keeps the stack
+/// to what he has scrolled through, so laying every row out is cheap.
 struct MessagesView: View {
     @EnvironmentObject private var model: PocketModel
     @Binding var log: ChatLog
@@ -175,20 +180,32 @@ struct MessagesView: View {
     /// The entry at the bottom of the view: new entries scroll in only while it is the newest,
     /// so reading back is not pulled down by the agent's next line.
     @State private var shown: Int?
+    @State private var loadingOlder = false
 
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
                     if log.hasOlder {
-                        Button("earlier") { Task { await older(reader) } }
-                            .font(Mono.small).foregroundStyle(Palette.faint)
+                        // Reaching the top asks for the page above. A plain stack lays out every
+                        // row at once, so `onAppear` would fire at open; the row's place in the
+                        // scroll view's own frame says whether he can see it.
+                        Text(loadingOlder ? "…" : "").font(Mono.small).foregroundStyle(
+                            Palette.faint
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 1)
+                        .onGeometryChange(for: Bool.self) {
+                            $0.frame(in: .named(Self.space)).maxY >= 0
+                        } action: { visible in
+                            if visible { Task { await older(reader) } }
+                        }
                     }
                     ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
                 }
                 .scrollTargetLayout()
                 .padding(.vertical, 6)
             }
+            .coordinateSpace(.named(Self.space))
             .defaultScrollAnchor(.bottom)
             .scrollPosition(id: $shown, anchor: .bottom)
             .onChange(of: log.newest) { old, newest in
@@ -198,9 +215,15 @@ struct MessagesView: View {
         }
     }
 
+    private static let space = "messages"
+
     private func older(_ reader: ScrollViewProxy) async {
-        guard let oldest = log.oldest,
-            case let .success(page) = await model.log(chat, page: .before(oldest))
+        guard !loadingOlder, let oldest = log.oldest else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        guard
+            case let .success(page) = await model.log(
+                chat, page: .before(oldest), limit: ChatLog.page)
         else { return }
         log.merge(page)
         // Where he was reading stays where it was: the older page goes above it.
