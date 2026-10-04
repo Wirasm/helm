@@ -256,6 +256,9 @@ pub struct SessionLogEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     pub text: String,
+    /// A prompt another session sent: the sender its envelope names. `text` is the message alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// A file a reader could not read as the shape it knows. The row it would have produced is

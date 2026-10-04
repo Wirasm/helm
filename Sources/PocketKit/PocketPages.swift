@@ -13,19 +13,47 @@ package struct PocketPage: Equatable, Sendable, Identifiable {
     package var id: String { path }
 }
 
+/// One workspace on the pages tab: the `.html` pages of its prp store, last edited first.
+package struct PocketPageSection: Equatable, Sendable, Identifiable {
+    /// The workspace's folder.
+    package var path: String
+    package var pages: [PocketPage]
+
+    package var id: String { path }
+    package var name: String { URL(fileURLWithPath: path).lastPathComponent }
+
+    /// Only the pages whose title has `query` (any case); nil when none does. An empty query
+    /// keeps them all.
+    package func matching(_ query: String) -> PocketPageSection? {
+        let words = query.trimmingCharacters(in: .whitespaces)
+        guard !words.isEmpty else { return self }
+        let kept = pages.filter { $0.title.localizedCaseInsensitiveContains(words) }
+        return kept.isEmpty ? nil : PocketPageSection(path: path, pages: kept)
+    }
+}
+
 package enum PocketPages {
-    /// Every store's `.html` files once, newest first. Each listing is one store's, as
-    /// `prp/artifacts` answers it.
-    package static func pages(files listings: [[BenchPrpArtifact]]) -> [PocketPage] {
+    /// Each workspace's store as a section, the one edited last first, its pages newest first.
+    /// `listings` is each workspace with what `prp/artifacts` answered for its store, in the
+    /// document's order; a store two workspaces share is listed under the first. A page is in one
+    /// section, and a workspace with no page has none.
+    package static func sections(
+        _ listings: [(workspace: String, files: [BenchPrpArtifact])]
+    ) -> [PocketPageSection] {
         var seen = Set<String>()
-        return listings.joined()
-            .filter { $0.path.lowercased().hasSuffix(".html") && seen.insert($0.path).inserted }
-            .sorted { $0.modifiedMs > $1.modifiedMs }
-            .map {
-                PocketPage(
-                    path: $0.path, title: String($0.relative.dropLast(".html".count)),
-                    modifiedMs: $0.modifiedMs)
-            }
+        return listings.compactMap { workspace, files in
+            let pages =
+                files
+                .filter { $0.path.lowercased().hasSuffix(".html") && seen.insert($0.path).inserted }
+                .sorted { $0.modifiedMs > $1.modifiedMs }
+                .map {
+                    PocketPage(
+                        path: $0.path, title: String($0.relative.dropLast(".html".count)),
+                        modifiedMs: $0.modifiedMs)
+                }
+            return pages.isEmpty ? nil : PocketPageSection(path: workspace, pages: pages)
+        }
+        .sorted { $0.pages[0].modifiedMs > $1.pages[0].modifiedMs }
     }
 }
 

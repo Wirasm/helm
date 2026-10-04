@@ -100,15 +100,17 @@ final class PocketChatTests: XCTestCase {
         XCTAssertEqual(log.entries.map(\.index), Array(0...4))
     }
 
-    /// A chat's preview is its last message, his or the agent's, never a tool line; it is unread
-    /// while its index is past the last entry he had on screen.
+    /// A chat's preview is its last message, his or the agent's, never a tool line or a message
+    /// another session sent; it is unread while its index is past the last entry he had on screen.
     func testThePreviewIsTheLastMessageAndUnreadIsAReplyPastWhatHeRead() throws {
         let log = BenchSessionLog(
-            total: 3,
+            total: 4,
             entries: [
                 BenchLogEntry(index: 0, atMs: 1, kind: .user, text: "go"),
                 BenchLogEntry(index: 1, atMs: 2, kind: .agent, text: "Done.\nDetails follow."),
                 BenchLogEntry(index: 2, atMs: 3, kind: .tool, tool: "Bash", text: "ls"),
+                BenchLogEntry(
+                    index: 3, atMs: 4, kind: .user, text: "You have mail", from: "bench"),
             ])
         let preview = try XCTUnwrap(ChatPreview(log))
         XCTAssertEqual(preview.text, "Done.")

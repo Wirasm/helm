@@ -42,6 +42,10 @@ pub struct Entry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     pub text: String,
+    /// A prompt another session sent (`peer`): the sender its envelope names. `text` is then the
+    /// message alone, out of its envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// A line the reader skipped because it did not know its shape. `line` is 1-based.
@@ -378,8 +382,63 @@ impl Stamp {
             kind,
             tool,
             text,
+            from: None,
         }
     }
+}
+
+/// A prompt another Claude session sent, as its envelope says: the sender and the message out of
+/// the envelope; nil for any other prompt. Claude Code wrote two envelopes. Through 2.1.288 a
+/// teammate's message is a plain prompt holding one or more `<teammate-message teammate_id=…>`
+/// tags, the first opening the line after the prompt's header. From 2.1.289 a peer's message is `isMeta` with `origin.kind: "peer"`: `origin.name` and
+/// `origin.body` when another session sent it directly, only `origin.from` when a hook delivered
+/// it (bench mail), whose message is then the lines after the prompt's header up to the first
+/// blank one, before Claude Code's own note.
+fn peer(record: &Value, text: &str) -> Option<(String, String)> {
+    let origin = &record["origin"];
+    if origin["kind"] == "peer" {
+        let from = origin["name"].as_str().or(origin["from"].as_str())?;
+        let message = match origin["body"].as_str() {
+            Some(body) => body.to_string(),
+            None => text
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+        return Some((from.to_string(), message));
+    }
+    const OPEN: &str = "<teammate-message";
+    const CLOSE: &str = "</teammate-message>";
+    // The envelope opens the line after the header; a prompt that only mentions a tag is not one.
+    if !text.lines().nth(1).is_some_and(|l| l.starts_with(OPEN)) {
+        return None;
+    }
+    let (mut senders, mut bodies) = (Vec::<String>::new(), Vec::<&str>::new());
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let tag = &rest[at..];
+        let head_end = tag.find('>')?;
+        let head = &tag[..head_end];
+        // The body runs from the head's end to the end tag after it, or to the end of the text.
+        let body = &tag[head_end + 1..];
+        let body_end = body.find(CLOSE).unwrap_or(body.len());
+        let sender = attribute(head, "teammate_id").unwrap_or("teammate");
+        if !senders.iter().any(|s| s == sender) {
+            senders.push(sender.to_string());
+        }
+        bodies.push(body[..body_end].trim());
+        rest = &body[(body_end + CLOSE.len()).min(body.len())..];
+    }
+    (!senders.is_empty()).then(|| (senders.join(", "), bodies.join("\n\n")))
+}
+
+/// `name="value"` out of a tag's head.
+fn attribute<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    let start = head.find(&format!(" {name}=\""))? + name.len() + 3;
+    let len = head[start..].find('"')?;
+    Some(&head[start..start + len])
 }
 
 /// One Claude Code transcript line. `tools` maps tool-use ids to names, so an error result
@@ -398,6 +457,12 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
     };
     let mut out = Vec::new();
     if kind == "user" {
+        // A message from another session is a prompt, said once, out of its envelope.
+        if let Some((from, message)) = peer(record, &plain_text(content)) {
+            let mut entry = stamp.entry(Kind::User, None, message);
+            entry.from = Some(from);
+            return Ok(vec![entry]);
+        }
         // Injected context (a skill body, a command caveat) and the summary a compaction
         // writes are not prompts.
         if record["isMeta"] == true || record["isCompactSummary"] == true {
@@ -815,6 +880,74 @@ mod tests {
         assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
     }
 
+    /// A message another session sent is one prompt from its sender, out of the envelope, in
+    /// each envelope Claude Code wrote; an `isMeta` prompt from anyone else stays hidden.
+    #[test]
+    fn a_message_from_another_session_is_its_sender_and_message() {
+        let note = "\n\nThis came from another Claude session, not typed by your user.";
+        let peer = |origin: Value, text: &str| {
+            json!({"type": "user", "isMeta": true, "timestamp": AT, "origin": origin,
+                "message": {"content": text}})
+        };
+        let t = read_claude(&[
+            user(json!(
+                "Another Claude session sent a message:\n<teammate-message teammate_id=\"pr-1\" \
+                 color=\"blue\" summary=\"Report\">\nPR 1 is green.\nDetails follow.\n\
+                 </teammate-message>"
+            )),
+            user(json!([{"type": "text", "text":
+                "Another Claude session sent a message:\n<teammate-message teammate_id=\"a\">\
+                 \none\n</teammate-message>\n<teammate-message teammate_id=\"b\">two\
+                 </teammate-message>\n<teammate-message teammate_id=\"a\">three</teammate-message>"}])),
+            peer(
+                json!({"kind": "peer", "from": "bench"}),
+                &format!(
+                    "Another Claude session sent a message:\nYou have mail from lead: /m/1.md{note}"
+                ),
+            ),
+            peer(
+                json!({"kind": "peer", "from": "uds:/s.sock", "name": "s5", "body": "I stop here."}),
+                &format!("Another Claude session sent a message:\nI stop here.{note}"),
+            ),
+            json!({"type": "user", "isMeta": true, "timestamp": AT, "origin": {"kind": "human"},
+                "message": {"content": "caveat"}}),
+            user(json!(
+                "what does <teammate-message teammate_id=\"x\"> mean?"
+            )),
+            // A tag whose head never closes before its end tag: read, never a panic.
+            user(json!(
+                "Another Claude session sent a message:\n<teammate-message </teammate-message> x"
+            )),
+        ]);
+        let from: Vec<_> = t.entries.iter().map(|e| e.from.as_deref()).collect();
+        assert_eq!(
+            from,
+            [
+                Some("pr-1"),
+                Some("a, b"),
+                Some("bench"),
+                Some("s5"),
+                None,
+                Some("teammate")
+            ]
+        );
+        assert_eq!(
+            shape(&t),
+            [
+                (Kind::User, None, "PR 1 is green.\nDetails follow."),
+                (Kind::User, None, "one\n\ntwo\n\nthree"),
+                (Kind::User, None, "You have mail from lead: /m/1.md"),
+                (Kind::User, None, "I stop here."),
+                (
+                    Kind::User,
+                    None,
+                    "what does <teammate-message teammate_id=\"x\"> mean?"
+                ),
+                (Kind::User, None, "x"),
+            ]
+        );
+    }
+
     #[test]
     fn an_unknown_shape_is_named_with_its_line_and_the_rest_still_reads() {
         let t = read_claude(&[
@@ -1048,6 +1181,7 @@ mod tests {
             kind: Kind::User,
             tool: None,
             text: ms.to_string(),
+            from: None,
         };
         let (kept, total) = tail(vec![e(1), e(2), e(3), e(4)], Some(2), 2);
         assert_eq!(total, 3);

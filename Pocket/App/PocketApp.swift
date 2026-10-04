@@ -21,10 +21,10 @@ struct PocketApp: App {
     }
 }
 
-/// chats, agents and pages under one bar; a chat pushed over them (back swipe returns to the list
+/// chats and pages under one bar; a chat pushed over them (back swipe returns to the list
 /// where it was), the start sheet from the chats' `+`.
 struct RootView: View {
-    enum Tab: String, CaseIterable { case chats, agents, pages }
+    enum Tab: String, CaseIterable { case chats, pages }
 
     @EnvironmentObject private var model: PocketModel
     @Environment(\.scenePhase) private var phase
@@ -40,7 +40,6 @@ struct RootView: View {
                 header
                 switch tab {
                 case .chats: ChatsView { talking = $0 }
-                case .agents: AgentsView { talking = $0 }
                 case .pages: PagesView()
                 }
                 bar

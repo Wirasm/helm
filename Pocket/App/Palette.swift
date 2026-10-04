@@ -1,5 +1,6 @@
 import PocketKit
 import SwiftUI
+import UIKit
 
 /// Pocket's colours, from the mockup (`proposals/phone.html`): one dark console, state by glyph
 /// and colour. Spend these; a view never names a colour of its own.
@@ -25,10 +26,17 @@ enum Palette {
 
 /// The one typeface: monospaced, as a terminal.
 enum Mono {
-    static let body = Font.system(size: 13, design: .monospaced)
-    static let small = Font.system(size: 11.5, design: .monospaced)
+    static let body = Font.system(size: bodySize, design: .monospaced)
+    static let small = Font.system(size: smallSize, design: .monospaced)
+    /// `body` and `small` for a `UITextView` (`SelectableText`), which takes no SwiftUI font.
+    static let bodyUI = UIFont.monospacedSystemFont(ofSize: bodySize, weight: .regular)
+    static let smallUI = UIFont.monospacedSystemFont(ofSize: smallSize, weight: .regular)
+    private static let bodySize: CGFloat = 13
+    private static let smallSize: CGFloat = 11.5
     static let group = Font.system(size: 11, design: .monospaced)
     static let screen = Font.system(size: 10, design: .monospaced)
+    /// A message's time, under it.
+    static let stamp = Font.system(size: 9.5, design: .monospaced)
     static let title = Font.system(size: 13, weight: .semibold, design: .monospaced)
     /// The composer's send arrow, in its circle.
     static let send = Font.system(size: 16, weight: .bold, design: .monospaced)
