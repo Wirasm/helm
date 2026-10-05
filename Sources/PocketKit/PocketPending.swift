@@ -40,6 +40,31 @@ package struct ChatPending: Equatable, Sendable {
             messages.remove(at: at)
             claimed.insert(entry.index)
         }
+        // Only a waiting message can be matched: with none, what was matched is not needed.
+        if messages.isEmpty { claimed.removeAll() }
+    }
+
+    /// The transcript was rewritten and numbers its entries again (`ChatLog.resets`): the
+    /// matched entries and where each message was sent from no longer mean anything.
+    package mutating func forgetPlaces() {
+        claimed.removeAll()
+        for i in messages.indices { messages[i].after = nil }
+    }
+
+    /// The entry the oldest waiting message was sent after, when `log` starts later than it:
+    /// its prompt may be in what the chat has not read, so the chat reads from there. nil when
+    /// the log covers every waiting message, or one was sent with nothing read yet.
+    package func unseen(in log: ChatLog) -> Int? {
+        guard let oldest = log.oldest,
+            let from = messages.compactMap(\.after).min(),
+            from + 1 < oldest
+        else { return nil }
+        return from
+    }
+
+    package mutating func remove(_ id: PendingMessage.ID) {
+        messages.removeAll { $0.id == id }
+        if messages.isEmpty { claimed.removeAll() }
     }
 
     private static func normalized(_ text: String) -> String {

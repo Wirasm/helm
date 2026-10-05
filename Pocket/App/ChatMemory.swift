@@ -26,6 +26,12 @@ final class ChatMemory: ObservableObject {
         pending[chat, default: ChatPending()].add(text, after: after, maybeSent: maybeSent)
     }
 
+    /// The chat's transcript was rewritten: where its pending messages were sent from is gone.
+    func rewrote(_ chat: String) { pending[chat]?.forgetPlaces() }
+
+    /// He put away a message that may not have gone.
+    func dismiss(_ id: PendingMessage.ID, in chat: String) { pending[chat]?.remove(id) }
+
     /// The chat's transcript as read now: the messages it holds stop being pending.
     func reconcile(_ chat: String, with log: ChatLog) {
         guard var mine = pending[chat], !mine.messages.isEmpty else { return }

@@ -53,4 +53,28 @@ final class PocketPendingTests: XCTestCase {
         pending.reconcile(log([(0, .user, "maybe")]))
         XCTAssertTrue(pending.messages.isEmpty)
     }
+
+    /// A rewritten transcript numbers its entries again: what was matched and where each message
+    /// was sent from no longer hold, so the prompt that arrives next still takes its place.
+    func testARewrittenTranscriptForgetsThePlaces() {
+        var pending = ChatPending()
+        pending.add("one", after: 40)
+        pending.add("two", after: 40)
+        pending.reconcile(log([(41, .user, "one")]))
+        XCTAssertEqual(pending.messages.map(\.text), ["two"])
+        pending.forgetPlaces()
+        pending.reconcile(log([(3, .user, "two")]))
+        XCTAssertTrue(pending.messages.isEmpty)
+    }
+
+    /// The window a chat opens with may begin after a message was sent: the chat must read from
+    /// where the oldest message was sent to find its prompt.
+    func testWhatTheWindowCannotShowIsAskedFor() {
+        var pending = ChatPending()
+        XCTAssertNil(pending.unseen(in: log([(50, .agent, "x")])))
+        pending.add("early", after: 9)
+        pending.add("later", after: 48)
+        XCTAssertEqual(pending.unseen(in: log([(50, .agent, "x")])), 9)
+        XCTAssertNil(pending.unseen(in: log([(10, .agent, "x"), (11, .agent, "y")])))
+    }
 }

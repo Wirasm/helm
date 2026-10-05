@@ -345,7 +345,6 @@ fn tool_arg(input: &Value) -> String {
     one_line(arg, TOOL_ARG_CHARS)
 }
 
-/// The text of a tool result or error: a string, or the `text` blocks of an array.
 /// A message sent while the agent worked that it took mid-turn (Claude Code 2.1.289): it is
 /// recorded only as this attachment, never as a `user` record, as a message taken at the turn's
 /// end is. His prompts and other sessions' messages are the conversation; a background task's
@@ -358,14 +357,19 @@ fn queued(record: &Value) -> Result<Option<Entry>, String> {
     let stamp = Stamp::of(record)?;
     let text = match &a["prompt"] {
         Value::String(s) => s.clone(),
+        // The same blocks, read the same way, as a `user` record's.
         Value::Array(blocks) => blocks
             .iter()
             .map(|b| match b["type"].as_str() {
-                Some("text") => b["text"].as_str().unwrap_or("").to_string(),
-                Some(kind) => format!("[{kind}]"),
-                None => String::new(),
+                Some("text") => b["text"]
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "text block without text".to_string()),
+                Some("image") => Ok("[image]".into()),
+                Some("document") => Ok("[document]".into()),
+                other => Err(format!("queued_command prompt block type {other:?}")),
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, _>>()?
             .join("\n"),
         _ => return Err("queued_command prompt is neither text nor blocks".into()),
     };
@@ -374,12 +378,18 @@ fn queued(record: &Value) -> Result<Option<Entry>, String> {
         entry.from = Some(from);
         return Ok(Some(entry));
     }
-    if a["origin"]["kind"] != "human" || text.trim().is_empty() {
-        return Ok(None);
+    // A prompt from anyone else is a shape this build does not know: said, not dropped, or his
+    // message would go missing again.
+    if a["origin"]["kind"] != "human" {
+        return Err(format!(
+            "queued_command prompt from origin {:?}",
+            a["origin"]["kind"]
+        ));
     }
-    Ok(Some(stamp.entry(Kind::User, None, text)))
+    Ok((!text.trim().is_empty()).then(|| stamp.entry(Kind::User, None, text)))
 }
 
+/// The text of a tool result or error: a string, or the `text` blocks of an array.
 fn plain_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -1063,6 +1073,19 @@ mod tests {
         );
         assert_eq!(t.entries[4].from.as_deref(), Some("lead"));
         assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
+    }
+
+    /// A queued prompt from an origin this build does not know is named as unreadable, never
+    /// dropped: a message that silently disappears is the bug the attachment's reading fixes.
+    #[test]
+    fn a_queued_prompt_from_an_unknown_origin_is_unreadable() {
+        let t = read_claude(&[
+            json!({"type": "attachment", "timestamp": AT, "attachment": {
+            "type": "queued_command", "commandMode": "prompt", "origin": {"kind": "robot"},
+            "prompt": "hello"}}),
+        ]);
+        assert!(t.entries.is_empty());
+        assert_eq!(t.unreadable.len(), 1, "{:?}", t.unreadable);
     }
 
     /// A message another session sent is one prompt from its sender, out of the envelope, in

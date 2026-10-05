@@ -171,8 +171,11 @@ struct ChatPane: View {
         switch await model.log(chat, page: page, limit: limit) {
         case let .success(next):
             failure = nil
+            let resets = log.resets
             log.merge(next)
+            if log.resets != resets { memory.rewrote(chat) }
             memory.reconcile(chat, with: log)
+            await reconcileUnseen()
             guard let newest = log.newest else { return false }
             memory.read(chat, through: newest, of: next.total)
             return newest < next.total - 1
@@ -180,6 +183,17 @@ struct ChatPane: View {
             failure = why.description
             return false
         }
+    }
+
+    /// A message sent before the window the chat holds: its prompt is read from where it was
+    /// sent, or its bubble would wait for good.
+    private func reconcileUnseen() async {
+        guard let from = memory.pending[chat]?.unseen(in: log),
+            case let .success(page) = await model.log(chat, page: .after(from), limit: 200)
+        else { return }
+        var read = ChatLog()
+        read.merge(page)
+        memory.reconcile(chat, with: read)
     }
 
     private func choices() async -> PromptChoices? {
@@ -244,8 +258,12 @@ struct MessagesView: View {
                         .id("older-\(olderFailures)")
                 }
                 ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
-                ForEach(memory.pending[chat]?.messages ?? []) {
-                    PendingRow(message: $0, busy: busy)
+                ForEach(memory.pending[chat]?.messages ?? []) { message in
+                    PendingRow(message: message, busy: busy)
+                        // One that may not have gone can be put away; the rest wait for their prompt.
+                        .onTapGesture {
+                            if message.maybeSent { memory.dismiss(message.id, in: chat) }
+                        }
                 }
             }
             .padding(.vertical, 6)

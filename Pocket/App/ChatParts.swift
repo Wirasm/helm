@@ -190,7 +190,7 @@ struct PendingRow: View {
     }
 
     private var state: String {
-        if message.maybeSent { return "no answer: it may not have gone" }
+        if message.maybeSent { return "no answer: it may not have gone · tap to put away" }
         return busy ? "queued: the agent takes it when it can" : "sent"
     }
 }
