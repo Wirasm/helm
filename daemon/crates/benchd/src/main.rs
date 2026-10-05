@@ -862,7 +862,38 @@ enum AfterResponse {
     Follow(mpsc::Receiver<Arc<str>>),
 }
 
-#[expect(clippy::too_many_lines, reason = "legacy (#418): 115 lines, limit 100")]
+/// How often a follower with nothing to send checks whether its client hung up.
+const HANGUP_POLL: Duration = Duration::from_secs(1);
+
+/// Write a follower's frames until it stops reading or hangs up. Writes stay bounded by
+/// DAEMON_IO_TIMEOUT: one that stops reading errors out here, while its queue fills and the core
+/// drops it. One that hangs up is noticed by the read side, which a follower never writes to
+/// again, so a quiet bench does not hold its connection open (Pocket left them in CLOSE_WAIT).
+fn follow(
+    stream: &UnixStream,
+    mut reader: BufReader<UnixStream>,
+    frames: &mpsc::Receiver<Arc<str>>,
+) {
+    let gone = Arc::new(AtomicBool::new(false));
+    let _ = reader.get_ref().set_read_timeout(None);
+    let hung_up = Arc::clone(&gone);
+    // Ends with the connection: the shutdown after this returns wakes its read.
+    std::thread::spawn(move || {
+        let mut sink = [0u8; 256];
+        while matches!(reader.read(&mut sink), Ok(n) if n > 0) {}
+        hung_up.store(true, Ordering::SeqCst);
+    });
+    let mut out = stream;
+    loop {
+        match frames.recv_timeout(HANGUP_POLL) {
+            Ok(frame) if out.write_all(frame.as_bytes()).is_ok() => {}
+            Err(mpsc::RecvTimeoutError::Timeout) if !gone.load(Ordering::SeqCst) => {}
+            _ => return,
+        }
+    }
+}
+
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 108 lines, limit 100")]
 fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     // Bounded in time as well as bytes (R2): this connection gets DAEMON_IO_TIMEOUT to
     // deliver its line; an attach upgrade lifts the bound after the response.
@@ -957,14 +988,7 @@ fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
         }
         AfterResponse::Follow(frames) => {
             respond_keep_open(&stream, &response);
-            // Writes stay bounded by DAEMON_IO_TIMEOUT: a follower that stops reading errors
-            // out here, while its queue fills and the core drops it.
-            let mut out = &stream;
-            while let Ok(frame) = frames.recv() {
-                if out.write_all(frame.as_bytes()).is_err() {
-                    break;
-                }
-            }
+            follow(&stream, reader, &frames);
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         AfterResponse::Browser { socket, pid } => {
@@ -1207,13 +1231,14 @@ fn dispatch(
             let mail = attention::operator_mail(&root);
             let (home, shown, usage): (_, Vec<_>, _) = {
                 let c = core.lock().unwrap();
+                let agents = hook::hooked(&c);
                 let shown = c
                     .sessions
                     .values()
                     .map(|s| {
                         let pane = c.bench.document.pane_showing_session(&s.id);
                         let hooked = waiting::hook_report(&c, &s.id);
-                        let runtime = hook::conversation(&c, s);
+                        let runtime = hook::conversation(&agents, s);
                         let waiting = waiting::of_session(&c, &s.id);
                         let attention = attention::of_session(&c, s, runtime.as_deref(), &mail);
                         (Arc::clone(s), pane, waiting, hooked, runtime, attention)
@@ -1880,10 +1905,11 @@ fn mail_moved_to(c: &Core, to: &str) -> Option<String> {
             .filter(|s| s.handle == to)
             .filter_map(|s| s.runtime_session.clone()),
     );
+    let hooked = hook::hooked(c);
     c.sessions
         .values()
         .filter(|s| s.is_live() && s.handle != to && s.agent != AgentKind::Shell)
-        .find(|s| hook::conversation(c, s).is_some_and(|id| conversations.contains(&id)))
+        .find(|s| hook::conversation(&hooked, s).is_some_and(|id| conversations.contains(&id)))
         .map(|s| s.handle.clone())
 }
 

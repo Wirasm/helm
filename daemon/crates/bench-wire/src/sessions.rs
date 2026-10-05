@@ -381,6 +381,12 @@ impl HostedSession {
         }
     }
 
+    /// Whether this is the entry of `key`, without building a key to compare: the record holds
+    /// every session benchd ever hosted, and some answers look one up per row.
+    pub fn is(&self, key: &SessionKey) -> bool {
+        self.harness == key.harness && self.id == key.id
+    }
+
     /// Its mailbox, wherever it ran. A handle outlives its session.
     pub fn handle(&self) -> Option<&str> {
         match &self.via {

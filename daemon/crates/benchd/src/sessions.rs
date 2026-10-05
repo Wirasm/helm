@@ -181,7 +181,7 @@ pub fn answer_dismiss(core: &Arc<Mutex<Core>>, args: &Value) -> Result<Value, Re
     let key: SessionKey = serde_json::from_value(args.clone())
         .map_err(|e| Refusal::Refused(format!("sessions/dismiss args: {e}")))?;
     let mut c = core.lock().unwrap();
-    if !c.session_records.hosted.iter().any(|h| h.key() == key) {
+    if !c.session_records.hosted.iter().any(|h| h.is(&key)) {
         return Err(Refusal::Refused(format!(
             "{} session {:?} is not one benchd or helm hosted — only a row `bench sessions --all` lists as finished can be dismissed",
             key.harness.name(),
@@ -224,12 +224,7 @@ pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Re
         id: id.to_string(),
     };
     let spawner = Some(spawner.clone());
-    if let Some(i) = core
-        .session_records
-        .hosted
-        .iter()
-        .position(|h| h.key() == key)
-    {
+    if let Some(i) = core.session_records.hosted.iter().position(|h| h.is(&key)) {
         record_account(core, spec)?;
         if core.session_records.hosted[i].attention.spawner == spawner {
             return Ok(());
@@ -278,7 +273,7 @@ pub fn record_account(core: &mut Core, spec: &bench_session::SpawnSpec) -> Resul
         .session_records
         .hosted
         .iter()
-        .position(|h| h.key() == key && h.account != spec.account)
+        .position(|h| h.is(&key) && h.account != spec.account)
     else {
         return Ok(());
     };
@@ -296,7 +291,7 @@ pub fn recorded<'a>(core: &'a Core, agent: &str, id: &str) -> Option<&'a HostedS
         harness: Harness::parse(agent)?,
         id: id.to_string(),
     };
-    core.session_records.hosted.iter().find(|h| h.key() == key)
+    core.session_records.hosted.iter().find(|h| h.is(&key))
 }
 
 /// A mailbox claimed through `bench hook` (#358): logged as `mail/claimed`, then written.
@@ -308,11 +303,7 @@ pub fn record_claim(core: &mut Core, mut entry: HostedSession, pid: u32) -> Resu
     let Some(handle) = entry.handle().map(str::to_string) else {
         return Err("a claim names a handle".into());
     };
-    let existing = core
-        .session_records
-        .hosted
-        .iter()
-        .position(|h| h.key() == key);
+    let existing = core.session_records.hosted.iter().position(|h| h.is(&key));
     if existing.is_some_and(|i| core.session_records.hosted[i].handle().is_some()) {
         return Ok(());
     }
@@ -337,12 +328,7 @@ pub fn record_claim(core: &mut Core, mut entry: HostedSession, pid: u32) -> Resu
 /// A claimed session now in another pane (resumed there): the entry names the new pane with
 /// the same handle, and is written. The caller logs the move (`mail/moved`).
 pub fn record_move(core: &mut Core, key: &SessionKey, pane: PaneId) -> Result<(), String> {
-    let Some(entry) = core
-        .session_records
-        .hosted
-        .iter_mut()
-        .find(|h| h.key() == *key)
-    else {
+    let Some(entry) = core.session_records.hosted.iter_mut().find(|h| h.is(key)) else {
         return Err("a move names a recorded session".into());
     };
     let Some(handle) = entry.handle().map(str::to_string) else {
@@ -362,11 +348,8 @@ fn record_hosted(core: &mut Core, entries: Vec<HostedSession>) -> Result<(), Str
     let fresh: Vec<HostedSession> = entries
         .into_iter()
         .filter(|e| {
-            !core
-                .session_records
-                .hosted
-                .iter()
-                .any(|h| h.key() == e.key())
+            let key = e.key();
+            !core.session_records.hosted.iter().any(|h| h.is(&key))
         })
         .collect();
     if fresh.is_empty() {

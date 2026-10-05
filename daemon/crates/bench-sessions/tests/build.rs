@@ -214,6 +214,10 @@ impl Fixture {
     }
 
     fn build_with(&self, cache: &mut Cache, workspace: &Path) -> Built {
+        self.build_at(cache, workspace, now_ms())
+    }
+
+    fn build_at(&self, cache: &mut Cache, workspace: &Path, now_ms: u64) -> Built {
         let live = self.live.clone();
         let alive = move |pid: u32, claimed: Option<u64>| {
             live.get(&pid)
@@ -237,7 +241,7 @@ impl Fixture {
                 dismissed: &self.dismissed,
                 mailbox: &mailbox,
                 waits: &bench_sessions::Waits::default(),
-                now_ms: now_ms(),
+                now_ms,
                 now: "2026-09-25T12:00:00Z",
                 alive: &alive,
             },
@@ -597,6 +601,87 @@ fn a_warm_build_scans_only_what_was_appended() {
         "a warm build read {} bytes for a {}-byte append",
         cache.bytes_scanned - 2 * size,
         appended.len()
+    );
+}
+
+/// Pocket asks for every workspace every two seconds and helm for its own (#661): a build of one
+/// workspace must not throw away what another's builds read, or each rereads every transcript in
+/// full. What no build asked about for `Cache::KEEP_MS` is dropped.
+#[test]
+fn a_build_of_another_workspace_keeps_what_this_one_read() {
+    let mut f = Fixture::new();
+    let other = f.dir.join("other");
+    let (ws, other_ws) = (Fixture::s(f.ws()), Fixture::s(other.clone()));
+    let model = json!({"type": "attachment", "attachment": {"type": "model", "identity": {"modelId": "m"}}});
+    let mut finished = |cwd: &str, id: &str| {
+        let path = f.transcript(cwd, id);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, format!("{model}\n").as_bytes()).unwrap();
+        f.hosted(Harness::Claude, id, cwd);
+        fs::metadata(&path).unwrap().len()
+    };
+    let here = finished(&ws, "here");
+    let there = finished(&other_ws, "there");
+
+    let mut cache = Cache::default();
+    let now = now_ms();
+    let scanned = |cache: &mut Cache, ws: &Path, at: u64| {
+        let before = cache.bytes_scanned;
+        let built = f.build_at(cache, ws, at);
+        assert_eq!(built.list.rows.len(), 1, "{:?}", ids(&built));
+        cache.bytes_scanned - before
+    };
+    assert_eq!(
+        scanned(&mut cache, &f.ws(), now),
+        here,
+        "a cold build reads it"
+    );
+    assert_eq!(scanned(&mut cache, &other, now + 1), there);
+    assert_eq!(
+        scanned(&mut cache, &f.ws(), now + 2),
+        0,
+        "the other workspace's build kept this one's scan"
+    );
+
+    let later = now + 2 + Cache::KEEP_MS;
+    assert_eq!(scanned(&mut cache, &other, later), 0);
+    assert_eq!(
+        scanned(&mut cache, &f.ws(), later + 1),
+        here,
+        "a scan no build asked about for KEEP_MS was dropped"
+    );
+}
+
+/// A live Claude session in another workspace is that workspace's: a build of this one reads
+/// none of its subagents' transcripts. Its operator's orchestrator held 1173 of them (1.3 GB).
+#[test]
+fn a_build_reads_no_subagent_of_a_session_in_another_workspace() {
+    let mut f = Fixture::new();
+    let other = Fixture::s(f.dir.join("other"));
+    f.claude(200, "elsewhere", &other, json!({"status": "idle"}));
+    f.pane(PANE2, Some(200));
+    f.subagent(
+        &other,
+        "elsewhere",
+        "waiting",
+        &[
+            json!({"type": "user", "toolUseResult": {"backgroundTaskId": "b1"}}),
+            assistant(json!("end_turn"), &["text"]),
+        ],
+    );
+
+    let mut cache = Cache::default();
+    let built = f.build_with(&mut cache, &f.ws());
+    assert!(built.list.rows.is_empty(), "{:?}", ids(&built));
+    assert_eq!(
+        cache.bytes_scanned, 0,
+        "nothing of the other workspace was read"
+    );
+    let built = f.build_with(&mut cache, &f.dir.join("other"));
+    assert!(row(&built, "waiting").is_some(), "{:?}", ids(&built));
+    assert!(
+        cache.bytes_scanned > 0,
+        "its own workspace's build reads it"
     );
 }
 

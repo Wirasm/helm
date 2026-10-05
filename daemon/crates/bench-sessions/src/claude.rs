@@ -452,11 +452,13 @@ struct Entry {
 
 /// The per-file cache a long-lived daemon keeps between builds (spike C5: 140–420 ms
 /// uncached, 28–75 ms cached, on the same data). Entries for files no build asked about
-/// are dropped at the end of each build.
+/// for [`Cache::KEEP_MS`] are dropped.
 #[derive(Debug, Default)]
 pub struct Cache {
     entries: HashMap<PathBuf, Entry>,
     touched: Vec<PathBuf>,
+    /// When a build last asked about each file, in epoch ms.
+    asked_ms: HashMap<PathBuf, u64>,
     /// Harness-file bytes the scans have read, ever: the pending-task scan and every
     /// [`crate::latest`] scan, each on its own offset. A warm build must add only
     /// what was appended since the last one — the regression check for a scan that starts
@@ -538,11 +540,21 @@ impl Cache {
         value
     }
 
-    /// Drop every entry this build did not ask about.
-    pub fn end_build(&mut self) {
-        let touched: std::collections::HashSet<PathBuf> = self.touched.drain(..).collect();
-        self.entries.retain(|p, _| touched.contains(p));
-        self.latest.retain(|(p, _), _| touched.contains(p));
+    /// How long an entry no build asked about is kept. One cache serves every workspace's
+    /// builds, and Pocket asks for each of them every two seconds: dropping what this build did
+    /// not ask about made every build of another workspace read its transcripts in full again.
+    pub const KEEP_MS: u64 = 10 * 60 * 1000;
+
+    /// Drop every entry no build asked about for [`Cache::KEEP_MS`].
+    pub fn end_build(&mut self, now_ms: u64) {
+        for path in self.touched.drain(..) {
+            self.asked_ms.insert(path, now_ms);
+        }
+        self.asked_ms
+            .retain(|_, at| now_ms.saturating_sub(*at) < Self::KEEP_MS);
+        let asked = &self.asked_ms;
+        self.entries.retain(|p, _| asked.contains_key(p));
+        self.latest.retain(|(p, _), _| asked.contains_key(p));
     }
 }
 

@@ -10920,6 +10920,32 @@ fn a_url_that_is_wrong_or_unanswered_is_named_and_a_listen_that_cannot_bind_stop
     );
 }
 
+/// Pocket follows the bench over TCP and goes away with the phone (#661). benchd kept a follower
+/// that hung up until an event failed to reach it, so a quiet bench held each one in CLOSE_WAIT.
+/// It closes its side once the client has closed its own.
+#[test]
+fn a_follower_that_hangs_up_is_let_go_without_waiting_for_an_event() {
+    let home = TestHome::claim("m5c-hangup");
+    let (_daemon, port) = tcp_daemon(&home.dir);
+    let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    (&stream)
+        .write_all(b"{\"id\":\"t-hangup\",\"verb\":\"events\",\"args\":{\"follow\":true}}\n")
+        .unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut document = String::new();
+    reader.read_line(&mut document).unwrap();
+    assert!(document.contains("\"ok\""), "{document}");
+
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    // Nothing happens on this bench, so no frame is written that would find the client gone.
+    let mut rest = Vec::new();
+    let read = reader.read_to_end(&mut rest);
+    assert!(read.is_ok(), "benchd kept the connection open: {read:?}");
+}
+
 #[test]
 fn a_pane_whose_link_drops_reconnects_and_shows_the_session_as_it_is() {
     // A helm pane on a remote benchd read a dropped link as "benchd is not running" and ended,

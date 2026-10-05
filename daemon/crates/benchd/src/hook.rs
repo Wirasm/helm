@@ -570,13 +570,7 @@ fn set_record(
 
 /// The pane the record last saw a session in.
 fn recorded_pane(c: &Core, key: &SessionKey) -> Option<PaneId> {
-    match c
-        .session_records
-        .hosted
-        .iter()
-        .find(|h| h.key() == *key)?
-        .via
-    {
+    match c.session_records.hosted.iter().find(|h| h.is(key))?.via {
         HostedVia::Pane { pane, .. } => Some(pane),
         HostedVia::Bench { .. } => None,
     }
@@ -624,7 +618,7 @@ fn address(c: &mut Core, args: &HookArgs, key: &SessionKey) -> Result<Option<Str
         .session_records
         .hosted
         .iter()
-        .find(|h| h.key() == *key)
+        .find(|h| h.is(key))
         .and_then(HostedSession::handle)
     {
         return Ok(Some(handle.to_string()));
@@ -1066,20 +1060,25 @@ fn session_in(core: &Core, pane: PaneId) -> Option<bench_wire::MailWho> {
     Some(bench_wire::MailWho {
         handle: session.handle.clone(),
         harness: bench_wire::Harness::parse(session.agent.name())?,
-        session: conversation(core, session).unwrap_or_else(|| session.id.clone()),
+        session: conversation(&hooked(core), session).unwrap_or_else(|| session.id.clone()),
         pid: session.pid,
     })
 }
 
 /// The conversation benchd session `s` runs now, by the session list's rule
 /// ([`bench_sessions::conversation`]): what its agent's hook reported last, else the id it was
-/// started with. `None` for a shell, and for a codex no hook has reported yet.
-pub fn conversation(core: &Core, s: &bench_session::Session) -> Option<String> {
+/// started with. `None` for a shell, and for a codex no hook has reported yet. `hooked` is
+/// [`hooked`], built once by an answer that asks this of every session: it walks every agent
+/// benchd heard from and the hosted record.
+pub fn conversation(
+    hooked: &[bench_sessions::HookedAgent],
+    s: &bench_session::Session,
+) -> Option<String> {
     let Some(harness) = bench_wire::Harness::parse(s.agent.name()) else {
         return s.runtime_session.clone();
     };
     bench_sessions::conversation(
-        &hooked(core),
+        hooked,
         harness,
         &s.handle,
         s.runtime_session.as_deref(),
@@ -1095,11 +1094,7 @@ pub fn hooked(core: &Core) -> Vec<bench_sessions::HookedAgent> {
         .iter()
         .filter_map(|(key, agent)| Some((key, agent.as_ref()?)))
         .filter_map(|(key, a)| {
-            let entry = core
-                .session_records
-                .hosted
-                .iter()
-                .find(|h| h.key() == *key)?;
+            let entry = core.session_records.hosted.iter().find(|h| h.is(key))?;
             Some(bench_sessions::HookedAgent {
                 harness: key.harness,
                 session: key.id.clone(),
