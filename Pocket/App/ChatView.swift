@@ -113,7 +113,8 @@ struct ChatPane: View {
         model.sessions.values.joined().first { $0.id == chat }
     }
 
-    private var busy: Bool { row.map { Attention($0) == .working } ?? false }
+    /// A turn is under way: what he sends now waits in the agent's queue.
+    private var busy: Bool { row.map { !$0.isIdle } ?? false }
 
     var body: some View {
         let linkRequest = linkRequest
@@ -181,7 +182,9 @@ struct ChatPane: View {
             behind = await load(
                 log.newest.map { .after($0) } ?? .last,
                 limit: log.newest == nil ? ChatLog.page : 50)
-            memory.agent(chat, busy: busy)
+            // Only a transcript just read, and an agent benchd lists, can say a message was not
+            // taken.
+            if failure == nil, let row { memory.agent(chat, busy: !row.isIdle) }
             prompt = await choices()
         }
     }
