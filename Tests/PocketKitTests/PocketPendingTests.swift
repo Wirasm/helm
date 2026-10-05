@@ -1,0 +1,56 @@
+import Foundation
+import HelmWire
+import XCTest
+
+@testable import PocketKit
+
+/// What he sent but the agent has not taken yet (operator, 2026-10-05): the harnesses write a
+/// message they queue while busy to the transcript only when they take it, so Pocket shows it at
+/// once and lets the transcript take its place, once, when it arrives.
+final class PocketPendingTests: XCTestCase {
+    private func log(_ entries: [(Int, BenchLogEntry.Kind, String)]) -> ChatLog {
+        var log = ChatLog()
+        log.merge(
+            BenchSessionLog(
+                total: (entries.map(\.0).max() ?? -1) + 1,
+                entries: entries.map { BenchLogEntry(index: $0.0, atMs: 0, kind: $0.1, text: $0.2) }
+            ))
+        return log
+    }
+
+    /// A message stays until a prompt with its text arrives after the entry he had when he sent
+    /// it; the agent's reply quoting it, or the same words said earlier, do not take its place.
+    func testASentMessageStaysUntilTheTranscriptHasIt() {
+        var pending = ChatPending()
+        pending.add("ship it", after: 4)
+        pending.reconcile(log([(3, .user, "ship it"), (4, .agent, "Done.")]))
+        XCTAssertEqual(pending.messages.map(\.text), ["ship it"], "said before he sent it")
+        pending.reconcile(log([(5, .agent, "ship it")]))
+        XCTAssertEqual(pending.messages.map(\.text), ["ship it"], "the agent's words")
+        pending.reconcile(log([(6, .user, "  ship it\n")]))
+        XCTAssertTrue(pending.messages.isEmpty)
+    }
+
+    /// The same words sent twice are two messages: one prompt in the transcript takes the place
+    /// of one of them, however often the log is read again.
+    func testTheSameWordsSentTwiceAreTwoMessages() {
+        var pending = ChatPending()
+        pending.add("again", after: 1)
+        pending.add("again", after: 1)
+        let arrived = log([(2, .user, "again")])
+        pending.reconcile(arrived)
+        pending.reconcile(arrived)
+        XCTAssertEqual(pending.messages.map(\.text), ["again"])
+        pending.reconcile(log([(2, .user, "again"), (3, .user, "again")]))
+        XCTAssertTrue(pending.messages.isEmpty)
+    }
+
+    /// One benchd may have taken without answering is kept, and says so.
+    func testAMessageThatMayNotHaveGoneSaysSo() {
+        var pending = ChatPending()
+        pending.add("maybe", after: nil, maybeSent: true)
+        XCTAssertEqual(pending.messages.first?.maybeSent, true)
+        pending.reconcile(log([(0, .user, "maybe")]))
+        XCTAssertTrue(pending.messages.isEmpty)
+    }
+}

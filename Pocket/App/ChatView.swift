@@ -107,13 +107,15 @@ struct ChatPane: View {
             if let linkFailure {
                 Text(linkFailure).font(Mono.small).foregroundStyle(Palette.asking)
             }
-            MessagesView(log: $log, chat: chat)
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(swiping)
+            MessagesView(
+                log: $log, chat: chat, busy: row.map { Attention($0) == .working } ?? false
+            )
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
             }
-            Composer(chat: chat, target: row?.screen, typing: $typing)
+            Composer(chat: chat, target: row?.screen, after: log.newest, typing: $typing)
         }
         .task { await follow() }
         .task(id: model.state) {
@@ -170,6 +172,7 @@ struct ChatPane: View {
         case let .success(next):
             failure = nil
             log.merge(next)
+            memory.reconcile(chat, with: log)
             guard let newest = log.newest else { return false }
             memory.read(chat, through: newest, of: next.total)
             return newest < next.total - 1
@@ -198,8 +201,11 @@ struct ChatPane: View {
 /// to what he has scrolled through, so laying every row out is cheap.
 struct MessagesView: View {
     @EnvironmentObject private var model: PocketModel
+    @EnvironmentObject private var memory: ChatMemory
     @Binding var log: ChatLog
     let chat: String
+    /// The agent is working: what he sends now waits in its queue.
+    let busy: Bool
     @State private var position = ScrollPosition(edge: .bottom)
     /// The view's bottom edge is at the content's, within a few points.
     @State private var atBottom = true
@@ -238,6 +244,9 @@ struct MessagesView: View {
                         .id("older-\(olderFailures)")
                 }
                 ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
+                ForEach(memory.pending[chat]?.messages ?? []) {
+                    PendingRow(message: $0, busy: busy)
+                }
             }
             .padding(.vertical, 6)
         }

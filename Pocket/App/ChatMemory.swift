@@ -1,4 +1,5 @@
 import Foundation
+import PocketKit
 
 /// What Pocket keeps per chat across launches: the unsent draft in its text field, and the last
 /// transcript entry he had on screen (what unread compares a reply's index with). Keyed by
@@ -7,6 +8,9 @@ import Foundation
 final class ChatMemory: ObservableObject {
     @Published private(set) var drafts: [String: String]
     @Published private(set) var readThrough: [String: Int]
+    /// What he sent that each chat's transcript does not hold yet: kept while the app runs, so
+    /// leaving a chat and coming back still shows it.
+    @Published private(set) var pending: [String: ChatPending] = [:]
 
     private let defaults: UserDefaults
 
@@ -17,6 +21,17 @@ final class ChatMemory: ObservableObject {
     }
 
     func draft(_ chat: String) -> String { drafts[chat] ?? "" }
+
+    func sent(_ text: String, to chat: String, after: Int?, maybeSent: Bool) {
+        pending[chat, default: ChatPending()].add(text, after: after, maybeSent: maybeSent)
+    }
+
+    /// The chat's transcript as read now: the messages it holds stop being pending.
+    func reconcile(_ chat: String, with log: ChatLog) {
+        guard var mine = pending[chat], !mine.messages.isEmpty else { return }
+        mine.reconcile(log)
+        if mine != pending[chat] { pending[chat] = mine }
+    }
 
     func keep(_ text: String, for chat: String) {
         drafts[chat] = text.isEmpty ? nil : text

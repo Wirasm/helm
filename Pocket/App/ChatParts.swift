@@ -54,6 +54,8 @@ struct Composer: View {
     @EnvironmentObject private var memory: ChatMemory
     let chat: String
     let target: String?
+    /// The newest transcript entry now: what he sends is a prompt after it.
+    let after: Int?
     /// The chat's keyboard: the messages can take it away (`ChatPane`).
     var typing: FocusState<Bool>.Binding
     @State private var draft = ""
@@ -63,6 +65,11 @@ struct Composer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let refused { Text(refused).font(Mono.small).foregroundStyle(Palette.asking) }
+            if target == nil {
+                // Send is off: say why rather than leave a grey button.
+                Text("no terminal for this chat right now: it may have ended")
+                    .font(Mono.small).foregroundStyle(Palette.asking)
+            }
             HStack(alignment: .bottom, spacing: 6) {
                 TextField(
                     "", text: $draft, prompt: Text("message…").foregroundStyle(Palette.faint),
@@ -112,6 +119,11 @@ struct Composer: View {
         Task {
             let refusal = await model.send(.message(text), to: target)
             refused = refusal?.description
+            // On the screen at once: the agent may queue it, and its transcript has it only once
+            // the agent takes it. A refused message stays in the field instead.
+            if refusal == nil || refusal?.maybeSent == true {
+                memory.sent(text, to: chat, after: after, maybeSent: refusal != nil)
+            }
             // Gone, or maybe gone: off this chat's draft, even if he has moved to another chat
             // meanwhile, so it is never offered to send twice.
             if refusal == nil || refusal?.maybeSent == true {
@@ -157,5 +169,28 @@ struct SwitcherView: View {
         .padding(16)
         .background(Palette.sheet)
         .presentationDetents([.large])
+    }
+}
+
+/// A message he sent that the transcript does not hold yet: on his side, dimmer than one it holds,
+/// with what became of it.
+struct PendingRow: View {
+    let message: PendingMessage
+    let busy: Bool
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+            VStack(alignment: .trailing, spacing: 2) {
+                SelectableText(text: message.text, font: Mono.bodyUI, color: Palette.dim)
+                Text(state).font(Mono.stamp)
+                    .foregroundStyle(message.maybeSent ? Palette.asking : Palette.faint)
+            }
+        }
+    }
+
+    private var state: String {
+        if message.maybeSent { return "no answer: it may not have gone" }
+        return busy ? "queued: the agent takes it when it can" : "sent"
     }
 }
