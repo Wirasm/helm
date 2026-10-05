@@ -115,5 +115,10 @@ finds a Markdown document outside the newest 20. It also checks keyboard dismiss
 the copy menu. Screenshots are attached to the result bundle. On exit, it removes its simulator,
 temporary files and UI DerivedData.
 
-To replay a real store, add `--store ~/.prp/<key>` to the Python command. It copies the store and
-changes only the copy's project registration; the source store stays untouched.
+To replay a real store, add `--store ~/.prp/<key>` to the Python command. It copies the store,
+materializes symlink targets, and seeds test documents and project registration in the copy.
+The source store stays untouched. Check that source-write isolation without a simulator:
+
+```
+python3 -B Pocket/test-store-links-unit.py
+```

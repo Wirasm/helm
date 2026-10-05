@@ -27,6 +27,32 @@ def ask(verb, args):
         return json.loads(connection.makefile().readline())
 
 
+def seed_store(source, store, workspace):
+    if source:
+        # Materialize links so writes stay in the copy; broken links have no content to copy.
+        shutil.copytree(source.resolve(), store, ignore=lambda directory, names: [
+            name for name in names if (Path(directory) / name).is_symlink()
+            and not (Path(directory) / name).exists()
+        ])
+        print("Copied real store into", store, flush=True)
+    else:
+        (store / "reports").mkdir(parents=True)
+        (store / "reports/launch-queue.md").write_text("# Archon run launch queue\n\nA queued document from benchd.\n")
+    # Only the owned copy is registered to the fixture workspace.
+    (store / "project.json").write_text(json.dumps({"name": "fixture", "path": str(workspace)}))
+    (store / "report.md").write_text("# Markdown from benchd\n\n**The plan** arrived over TCP.\n")
+    (store / "page.html").write_text(
+        '<!doctype html><html><meta name="viewport" content="width=device-width">'
+        '<meta name="color-scheme" content="dark"><h1>HTML from benchd</h1><p id="sibling"></p><script src="sibling.js"></script></html>'
+    )
+    (store / "sibling.js").write_text('document.getElementById("sibling").textContent="Sibling script loaded";')
+    for index in range(25):
+        recent = store / f"recent-{index}.md"
+        recent.write_text("# Newer document\n")
+        now = time.time() + index
+        os.utime(recent, (now, now))
+
+
 def main():
     # Let timeout's SIGTERM run the same cleanup as a test failure.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
@@ -45,25 +71,7 @@ def main():
         workspace = home / "Archon"
         workspace.mkdir()
         store = home / ".prp/fixture-1"
-        if args.store:
-            shutil.copytree(args.store.resolve(), store, symlinks=True)
-            print("Copied real store into", store, flush=True)
-        else:
-            (store / "reports").mkdir(parents=True)
-            (store / "reports/launch-queue.md").write_text("# Archon run launch queue\n\nA queued document from benchd.\n")
-        # Only the owned copy is registered to the fixture workspace.
-        (store / "project.json").write_text(json.dumps({"name": "fixture", "path": str(workspace)}))
-        (store / "report.md").write_text("# Markdown from benchd\n\n**The plan** arrived over TCP.\n")
-        (store / "page.html").write_text(
-            '<!doctype html><html><meta name="viewport" content="width=device-width">'
-            '<meta name="color-scheme" content="dark"><h1>HTML from benchd</h1><p id="sibling"></p><script src="sibling.js"></script></html>'
-        )
-        (store / "sibling.js").write_text('document.getElementById("sibling").textContent="Sibling script loaded";')
-        for index in range(25):
-            recent = store / f"recent-{index}.md"
-            recent.write_text("# Newer document\n")
-            now = time.time() + index
-            os.utime(recent, (now, now))
+        seed_store(args.store, store, workspace)
         fake_bin = home / "bin"
         fake_bin.mkdir()
         stub = fake_bin / "claude"
