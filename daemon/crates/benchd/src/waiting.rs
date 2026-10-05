@@ -144,6 +144,7 @@ fn decide(reported: Option<(&Activity, u64)>, seen: Option<&Seen>) -> Option<Wai
 /// `mail` is his unread mail by sender, read before the core lock. `None` when nothing needs him.
 pub fn next_pane(c: &Core, mail: &HashMap<String, OperatorMail>) -> Option<PaneId> {
     let doc = &c.bench.document;
+    let hooked = crate::hook::hooked(c);
     let mut focused = None;
     let mut needs = Vec::new();
     for s in c.sessions.values() {
@@ -153,9 +154,9 @@ pub fn next_pane(c: &Core, mail: &HashMap<String, OperatorMail>) -> Option<PaneI
         // The focused pane keeps its place even once it is seen (arriving there saw it), so the
         // next press goes on from it rather than back to the top.
         if Some(pane) == doc.focused_pane() {
-            focused = needs_you(c, s, mail, true).map(|key| (key, pane));
+            focused = needs_you(c, &hooked, s, mail, true).map(|key| (key, pane));
         }
-        if let Some(key) = needs_you(c, s, mail, false) {
+        if let Some(key) = needs_you(c, &hooked, s, mail, false) {
             needs.push((key, pane));
         }
     }
@@ -166,6 +167,7 @@ pub fn next_pane(c: &Core, mail: &HashMap<String, OperatorMail>) -> Option<PaneI
 /// finished turn he has seen counts only `with_seen`, for where the focused pane sits.
 fn needs_you(
     c: &Core,
+    hooked: &[bench_sessions::HookedAgent],
     s: &Session,
     mail: &HashMap<String, OperatorMail>,
     with_seen: bool,
@@ -173,7 +175,7 @@ fn needs_you(
     if let Some(w) = of_session(c, &s.id) {
         return Some((0, w.since_ms));
     }
-    let runtime = crate::hook::conversation(c, s);
+    let runtime = crate::hook::conversation(hooked, s);
     let (done, mail) = crate::attention::of_session(c, s, runtime.as_deref(), mail);
     done.filter(|d| (with_seen || !d.seen) && d.to == OPERATOR_HANDLE)
         .map(|d| (1, d.since_ms))

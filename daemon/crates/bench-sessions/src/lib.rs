@@ -390,7 +390,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     let mut newly_hosted: Vec<HostedSession> = Vec::new();
     let mut record = |harness: Harness, id: &str, cwd: &str, pane: bench_doc::PaneId| {
         let k = key(harness, id);
-        if !recorded.contains(&k) && !newly_hosted.iter().any(|h| h.key() == k) {
+        if !recorded.contains(&k) && !newly_hosted.iter().any(|h| h.is(&k)) {
             newly_hosted.push(HostedSession {
                 harness,
                 id: id.to_string(),
@@ -507,7 +507,9 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
         );
     }
 
-    // 4. Running subagents of hosted live Claude sessions.
+    // 4. Running subagents of hosted live Claude sessions in this workspace: a subagent's row
+    //    is its session's, and another workspace's session can hold a thousand of them.
+    hosted_claude.retain(|r| ws.root_of(&r.cwd).is_some());
     hosted_claude.sort_by(|a, b| a.session.cmp(&b.session));
     hosted_claude.dedup_by(|a, b| a.session == b.session);
     for r in &hosted_claude {
@@ -639,7 +641,7 @@ pub fn build(inputs: &Inputs, cache: &mut Cache) -> Built {
     for row in &mut rows {
         row.model = model(inputs.home, cache, row);
     }
-    cache.end_build();
+    cache.end_build(inputs.now_ms);
     Built {
         list: SessionList {
             workspace: ws.root.clone(),

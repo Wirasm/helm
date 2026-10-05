@@ -153,7 +153,7 @@ fn record<'a>(c: &'a Core, key: &SessionKey) -> Option<&'a AttentionRecord> {
     c.session_records
         .hosted
         .iter()
-        .find(|h| h.key() == *key)
+        .find(|h| h.is(key))
         .map(|h| &h.attention)
 }
 
@@ -164,12 +164,7 @@ fn update(
     key: &SessionKey,
     f: impl FnOnce(&mut AttentionRecord),
 ) -> Result<bool, String> {
-    let Some(entry) = c
-        .session_records
-        .hosted
-        .iter_mut()
-        .find(|h| h.key() == *key)
-    else {
+    let Some(entry) = c.session_records.hosted.iter_mut().find(|h| h.is(key)) else {
         return Ok(false);
     };
     let before = entry.attention.clone();
