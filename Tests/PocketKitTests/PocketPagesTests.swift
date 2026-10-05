@@ -11,19 +11,19 @@ final class PocketPagesTests: XCTestCase {
         BenchPrpArtifact(path: "/s/\(relative)", relative: relative, modifiedMs: ms)
     }
 
-    /// A section per workspace's store, the one edited last first, each of its `.html` pages
-    /// newest first; markdown is not a page here, and a store two workspaces share is listed once,
+    /// A section per workspace's store, the one edited last first, its Markdown and HTML pages
+    /// newest first; a store two workspaces share is listed once,
     /// under the first. A workspace with no page has no section.
     func testPagesAreASectionPerWorkspaceNewestFirst() {
         let helm = [file("plans/a.plan.html", 30), file("plans/a.plan.md", 31), file("b.html", 35)]
         let prp = [file("reviews/pr-1-review.html", 40)]
         let sections = PocketPages.sections([
             ("/w/helm", "/s", helm), ("/w/prp", "/s", prp), ("/w/helm/.worktrees/x", "/s", helm),
-            ("/w/empty", "/s", [file("notes.md", 50)]),
+            ("/w/empty", "/s", [file("notes.json", 50)]),
         ])
         XCTAssertEqual(sections.map(\.path), ["/w/prp", "/w/helm"])
         XCTAssertEqual(sections.map(\.name), ["prp", "helm"])
-        XCTAssertEqual(sections[1].pages.map(\.title), ["b", "plans/a.plan"])
+        XCTAssertEqual(sections[1].pages.map(\.title), ["b", "plans/a.plan", "plans/a.plan"])
         XCTAssertEqual(sections[0].pages.map(\.path), ["/s/reviews/pr-1-review.html"])
     }
 
@@ -38,6 +38,21 @@ final class PocketPagesTests: XCTestCase {
         let found = sections.compactMap { $0.matching(" REVIEW ") }
         XCTAssertEqual(found.map(\.path), ["/w/helm"])
         XCTAssertEqual(found.flatMap(\.pages).map(\.title), ["reviews/pr-2"])
+    }
+
+    func testNewestTwentyIncludesMarkdownAndSearchFindsAnOlderDocument() throws {
+        let recent = (0..<24).map { file("reports/recent-\($0).html", UInt64(100 + $0)) }
+        let files = recent + [file("reports/launch-queue.md", 1), file("ignored.json", 200)]
+        let section = try XCTUnwrap(
+            PocketPages.sections([("/w/Archon", "/s", files)]).first)
+        XCTAssertEqual(section.pages.count, 25, "full backing inventory, without JSON")
+        let newest = try XCTUnwrap(section.matching(""))
+        XCTAssertEqual(newest.pages.count, 20)
+        XCTAssertEqual(newest.pages.first?.title, "reports/recent-23")
+        XCTAssertEqual(newest.pages.last?.title, "reports/recent-4")
+        XCTAssertFalse(newest.pages.contains { $0.path.hasSuffix("launch-queue.md") })
+        let found = try XCTUnwrap(section.matching(" LAUNCH-QUEUE "))
+        XCTAssertEqual(found.pages.map(\.path), ["/s/reports/launch-queue.md"])
     }
 
     /// A reply is added to the live file's `replies`, every other key kept, written as a page

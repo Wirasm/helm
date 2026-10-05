@@ -15,7 +15,7 @@ package struct PocketPage: Hashable, Sendable, Identifiable {
     package var id: String { path }
 }
 
-/// One workspace on the pages tab: the `.html` pages of its prp store, last edited first.
+/// One workspace on the pages tab: the Markdown and HTML documents of its prp store, last edited first.
 package struct PocketPageSection: Equatable, Sendable, Identifiable {
     /// The workspace's folder.
     package var path: String
@@ -25,11 +25,13 @@ package struct PocketPageSection: Equatable, Sendable, Identifiable {
     package var name: String { URL(fileURLWithPath: path).lastPathComponent }
 
     /// Only the pages whose title has `query` (any case); nil when none does. An empty query
-    /// keeps them all.
+    /// shows the twenty newest; searching always examines the full inventory.
     package func matching(_ query: String) -> PocketPageSection? {
         let words = query.trimmingCharacters(in: .whitespaces)
-        guard !words.isEmpty else { return self }
-        let kept = pages.filter { $0.title.localizedCaseInsensitiveContains(words) }
+        let kept =
+            words.isEmpty
+            ? Array(pages.prefix(20))
+            : pages.filter { $0.title.localizedCaseInsensitiveContains(words) }
         return kept.isEmpty ? nil : PocketPageSection(path: path, pages: kept)
     }
 }
@@ -46,11 +48,14 @@ package enum PocketPages {
         return listings.compactMap { workspace, store, files in
             let pages =
                 files
-                .filter { $0.path.lowercased().hasSuffix(".html") && seen.insert($0.path).inserted }
+                .filter {
+                    let ext = ($0.path as NSString).pathExtension.lowercased()
+                    return (ext == "md" || ext == "html") && seen.insert($0.path).inserted
+                }
                 .sorted { $0.modifiedMs > $1.modifiedMs }
                 .map {
                     PocketPage(
-                        path: $0.path, title: String($0.relative.dropLast(".html".count)),
+                        path: $0.path, title: ($0.relative as NSString).deletingPathExtension,
                         modifiedMs: $0.modifiedMs, store: store)
                 }
             return pages.isEmpty ? nil : PocketPageSection(path: workspace, pages: pages)

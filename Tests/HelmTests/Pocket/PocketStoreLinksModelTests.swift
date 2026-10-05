@@ -3,7 +3,7 @@ import HelmWire
 import PocketKit
 import XCTest
 
-/// Store roots and home must come from the TCP peer, and a previous connection is no authority.
+/// Store roots, home and each chat's existing files come from its TCP peer.
 @MainActor
 final class PocketStoreLinksModelTests: XCTestCase {
     private func server() throws -> FakeBenchd {
@@ -13,46 +13,67 @@ final class PocketStoreLinksModelTests: XCTestCase {
             tcp: true)
         server.answer = { request in
             let id = request["id"] ?? ""
+            let args = request["args"] as? [String: Any] ?? [:]
+            func ok(_ data: Any) -> [String: Any] { ["id": id, "status": "ok", "data": data] }
             switch request["verb"] as? String {
             case "prp/stores":
-                return [
-                    "id": id, "status": "ok",
-                    "data": [
-                        "stores": [
-                            [
-                                "key": "project-1", "name": "project",
-                                "dir": "/remote/home/.prp/project-1",
-                            ]
-                        ]
+                return ok([
+                    "stores": [
+                        [
+                            "key": "project-1", "name": "project",
+                            "dir": "/remote/home/.prp/project-1",
+                        ],
+                        ["key": "other-1", "name": "other", "dir": "/remote/home/.prp/other-1"],
                     ],
-                ]
-            case "path/resolve":
-                return [
-                    "id": id, "status": "ok",
-                    "data": ["path": "/remote/home", "kind": "directory"],
-                ]
+                    "workspace": args["workspace"] as? String == "/remote/other"
+                        ? "other-1" : "project-1",
+                ])
+            case "path/resolve": return ok(["path": "/remote/home", "kind": "directory"])
+            case "prp/artifacts":
+                let key = args["store"] as? String ?? ""
+                return ok([
+                    "files": [
+                        [
+                            "path": "/remote/home/.prp/\(key)/reports/plan.md",
+                            "relative": "reports/plan.md", "modified_ms": 1,
+                        ]
+                    ]
+                ])
             default: return ["id": id, "status": "refused", "reason": "not here"]
             }
         }
         return server
     }
 
-    func testItUsesRemoteRootsAndHomeAndClearsThemWhenConnectingElsewhere() async throws {
+    func testRemoteAuthorityAndEachChatsStoreAreIndependent() async throws {
         let server = try server()
         defer { server.stop() }
         let model = PocketModel()
         model.connect(server.endpoint.description)
-        let refusal = await model.loadStoreLinks()
-        XCTAssertNil(refusal)
+        let first = try await model.loadStoreLinks(workspace: "/remote/project/worktree").get()
+        let second = try await model.loadStoreLinks(workspace: "/remote/other").get()
         XCTAssertEqual(
-            model.storeLinks.page("~/.prp/project-1/plan.md")?.path,
-            "/remote/home/.prp/project-1/plan.md")
-        XCTAssertNil(model.storeLinks.page("/Users/phone/.prp/project-1/plan.md"))
+            first.page("reports/plan.md")?.path, "/remote/home/.prp/project-1/reports/plan.md")
+        XCTAssertEqual(
+            second.page("reports/plan.md")?.path, "/remote/home/.prp/other-1/reports/plan.md")
+        XCTAssertEqual(
+            first.page("~/.prp/project-1/plan.md")?.path, "/remote/home/.prp/project-1/plan.md")
+        XCTAssertNil(first.page("/Users/phone/.prp/project-1/plan.md"))
+        XCTAssertNil(first.page("reports/missing.md"))
         let home = try XCTUnwrap(server.requests.first { $0["verb"] as? String == "path/resolve" })
         XCTAssertEqual((home["args"] as? [String: Any])?["path"] as? String, "~")
+        let stores = server.requests.filter { $0["verb"] as? String == "prp/stores" }
+        XCTAssertEqual(
+            stores.compactMap { ($0["args"] as? [String: Any])?["workspace"] as? String },
+            ["/remote/project/worktree", "/remote/other"])
+        let inventories = server.requests.filter { $0["verb"] as? String == "prp/artifacts" }
+        XCTAssertEqual(
+            inventories.compactMap { ($0["args"] as? [String: Any])?["store"] as? String },
+            ["project-1", "other-1"])
         model.connect("")
-        XCTAssertNil(model.storeLinks.page("~/.prp/project-1/plan.md"))
-        XCTAssertNil(model.storeLinks.page("/remote/home/.prp/project-1/plan.md"))
+        if case .success = await model.loadStoreLinks(workspace: "/remote/other") {
+            XCTFail("a disconnected model supplied authority")
+        }
     }
 
     func testAStoreAnswerFromTheConnectionLeftBehindIsDiscarded() async throws {
@@ -70,10 +91,9 @@ final class PocketStoreLinksModelTests: XCTestCase {
         }
         let model = PocketModel()
         model.connect(server.endpoint.description)
-        let loading = Task { await model.loadStoreLinks() }
+        let loading = Task { await model.loadStoreLinks(workspace: "/remote/project") }
         await fulfillment(of: [received], timeout: 3)
         model.connect("")
-        _ = await loading.value
-        XCTAssertNil(model.storeLinks.page("/remote/home/.prp/project-1/plan.md"))
+        if case .success = await loading.value { XCTFail("an old connection supplied authority") }
     }
 }
