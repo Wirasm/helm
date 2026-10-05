@@ -10,7 +10,7 @@ name: Pocket
 options:
   bundleIdPrefix: com.wirasm
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
 
 settings:
   base:

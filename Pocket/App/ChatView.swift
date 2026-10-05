@@ -187,8 +187,10 @@ struct ChatPane: View {
     }
 }
 
-/// The conversation, newest at the bottom and kept there as entries arrive; older pages load as
-/// he scrolls up to the top, and what he was reading stays where it was.
+/// The conversation, newest at the bottom; older pages load as he scrolls up to the top. The
+/// chat never moves under him: a page landing above keeps what he is reading where it is on
+/// screen, and the agent's new messages follow him down only while he is at the bottom; above
+/// it, a pill counts them and takes him down.
 ///
 /// A plain `VStack`, not a lazy one: on a long transcript `LazyVStack` re-placed its rows forever
 /// at the bottom-anchored end (100% CPU, the chat frozen or blank, measured on a real 3,000-entry
@@ -198,54 +200,97 @@ struct MessagesView: View {
     @EnvironmentObject private var model: PocketModel
     @Binding var log: ChatLog
     let chat: String
-    /// The entry at the bottom of the view: new entries scroll in only while it is the newest,
-    /// so reading back is not pulled down by the agent's next line.
-    @State private var shown: Int?
+    @State private var position = ScrollPosition(edge: .bottom)
+    /// The view's bottom edge is at the content's, within a few points.
+    @State private var atBottom = true
+    /// The newest entry when he left the bottom: entries after it are the pill's count.
+    @State private var leftAt: Int?
+    /// An older page is being put in above him: when the content grows, the view moves down by
+    /// as much, so what he reads stays where it is on screen.
+    @State private var prepending = false
+    /// The scroll offset, as last seen: where he was before the page above was laid out.
+    @State private var offset: CGFloat = 0
     @State private var loadingOlder = false
     /// Failed asks for the page above: each one gives the top row a new identity, so it looks
     /// again whether he can see it and retries.
     @State private var olderFailures = 0
 
     var body: some View {
-        ScrollViewReader { reader in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if log.hasOlder {
-                        // Reaching the top asks for the page above. A plain stack lays out every
-                        // row at once, so `onAppear` would fire at open; the row's place in the
-                        // scroll view's own frame says whether he can see it.
-                        Text(loadingOlder ? "…" : "").font(Mono.small).foregroundStyle(
-                            Palette.faint
-                        )
-                        .frame(maxWidth: .infinity, minHeight: 1)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if log.hasOlder {
+                    // Reaching the top asks for the page above. A plain stack lays out every row
+                    // at once, so `onAppear` would fire at open; the row's place in the scroll
+                    // view's own frame says whether he can see it.
+                    // One height loading or not: a row that shrank as the page landed would move
+                    // everything below it, after the move that keeps his place (measured).
+                    Text("…").font(Mono.small)
+                        .foregroundStyle(Palette.faint).opacity(loadingOlder ? 1 : 0)
+                        .frame(maxWidth: .infinity)
                         .onGeometryChange(for: Bool.self) {
                             $0.frame(in: .named(Self.space)).maxY >= 0
                         } action: { visible in
-                            if visible { Task { await older(reader) } }
+                            if visible { Task { await older() } }
                         }
                         // A new row after a failed ask, so it looks again and retries. Not one
                         // per page: a fresh row measures itself before the page above is placed,
                         // and that chained every page of the transcript in at once (measured).
                         .id("older-\(olderFailures)")
-                    }
-                    ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
                 }
-                .scrollTargetLayout()
-                .padding(.vertical, 6)
+                ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
             }
-            .coordinateSpace(.named(Self.space))
-            .defaultScrollAnchor(.bottom)
-            .scrollPosition(id: $shown, anchor: .bottom)
-            .onChange(of: log.newest) { old, newest in
-                guard let newest, shown == nil || shown == old else { return }
-                reader.scrollTo(newest, anchor: .bottom)
+            .padding(.vertical, 6)
+        }
+        .coordinateSpace(.named(Self.space))
+        .scrollPosition($position)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        // When the content grows at the bottom he follows it down only from the bottom; reading
+        // above it, the top holds, so new messages land out of sight.
+        .defaultScrollAnchor(atBottom ? .bottom : .top, for: .sizeChanges)
+        .onScrollGeometryChange(for: CGFloat.self) {
+            $0.contentOffset.y
+        } action: { _, y in
+            offset = y
+        }
+        .onScrollGeometryChange(for: Bool.self) {
+            $0.visibleRect.maxY >= $0.contentSize.height - Self.bottomSlack
+        } action: { _, bottom in
+            atBottom = bottom
+            leftAt = bottom ? nil : (leftAt ?? log.newest)
+        }
+        // A page put in above grew the content by its height: move down by as much.
+        .onScrollGeometryChange(for: CGFloat.self) {
+            $0.contentSize.height
+        } action: { old, new in
+            guard prepending else { return }
+            prepending = false
+            position.scrollTo(y: offset + new - old)
+        }
+        .overlay(alignment: .bottom) {
+            if fresh > 0 {
+                Button {
+                    withAnimation { position.scrollTo(edge: .bottom) }
+                } label: {
+                    Text("↓ \(fresh) new").font(Mono.small).foregroundStyle(Palette.background)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Capsule().fill(Palette.finished))
+                }
+                .padding(.bottom, 8)
             }
         }
     }
 
     private static let space = "messages"
+    /// How close to the content's end still counts as the bottom.
+    private static let bottomSlack: CGFloat = 12
 
-    private func older(_ reader: ScrollViewProxy) async {
+    /// Entries that arrived since he left the bottom.
+    private var fresh: Int {
+        guard !atBottom, let leftAt else { return 0 }
+        return log.entries.reversed().prefix { $0.index > leftAt }.count
+    }
+
+    private func older() async {
         guard !loadingOlder, let oldest = log.oldest else { return }
         loadingOlder = true
         defer { loadingOlder = false }
@@ -258,9 +303,8 @@ struct MessagesView: View {
             olderFailures += 1
             return
         }
+        prepending = true
         log.merge(page)
-        // Where he was reading stays where it was: the older page goes above it.
-        reader.scrollTo(oldest, anchor: .top)
     }
 }
 
