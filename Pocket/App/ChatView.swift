@@ -264,6 +264,8 @@ struct MessagesView: View {
         } action: { old, new in
             guard prepending else { return }
             prepending = false
+            // At the bottom the bottom edge already holds (the size-change anchor).
+            guard !atBottom else { return }
             position.scrollTo(y: offset + new - old)
         }
         .overlay(alignment: .bottom) {
@@ -303,8 +305,10 @@ struct MessagesView: View {
             olderFailures += 1
             return
         }
-        prepending = true
         log.merge(page)
+        // Only a page that put entries above him moves him down; one that added nothing (empty,
+        // or entries already read) must not leave the next size change taken for it.
+        prepending = log.oldest != oldest
     }
 }
 
