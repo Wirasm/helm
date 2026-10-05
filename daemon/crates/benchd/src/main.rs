@@ -893,7 +893,7 @@ fn follow(
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "legacy (#418): 115 lines, limit 100")]
+#[expect(clippy::too_many_lines, reason = "legacy (#418): 108 lines, limit 100")]
 fn handle(core: Arc<Mutex<Core>>, stream: UnixStream) {
     // Bounded in time as well as bytes (R2): this connection gets DAEMON_IO_TIMEOUT to
     // deliver its line; an attach upgrade lifts the bound after the response.
