@@ -63,6 +63,9 @@ package struct PromptChoices: Equatable, Sendable {
 /// however the pages (`sessions/log`) arrived.
 package struct ChatLog: Equatable, Sendable {
     package private(set) var entries: [BenchLogEntry] = []
+    /// Times the transcript was found rewritten and what was read dropped (`merge`): its indices
+    /// started over.
+    package private(set) var resets = 0
 
     package init() {}
 
@@ -82,6 +85,7 @@ package struct ChatLog: Equatable, Sendable {
     package mutating func merge(_ page: BenchSessionLog) {
         if let newest, page.total <= newest {
             entries = []
+            resets += 1
         } else if page.entries.isEmpty {
             return
         }

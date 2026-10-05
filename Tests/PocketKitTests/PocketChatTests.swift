@@ -96,6 +96,7 @@ final class PocketChatTests: XCTestCase {
         // The file was rewritten shorter: following `after: 11` would bring nothing, ever.
         log.merge(BenchSessionLog(total: 5, entries: []))
         XCTAssertNil(log.newest, "what was read is dropped, so the next ask is the last page")
+        XCTAssertEqual(log.resets, 1, "the chat is told the numbering started over")
         log.merge(BenchSessionLog(total: 5, entries: (0...4).map(entry)))
         XCTAssertEqual(log.entries.map(\.index), Array(0...4))
     }
