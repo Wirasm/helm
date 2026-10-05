@@ -93,22 +93,36 @@ struct ChatPane: View {
     @State private var failure: String?
     @State private var linkFailure: String?
     @State private var page: PocketPage?
+    @State private var links = StoreLinks()
     /// The keyboard: the field takes it, and the messages give it back (a tap, or a scroll that
     /// drags it down).
     @FocusState private var typing: Bool
+
+    private struct LinkRequest: Equatable {
+        let workspace: String
+        let latestReply: Int?
+    }
+
+    private var linkRequest: LinkRequest? {
+        guard model.state == .connected, let workspace = row?.cwd else { return nil }
+        return LinkRequest(
+            workspace: workspace, latestReply: log.entries.last { $0.kind == .agent }?.index)
+    }
 
     private var row: BenchSessionRow? {
         model.sessions.values.joined().first { $0.id == chat }
     }
 
     var body: some View {
+        let linkRequest = linkRequest
         VStack(alignment: .leading, spacing: 10) {
             if let failure { Text(failure).font(Mono.small).foregroundStyle(Palette.asking) }
             if let linkFailure {
                 Text(linkFailure).font(Mono.small).foregroundStyle(Palette.asking)
             }
             MessagesView(
-                log: $log, chat: chat, busy: row.map { Attention($0) == .working } ?? false
+                log: $log, chat: chat, links: links,
+                busy: row.map { Attention($0) == .working } ?? false
             )
             .scrollDismissesKeyboard(.interactively)
             .simultaneousGesture(swiping)
@@ -118,15 +132,22 @@ struct ChatPane: View {
             Composer(chat: chat, target: row?.screen, after: log.newest, typing: $typing)
         }
         .task { await follow() }
-        .task(id: model.state) {
-            guard model.state == .connected else { return }
-            linkFailure = await model.loadStoreLinks()?.description
+        .task(id: linkRequest) {
+            links = StoreLinks()
+            linkFailure = nil
+            guard let linkRequest else { return }
+            let answer = await model.loadStoreLinks(workspace: linkRequest.workspace)
+            guard !Task.isCancelled else { return }
+            switch answer {
+            case let .success(value): links = value
+            case let .failure(why): linkFailure = why.description
+            }
         }
         .environment(
             \.openURL,
             OpenURLAction { url in
                 guard url.scheme == StoreLinks.scheme else { return .systemAction }
-                guard let document = model.storeLinks.page(at: url) else { return .discarded }
+                guard let document = links.page(at: url) else { return .discarded }
                 typing = false
                 page = document
                 return .handled
@@ -218,6 +239,7 @@ struct MessagesView: View {
     @EnvironmentObject private var memory: ChatMemory
     @Binding var log: ChatLog
     let chat: String
+    let links: StoreLinks
     /// The agent is working: what he sends now waits in its queue.
     let busy: Bool
     @State private var position = ScrollPosition(edge: .bottom)
@@ -257,7 +279,7 @@ struct MessagesView: View {
                         // and that chained every page of the transcript in at once (measured).
                         .id("older-\(olderFailures)")
                 }
-                ForEach(log.entries) { MessageRow(entry: $0).id($0.index) }
+                ForEach(log.entries) { MessageRow(entry: $0, links: links).id($0.index) }
                 ForEach(memory.pending[chat]?.messages ?? []) { message in
                     PendingRow(message: message, busy: busy)
                         // One that may not have gone can be put away; the rest wait for their prompt.
@@ -345,8 +367,8 @@ struct MessagesView: View {
 /// command printed as one faint line under it, and a compaction as a divider. Each can be
 /// selected in part and copied, or copied whole (`SelectableText`).
 struct MessageRow: View {
-    @EnvironmentObject private var model: PocketModel
     let entry: BenchLogEntry
+    let links: StoreLinks
 
     var body: some View {
         switch entry.kind {
@@ -373,7 +395,7 @@ struct MessageRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 SelectableText(
                     text: entry.text, markdown: true, font: Mono.bodyUI, color: Palette.text,
-                    links: model.storeLinks)
+                    links: links)
                 stamp
             }
             .frame(maxWidth: .infinity, alignment: .leading)

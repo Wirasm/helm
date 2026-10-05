@@ -11,14 +11,17 @@ slash command you sent shows what it printed under it, and a compaction is a div
 below types into the agent with Return; while it asks, the prompt's choices are buttons. `screen`
 shows its terminal live, with keys (⏎ esc ^c 1 2 3 ⇥ and arrows). Swipe left or right for the next
 or previous chat of the workspace; the name opens a searchable switcher. The pages list holds each
-workspace's plan and review pages (its prp store's `.html` files), last edited first, searchable; a
-page opens as helm renders a canvas, with a reply box when an agent opened it. It is never a remote
-for helm's window.
+workspace's Markdown and HTML documents, the 20 most recently edited first; search covers its
+entire prp store. A page opens as helm renders a canvas, with a reply box when an agent opened
+it. It is never a remote for helm's window.
 
 A document path in an agent's reply is tappable when it names an `.md` or `.html` file inside a
 store benchd serves. Absolute paths, `~/.prp/...`, inline code and markdown links open in Pocket:
-markdown uses the chat renderer, HTML uses the page viewer. Back returns to the same chat. The
-phone reads the document through benchd; paths outside its stores stay plain text.
+markdown uses the chat renderer, HTML uses the page viewer. A relative path such as
+`reports/launch-queue.md` is tappable when benchd lists that file in the chat's project store.
+The session's folder resolves the project, including a worktree. Unknown relative paths stay
+plain text. New agent replies refresh the file inventory. Back returns to the same chat.
+The phone reads documents through benchd; paths outside its stores stay plain text.
 
 It shares helm's code rather than copying it:
 
@@ -105,7 +108,12 @@ timeout 1200 cargo build --manifest-path daemon/Cargo.toml -p benchd
 timeout 900 python3 Pocket/test-store-links.py /tmp/pocket-links-proof.xcresult
 ```
 
-The fixture uses port 52247, a temporary home and a stub Claude session. It opens markdown and
-HTML, checks an HTML sibling script, and returns to the chat after both. It also checks keyboard
-dismissal, selection and the copy menu. Screenshots are attached to the result bundle. On exit,
-it removes its simulator, temporary files and UI DerivedData.
+The fixture uses port 52247, a temporary home and a stub Claude session. It opens absolute and
+relative Markdown/HTML paths, checks a document created after opening the chat and an HTML sibling
+script, and returns to the chat. Pages search
+finds a Markdown document outside the newest 20. It also checks keyboard dismissal, selection and
+the copy menu. Screenshots are attached to the result bundle. On exit, it removes its simulator,
+temporary files and UI DerivedData.
+
+To replay a real store, add `--store ~/.prp/<key>` to the Python command. It copies the store and
+changes only the copy's project registration; the source store stays untouched.

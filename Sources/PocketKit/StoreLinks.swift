@@ -5,16 +5,23 @@ import HelmWire
 package struct StoreLinks: Equatable, Sendable {
     private let roots: [String]
     private let home: String?
+    private let relativeRoot: String?
+    private let files: Set<String>
 
-    package init(stores: [BenchPrpStore] = [], home: String? = nil) {
+    package init(
+        stores: [BenchPrpStore] = [], home: String? = nil,
+        current: BenchPrpStore? = nil, files: [BenchPrpArtifact] = []
+    ) {
         roots = stores.compactMap { FilesystemPath.standardized($0.dir) }
         self.home = home
+        relativeRoot = current.flatMap { FilesystemPath.standardized($0.dir) }
+        self.files = Set(files.map(\.path))
     }
 
     package static let scheme = "pocket-page"
 
     package func page(_ token: String) -> PocketPage? {
-        let expanded = token.hasPrefix("~/") ? home.map { $0 + token.dropFirst() } : token
+        let expanded = expanded(token)
         guard let expanded, let path = FilesystemPath.standardized(expanded),
             path.lowercased().hasSuffix(".md") || path.lowercased().hasSuffix(".html"),
             let root = roots.first(where: { path.hasPrefix($0 + "/") })
@@ -25,13 +32,24 @@ package struct StoreLinks: Equatable, Sendable {
             store: root)
     }
 
+    private func expanded(_ token: String) -> String? {
+        if token.hasPrefix("~/") { return home.map { $0 + token.dropFirst() } }
+        if token.hasPrefix("/") { return token }
+        guard let relativeRoot,
+            let path = FilesystemPath.standardized(relativeRoot + "/" + token),
+            files.contains(path)
+        else { return nil }
+        return path
+    }
+
     package func page(at url: URL) -> PocketPage? {
         guard url.scheme == Self.scheme, url.host == nil else { return nil }
         return page(url.path)
     }
 
     /// Keep inline styling and web links. A filesystem destination outside a named store loses
-    /// its link attribute; explicit path tokens in the displayed text get document links too.
+    /// its link attribute; explicit path tokens get links too. Relative tokens must name a listed
+    /// file in this chat's store.
     package func linking(_ text: AttributedString) -> AttributedString {
         var out = text
         for run in text.runs {
@@ -43,7 +61,7 @@ package struct StoreLinks: Equatable, Sendable {
         let plain = String(text.characters)
         // This is a path-token grammar, not interpretation of the surrounding message.
         let pattern =
-            #"(?<![\w/~:.])(?:~/|/)[^\s`"'<>\[\]()]+\.(?:md|html)(?=$|[\s`"'<>\[\]()]|[.,;:!?](?=$|[\s`"'<>\[\]()]))"#
+            #"(?<![\w/~:.])(?:~/|/)?[^\s`"'<>\[\]()]+\.(?:md|html)(?=$|[\s`"'<>\[\]()]|[.,;:!?](?=$|[\s`"'<>\[\]()]))"#
         guard let tokens = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
         else { return out }
         for token in tokens.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {

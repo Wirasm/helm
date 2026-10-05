@@ -70,7 +70,7 @@ final class PocketPagesModelTests: XCTestCase {
         return model
     }
 
-    func testPagesListTheStoresHTMLAndKnowWhichAnAgentOpened() async throws {
+    func testPagesListMarkdownAndHTMLAndKnowWhichAnAgentOpened() async throws {
         let server = try benchd { nil }
         defer { server.stop() }
         let model = try await connected(to: server)
@@ -78,10 +78,33 @@ final class PocketPagesModelTests: XCTestCase {
         XCTAssertNil(refusal)
         XCTAssertEqual(model.pages.map(\.path), ["/w/helm"], "one section, the workspace's")
         let pages = model.pages.flatMap(\.pages)
-        XCTAssertEqual(pages.map(\.title), ["plans/a.plan"])
-        XCTAssertEqual(pages.map { model.isOpened($0) }, [true], "the canvas an agent opened")
+        XCTAssertEqual(pages.map(\.path), ["/s/plans/a.plan.md", page])
+        XCTAssertEqual(
+            pages.map { model.isOpened($0) }, [false, true], "the canvas an agent opened")
         let stores = try XCTUnwrap(server.requests.first { $0["verb"] as? String == "prp/stores" })
         XCTAssertEqual((stores["args"] as? [String: Any])?["workspace"] as? String, "/w/helm")
+    }
+
+    func testALargeInventoryKeepsOlderMarkdownSearchable() async throws {
+        let server = try benchd { nil }
+        defer { server.stop() }
+        let answer = server.answer
+        server.answer = { request in
+            guard request["verb"] as? String == "prp/artifacts" else { return answer(request) }
+            let files = (0..<2170).map { index -> [String: Any] in
+                let relative = index == 0 ? "reports/launch-queue.md" : "reports/recent-\(index).md"
+                return ["path": "/s/" + relative, "relative": relative, "modified_ms": index]
+            }
+            return ["id": request["id"] ?? "", "status": "ok", "data": ["files": files]]
+        }
+        let model = try await connected(to: server)
+        let refusal = await model.loadPages()
+        XCTAssertNil(refusal)
+        let section = try XCTUnwrap(model.pages.first)
+        XCTAssertEqual(section.pages.count, 2170)
+        XCTAssertEqual(section.matching("")?.pages.count, 20)
+        XCTAssertEqual(
+            section.matching("launch-queue")?.pages.map(\.title), ["reports/launch-queue"])
     }
 
     /// The reply is written over exactly what was read, with `notify`, so benchd mails the
@@ -92,7 +115,7 @@ final class PocketPagesModelTests: XCTestCase {
         let model = try await connected(to: server)
         _ = await model.loadPages()
         let refusal = await model.reply(
-            "keep it", to: try XCTUnwrap(model.pages.first?.pages.first))
+            "keep it", to: try XCTUnwrap(model.pages.first?.pages.first { $0.path == page }))
         XCTAssertNil(refusal)
         let write = try XCTUnwrap(server.requests.last { $0["verb"] as? String == "file/write" })
         let args = try XCTUnwrap(write["args"] as? [String: Any])
@@ -112,7 +135,8 @@ final class PocketPagesModelTests: XCTestCase {
         defer { server.stop() }
         let model = try await connected(to: server)
         _ = await model.loadPages()
-        let refusal = await model.reply("again", to: try XCTUnwrap(model.pages.first?.pages.first))
+        let refusal = await model.reply(
+            "again", to: try XCTUnwrap(model.pages.first?.pages.first { $0.path == page }))
         XCTAssertNil(refusal)
         let writes = server.requests.filter { $0["verb"] as? String == "file/write" }
         XCTAssertEqual(writes.count, 2)
@@ -143,7 +167,7 @@ final class PocketPagesModelTests: XCTestCase {
         defer { server.stop() }
         let model = try await connected(to: server)
         _ = await model.loadPages()
-        let page = try XCTUnwrap(model.pages.first?.pages.first)
+        let page = try XCTUnwrap(model.pages.first?.pages.first { $0.path == self.page })
         let answer = server.answer
         server.answer = { request in
             request["verb"] as? String == "file/read" ? [:] : answer(request)
@@ -160,7 +184,7 @@ final class PocketPagesModelTests: XCTestCase {
         defer { server.stop() }
         let model = try await connected(to: server)
         _ = await model.loadPages()
-        let page = try XCTUnwrap(model.pages.first?.pages.first)
+        let page = try XCTUnwrap(model.pages.first?.pages.first { $0.path == self.page })
         let answer = server.answer
         server.answer = { request in
             guard request["verb"] as? String == "file/read" else { return answer(request) }

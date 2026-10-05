@@ -88,4 +88,38 @@ final class StoreLinksTests: XCTestCase {
         let url = try XCTUnwrap(text.runs.first?.link)
         XCTAssertEqual(links.page(at: url)?.path, "\(root)/plans/hello world-é.md")
     }
+    func testRelativeTokensAndDestinationsRequireAListedFileInTheChatsStore() throws {
+        let store = BenchPrpStore(key: "helm-1", name: "helm", path: "/project", dir: root)
+        let scoped = StoreLinks(
+            stores: [store], home: "/remote/home", current: store,
+            files: [
+                BenchPrpArtifact(
+                    path: root + "/reports/launch-queue.md", relative: "reports/launch-queue.md",
+                    modifiedMs: 1),
+                BenchPrpArtifact(
+                    path: root + "/pages/a.html", relative: "pages/a.html", modifiedMs: 2),
+            ])
+        for source in [
+            "Read reports/launch-queue.md.", "`reports/launch-queue.md`",
+            "[queue](reports/launch-queue.md)", "pages/a.html", "./reports/launch-queue.md",
+        ] {
+            let text = scoped.linking(try AttributedString(markdown: source))
+            let url = try XCTUnwrap(text.runs.compactMap(\.link).first, source)
+            XCTAssertEqual(scoped.page(at: url)?.store, root)
+        }
+        for source in [
+            "reports/missing.md", "../elsewhere.md", "../helm-2/reports/launch-queue.md",
+            "[missing](reports/missing.md)",
+        ] {
+            let text = scoped.linking(try AttributedString(markdown: source))
+            XCTAssertTrue(text.runs.allSatisfy { $0.link == nil }, source)
+        }
+        XCTAssertNil(
+            links.page("reports/launch-queue.md"), "global roots do not imply a relative context")
+        let other = StoreLinks(stores: [store], current: store, files: [])
+        XCTAssertNil(
+            other.page("reports/launch-queue.md"),
+            "another inventory cannot borrow this chat’s file")
+    }
+
 }
