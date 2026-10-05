@@ -386,7 +386,24 @@ fn queued(record: &Value) -> Result<Option<Entry>, String> {
             a["origin"]["kind"]
         ));
     }
-    Ok((!text.trim().is_empty()).then(|| stamp.entry(Kind::User, None, text)))
+    Ok((!text.trim().is_empty()).then(|| stamp.entry(Kind::User, None, typed(&text))))
+}
+
+/// A prompt as he typed it. Claude Code 2.1.289 records a paste as
+/// `<pasted_content id="761d">\n…\n</pasted_content id="761d">`, each tag a line of its own,
+/// alone in the prompt (behind two blank lines) or between what he typed. The tag lines are
+/// dropped and the blank lines around the prompt trimmed; a prompt that only mentions the tag
+/// inside a line is kept as written.
+fn typed(text: &str) -> String {
+    let tag = |line: &str| {
+        (line.starts_with("<pasted_content id=\"") || line.starts_with("</pasted_content id=\""))
+            && line.ends_with("\">")
+    };
+    if !text.split('\n').any(tag) {
+        return text.to_string();
+    }
+    let pasted: Vec<&str> = text.split('\n').filter(|l| !tag(l)).collect();
+    pasted.join("\n").trim_matches('\n').to_string()
 }
 
 /// The text of a tool result or error: a string, or the `text` blocks of an array.
@@ -622,7 +639,7 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
                 other => return Err(format!("user block type {other:?}")),
             }
         }
-        let text = text.join("\n");
+        let text = typed(&text.join("\n"));
         if !text.trim().is_empty() {
             out.insert(0, stamp.entry(Kind::User, None, text));
         }
@@ -1072,6 +1089,50 @@ mod tests {
             ]
         );
         assert_eq!(t.entries[4].from.as_deref(), Some("lead"));
+        assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
+    }
+
+    /// Claude Code 2.1.289 records a paste wrapped in `<pasted_content id=…>` tags, whether it is
+    /// the whole prompt (Pocket sends every message as one) or follows what he typed. The row is
+    /// the text he typed and pasted, or Pocket's copy of a sent message never matches it and
+    /// stays on screen beside it (operator, 2026-10-05). Each record here is a real one's shape.
+    #[test]
+    fn a_pasted_prompt_reads_as_what_was_pasted() {
+        let pocket = "\n\n<pasted_content id=\"761d\">\nI agree on the pack grpuping\n\nYou can merge 3742\n\n3 I\u{2019}m not sure\n</pasted_content id=\"761d\">\n";
+        let typed_and_pasted = "send these two fixes\n\n\n<pasted_content id=\"80ba\">\nDPA must cover Azure\n\n#1380 opened 17h ago\n</pasted_content id=\"80ba\">\n\n\nand this spike 1376";
+        let two = "now\n\n<pasted_content id=\"0572\">\none\n</pasted_content id=\"0572\">\n\nand\n\n<pasted_content id=\"45d2\">\ntwo\n</pasted_content id=\"45d2\">\n";
+        let mentioned = "why does it say <pasted_content id=\"761d\"> in the chat?";
+        let t = read_claude(&[
+            user(json!(pocket)),
+            user(json!(typed_and_pasted)),
+            user(json!(two)),
+            user(json!(mentioned)),
+            json!({"type": "attachment", "timestamp": AT, "attachment": {
+                "type": "queued_command", "commandMode": "prompt", "origin": {"kind": "human"},
+                "prompt": "<pasted_content id=\"761d\">\nSend someone to see 3537\n\nI agree on all batch 8\n\n</pasted_content id=\"761d\">"}}),
+        ]);
+        assert_eq!(
+            shape(&t),
+            [
+                (
+                    Kind::User,
+                    None,
+                    "I agree on the pack grpuping\n\nYou can merge 3742\n\n3 I\u{2019}m not sure"
+                ),
+                (
+                    Kind::User,
+                    None,
+                    "send these two fixes\n\n\nDPA must cover Azure\n\n#1380 opened 17h ago\n\n\nand this spike 1376"
+                ),
+                (Kind::User, None, "now\n\none\n\nand\n\ntwo"),
+                (Kind::User, None, mentioned),
+                (
+                    Kind::User,
+                    None,
+                    "Send someone to see 3537\n\nI agree on all batch 8"
+                ),
+            ]
+        );
         assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
     }
 

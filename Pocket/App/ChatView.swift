@@ -113,6 +113,9 @@ struct ChatPane: View {
         model.sessions.values.joined().first { $0.id == chat }
     }
 
+    /// A turn is under way: what he sends now waits in the agent's queue.
+    private var busy: Bool { row.map { !$0.isIdle } ?? false }
+
     var body: some View {
         let linkRequest = linkRequest
         VStack(alignment: .leading, spacing: 10) {
@@ -120,12 +123,9 @@ struct ChatPane: View {
             if let linkFailure {
                 Text(linkFailure).font(Mono.small).foregroundStyle(Palette.asking)
             }
-            MessagesView(
-                log: $log, chat: chat, links: links,
-                busy: row.map { Attention($0) == .working } ?? false
-            )
-            .scrollDismissesKeyboard(.interactively)
-            .simultaneousGesture(swiping)
+            MessagesView(log: $log, chat: chat, links: links, busy: busy)
+                .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
             }
@@ -182,6 +182,9 @@ struct ChatPane: View {
             behind = await load(
                 log.newest.map { .after($0) } ?? .last,
                 limit: log.newest == nil ? ChatLog.page : 50)
+            // Only a transcript just read, and an agent benchd lists, can say a message was not
+            // taken.
+            if failure == nil, let row { memory.agent(chat, busy: !row.isIdle) }
             prompt = await choices()
         }
     }
@@ -282,9 +285,10 @@ struct MessagesView: View {
                 ForEach(log.entries) { MessageRow(entry: $0, links: links).id($0.index) }
                 ForEach(memory.pending[chat]?.messages ?? []) { message in
                     PendingRow(message: message, busy: busy)
-                        // One that may not have gone can be put away; the rest wait for their prompt.
+                        // One that may not have gone, or was not taken, can be put away; the rest
+                        // wait for their prompt.
                         .onTapGesture {
-                            if message.maybeSent { memory.dismiss(message.id, in: chat) }
+                            if message.canPutAway { memory.dismiss(message.id, in: chat) }
                         }
                 }
             }

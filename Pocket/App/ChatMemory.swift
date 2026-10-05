@@ -29,6 +29,13 @@ final class ChatMemory: ObservableObject {
     /// The chat's transcript was rewritten: where its pending messages were sent from is gone.
     func rewrote(_ chat: String) { pending[chat]?.forgetPlaces() }
 
+    /// The agent is working, or idle: a message an idle agent does not take says so.
+    func agent(_ chat: String, busy: Bool) {
+        guard var mine = pending[chat], !mine.messages.isEmpty else { return }
+        mine.agent(busy: busy, at: Date())
+        if mine != pending[chat] { pending[chat] = mine }
+    }
+
     /// He put away a message that may not have gone.
     func dismiss(_ id: PendingMessage.ID, in chat: String) { pending[chat]?.remove(id) }
 

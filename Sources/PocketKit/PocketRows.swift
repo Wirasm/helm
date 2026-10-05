@@ -37,6 +37,12 @@ package enum Attention: Sendable {
 }
 
 extension BenchSessionRow {
+    /// The agent has no turn under way: its harness says idle, or the session ended. Unlike
+    /// `Attention`, mail to him unread does not change it.
+    package var isIdle: Bool {
+        if case let .running(activity, _) = state { activity == "idle" } else { true }
+    }
+
     /// The agent itself says it waits on a prompt, not merely that mail to him is unread: when a
     /// chat reads the prompt's choices off its screen.
     package var waitsAtPrompt: Bool {

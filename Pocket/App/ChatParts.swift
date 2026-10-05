@@ -184,13 +184,14 @@ struct PendingRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 SelectableText(text: message.text, font: Mono.bodyUI, color: Palette.dim)
                 Text(state).font(Mono.stamp)
-                    .foregroundStyle(message.maybeSent ? Palette.asking : Palette.faint)
+                    .foregroundStyle(message.canPutAway ? Palette.asking : Palette.faint)
             }
         }
     }
 
     private var state: String {
         if message.maybeSent { return "no answer: it may not have gone · tap to put away" }
+        if message.notTaken { return "not taken: the agent is idle · tap to put away" }
         return busy ? "queued: the agent takes it when it can" : "sent"
     }
 }

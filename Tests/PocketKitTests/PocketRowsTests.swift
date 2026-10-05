@@ -33,6 +33,19 @@ final class PocketRowsTests: XCTestCase {
         XCTAssertFalse(row("x", .finished(atMs: 1)).waitsAtPrompt)
     }
 
+    /// Whether a message he sends now waits behind a turn, from the harness's own activity word.
+    /// Mail to him unread asks for him (`Attention.asking`) but says nothing of the turn: an agent
+    /// working with mail unread still queues what he sends (#664 review).
+    func testOnlyAnIdleOrEndedAgentIsIdle() {
+        let mail = BenchOperatorMail(unread: 1, since: Date(timeIntervalSince1970: 1))
+        XCTAssertTrue(row("x", running("idle")).isIdle)
+        XCTAssertTrue(row("x", running("idle"), mail: mail).isIdle)
+        XCTAssertTrue(row("x", .finished(atMs: 1)).isIdle)
+        XCTAssertFalse(row("x", running("busy"), mail: mail).isIdle)
+        XCTAssertFalse(row("x", running("waiting", "permission prompt")).isIdle)
+        XCTAssertFalse(row("x", running("waiting_on_tasks", "2 tasks")).isIdle)
+    }
+
     /// What a row wants from the operator, from what benchd says of it (#623): ● it waits on him
     /// (a prompt, a block, or mail to him unread), ✓ its turn ended and he has not looked, ○ it
     /// works; then, dimmed, ✓ a turn he has seen and ✓ a session that ended. Every activity word

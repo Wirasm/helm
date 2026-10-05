@@ -45,6 +45,44 @@ final class PocketPendingTests: XCTestCase {
         XCTAssertTrue(pending.messages.isEmpty)
     }
 
+    /// A message pasted into a prompt that already held what he typed is recorded as both
+    /// (Claude Code 2.1.289): the prompt holding his message as whole lines takes its place. One
+    /// that only holds his words inside a line does not.
+    func testAPromptHoldingTheMessageAsItsLinesTakesItsPlace() {
+        var pending = ChatPending()
+        pending.add("Merge \n3767 start the follow up\n\nD1 a\n\n", after: 2)
+        pending.reconcile(log([(3, .user, "not D1 a only")]))
+        XCTAssertEqual(pending.messages.count, 1, "his words inside a line")
+        pending.reconcile(
+            log([(4, .user, "half typed on the mac\n\n\nMerge \n3767 start the follow up\n\nD1 a")])
+        )
+        XCTAssertTrue(pending.messages.isEmpty)
+    }
+
+    /// An idle agent takes a message at once. One still waiting after the agent has sat idle for
+    /// `landing` since the last send did not land, and says so instead of waiting as queued for
+    /// good; while the agent works it waits.
+    func testAMessageAnIdleAgentNeverTookSaysSo() {
+        let start = Date(timeIntervalSince1970: 1000)
+        var pending = ChatPending()
+        pending.agent(busy: false, at: start)
+        pending.add("hello", after: 1)
+        pending.agent(busy: true, at: start + 600)
+        XCTAssertEqual(pending.messages.map(\.notTaken), [false], "queued behind a long turn")
+        pending.agent(busy: false, at: start + 601)
+        pending.agent(busy: false, at: start + 601 + ChatPending.landing - 1)
+        XCTAssertEqual(pending.messages.map(\.notTaken), [false], "idle, not for long yet")
+        pending.agent(busy: false, at: start + 601 + ChatPending.landing)
+        XCTAssertEqual(pending.messages.map(\.notTaken), [true])
+        pending.reconcile(log([(2, .user, "hello")]))
+        XCTAssertTrue(pending.messages.isEmpty, "it landed late after all")
+
+        pending.add("again", after: 2)
+        pending.agent(busy: false, at: start + 700)
+        pending.agent(busy: false, at: start + 700 + ChatPending.landing - 1)
+        XCTAssertEqual(pending.messages.map(\.notTaken), [false], "idle before it was sent")
+    }
+
     /// One benchd may have taken without answering is kept, and says so.
     func testAMessageThatMayNotHaveGoneSaysSo() {
         var pending = ChatPending()
