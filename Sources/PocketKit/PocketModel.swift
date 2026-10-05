@@ -30,8 +30,6 @@ package final class PocketModel: ObservableObject {
     /// The canvases on the bench an agent opened, standardized: a reply to one is mailed to it.
     @Published private var opened: Set<String> = []
 
-    @Published package private(set) var storeLinks = StoreLinks()
-
     private var client: BenchClient?
     private var following: AnyCancellable?
 
@@ -48,7 +46,6 @@ package final class PocketModel: ObservableObject {
         previews = [:]
         previewed = [:]
         pages = []
-        storeLinks = StoreLinks()
         opened = []
         guard let endpoint = BenchEndpoint.tcp(url.trimmingCharacters(in: .whitespaces)) else {
             state = .disconnected("\(url) is not tcp://<host>:<port>")
@@ -156,7 +153,7 @@ package final class PocketModel: ObservableObject {
         return nil
     }
 
-    /// The `.html` pages of every workspace's prp store (`prp/stores`, then `prp/artifacts`), a
+    /// The Markdown and HTML pages of every workspace's prp store (`prp/stores`, then `prp/artifacts`), a
     /// section per workspace. nil once listed, else why not; the last list stays.
     package func loadPages() async -> Refusal? {
         guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
@@ -164,7 +161,7 @@ package final class PocketModel: ObservableObject {
         var stores: [(workspace: String, key: String, dir: String)] = []
         for workspace in workspaces {
             let request = BenchPrpRequest(id: Self.id("stores"), .stores(workspace: workspace))
-            switch await Self.ask(request, at: endpoint, BenchPrpStores.self) {
+            switch await Self.ask(request, at: endpoint, BenchPrpStores.self, timeout: 5) {
             case let .success(answer):
                 if let key = answer.workspace,
                     let store = answer.stores.first(where: { $0.key == key }),
@@ -188,22 +185,39 @@ package final class PocketModel: ObservableObject {
         return nil
     }
 
-    /// The link authority is this connection's benchd, including its home for ~/ paths.
-    package func loadStoreLinks() async -> Refusal? {
-        guard let endpoint, let asked = client else { return Refusal(Self.notConnected) }
-        let stores = await Self.ask(
-            BenchPrpRequest(id: Self.id("stores"), .stores(workspace: nil)), at: endpoint,
-            BenchPrpStores.self)
-        let home = await Self.ask(
+    /// Each chat's link authority: all named roots, remote home, and its own store's files.
+    package func loadStoreLinks(workspace: String) async -> Result<StoreLinks, Refusal> {
+        guard let endpoint, let asked = client else { return .failure(Refusal(Self.notConnected)) }
+        let stores: BenchPrpStores
+        switch await Self.ask(
+            BenchPrpRequest(id: Self.id("stores"), .stores(workspace: workspace)), at: endpoint,
+            BenchPrpStores.self, timeout: 5)
+        {
+        case let .success(value): stores = value
+        case let .failure(why): return .failure(why)
+        }
+        let home: BenchPathResolved
+        switch await Self.ask(
             BenchPrpRequest(id: Self.id("home"), .resolvePath("~")), at: endpoint,
             BenchPathResolved.self)
-        guard client === asked else { return nil }
-        switch (stores, home) {
-        case let (.success(stores), .success(home)):
-            storeLinks = StoreLinks(stores: stores.stores, home: home.path)
-            return nil
-        case let (.failure(why), _), let (_, .failure(why)): return why
+        {
+        case let .success(value): home = value
+        case let .failure(why): return .failure(why)
         }
+        let current = stores.stores.first { $0.key == stores.workspace }
+        var files: [BenchPrpArtifact] = []
+        if let current {
+            let answer = await Self.ask(
+                BenchPrpRequest(id: Self.id("artifacts"), .artifacts(store: current.key)),
+                at: endpoint, BenchPrpArtifacts.self)
+            switch answer {
+            case let .success(list): files = list.files
+            case let .failure(why): return .failure(why)
+            }
+        }
+        guard client === asked else { return .failure(Refusal("the connection changed")) }
+        return .success(
+            StoreLinks(stores: stores.stores, home: home.path, current: current, files: files))
     }
 
     /// Reply to `page`: an entry added to its live file, written over exactly what was read

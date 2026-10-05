@@ -4,8 +4,8 @@ import PocketKit
 import SwiftUI
 import WebKit
 
-/// pages: a search field, then each workspace's plan and review pages as a section that
-/// collapses, last edited first.
+/// pages: each workspace's twenty newest Markdown/HTML documents in a collapsible section.
+/// Searching examines the full store inventory.
 struct PagesView: View {
     @EnvironmentObject private var model: PocketModel
     @State private var refused: String?
