@@ -346,6 +346,40 @@ fn tool_arg(input: &Value) -> String {
 }
 
 /// The text of a tool result or error: a string, or the `text` blocks of an array.
+/// A message sent while the agent worked that it took mid-turn (Claude Code 2.1.289): it is
+/// recorded only as this attachment, never as a `user` record, as a message taken at the turn's
+/// end is. His prompts and other sessions' messages are the conversation; a background task's
+/// notice in the same envelope is not.
+fn queued(record: &Value) -> Result<Option<Entry>, String> {
+    let a = &record["attachment"];
+    if a["type"] != "queued_command" || a["commandMode"] != "prompt" {
+        return Ok(None);
+    }
+    let stamp = Stamp::of(record)?;
+    let text = match &a["prompt"] {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .map(|b| match b["type"].as_str() {
+                Some("text") => b["text"].as_str().unwrap_or("").to_string(),
+                Some(kind) => format!("[{kind}]"),
+                None => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return Err("queued_command prompt is neither text nor blocks".into()),
+    };
+    if let Some((from, message)) = peer(a, &text) {
+        let mut entry = stamp.entry(Kind::User, None, message);
+        entry.from = Some(from);
+        return Ok(Some(entry));
+    }
+    if a["origin"]["kind"] != "human" || text.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(stamp.entry(Kind::User, None, text)))
+}
+
 fn plain_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -526,6 +560,9 @@ fn claude(record: &Value, tools: &mut HashMap<String, String>) -> Result<Vec<Ent
             // Hook summaries, API retries and the like: not the conversation.
             _ => Ok(Vec::new()),
         };
+    }
+    if kind == "attachment" {
+        return queued(record).map(|e| e.into_iter().collect());
     }
     if kind != "user" && kind != "assistant" {
         return Ok(Vec::new());
@@ -978,6 +1015,53 @@ mod tests {
                 (Kind::Error, None, "Prompt is too long"),
             ]
         );
+        assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
+    }
+
+    /// A message he sent while the agent worked, taken mid-turn, is recorded only as a
+    /// `queued_command` attachment: it reads as his prompt, where it was taken, as does one from
+    /// another session; a background task's notice in the same envelope does not.
+    #[test]
+    fn a_message_taken_mid_turn_is_his_prompt() {
+        let queued = |mode: &str, origin: Value, prompt: Value| {
+            json!({"type": "attachment", "timestamp": AT, "attachment": {
+                "type": "queued_command", "commandMode": mode, "origin": origin,
+                "prompt": prompt, "humanTurn": true}})
+        };
+        let t = read_claude(&[
+            user(json!("run the gate")),
+            json!({"type": "queue-operation", "operation": "enqueue", "timestamp": AT,
+                "content": "and then push"}),
+            assistant(json!([{"type": "text", "text": "Running."}])),
+            queued("prompt", json!({"kind": "human"}), json!("and then push")),
+            queued(
+                "prompt",
+                json!({"kind": "human"}),
+                json!([{"type": "text", "text": "this one"}, {"type": "image", "source": {}}]),
+            ),
+            queued(
+                "prompt",
+                json!({"kind": "peer", "name": "lead", "body": "status?"}),
+                json!("<agent-message from=\"lead\">status?</agent-message>"),
+            ),
+            queued(
+                "task-notification",
+                json!({"kind": "task-notification"}),
+                json!("<task-notification>done</task-notification>"),
+            ),
+            json!({"type": "attachment", "timestamp": AT, "attachment": {"type": "model"}}),
+        ]);
+        assert_eq!(
+            shape(&t),
+            [
+                (Kind::User, None, "run the gate"),
+                (Kind::Agent, None, "Running."),
+                (Kind::User, None, "and then push"),
+                (Kind::User, None, "this one\n[image]"),
+                (Kind::User, None, "status?"),
+            ]
+        );
+        assert_eq!(t.entries[4].from.as_deref(), Some("lead"));
         assert!(t.unreadable.is_empty(), "{:?}", t.unreadable);
     }
 
