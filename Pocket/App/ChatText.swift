@@ -2,19 +2,79 @@ import PocketKit
 import SwiftUI
 import UIKit
 
-/// A reply's markdown drawn for a `UITextView` (`SelectableText`): one attributed string, so a
-/// selection runs across blocks. Everything is in the one monospaced face, which is what lines a
-/// table's columns up.
+/// A reply's markdown drawn for `MarkdownView`: its runs of text blocks each as one attributed
+/// string for a `UITextView` (`SelectableText`), so a selection runs across them, and each table
+/// apart, as a grid of cells. Everything is in the one monospaced face.
+@MainActor
 enum ChatText {
-    static func markdown(
+    /// One part of a reply: blocks drawn as one text, or a table.
+    enum Segment {
+        case text(NSAttributedString)
+        /// Each row's cells, drawn; the header row first when `header`.
+        case table(rows: [[NSAttributedString]], header: Bool)
+    }
+
+    /// `text`'s segments, kept while the text and its links hold: a chat draws a reply on every
+    /// update, and the text views know their text by identity.
+    static func segments(
         _ text: String, font: UIFont, color: UIColor, links: StoreLinks = StoreLinks()
-    ) -> NSAttributedString {
-        let out = NSMutableAttributedString()
-        for (at, block) in ChatMarkdown.blocks(text).enumerated() {
-            if at > 0 { out.append(NSAttributedString(string: "\n")) }
-            out.append(draw(linked(block, with: links), font: font, color: color))
+    ) -> [Segment] {
+        if let kept = drawn[text], kept.links == links, kept.font == font { return kept.segments }
+        if drawn.count >= 400 { drawn.removeAll() }
+        let segments = draw(text, font: font, color: color, links: links)
+        drawn[text] = (links, font, segments)
+        return segments
+    }
+
+    private static var drawn: [String: (links: StoreLinks, font: UIFont, segments: [Segment])] =
+        [:]
+
+    private static func draw(
+        _ text: String, font: UIFont, color: UIColor, links: StoreLinks
+    ) -> [Segment] {
+        let blocks = ChatMarkdown.blocks(text).map { linked($0, with: links) }
+        var segments: [Segment] = []
+        var run = NSMutableAttributedString()
+        func closeRun() {
+            if run.length > 0 { segments.append(.text(run)) }
+            run = NSMutableAttributedString()
         }
-        return out
+        for (at, block) in blocks.enumerated() {
+            if case let .table(rows, header) = block.kind {
+                closeRun()
+                let bold = bolder(font)
+                segments.append(
+                    .table(
+                        rows: rows.enumerated().map { index, row in
+                            row.map {
+                                inline($0, font: header && index == 0 ? bold : font, color: color)
+                            }
+                        }, header: header))
+                continue
+            }
+            if run.length > 0 { run.append(NSAttributedString(string: "\n")) }
+            // Items of one list sit close; every other block has room above the next.
+            let next = blocks.indices.contains(at + 1) ? blocks[at + 1].kind : nil
+            run.append(draw(block, font: font, color: color, spacing: spacing(block.kind, next)))
+        }
+        closeRun()
+        return segments
+    }
+
+    /// The space under a block: none at the end of a run of text (the segments' own spacing
+    /// follows), a little between items of one list, and room between any other two blocks.
+    private static func spacing(_ kind: MarkdownBlock.Kind, _ next: MarkdownBlock.Kind?) -> CGFloat
+    {
+        guard let next, !isTable(next) else { return 0 }
+        return isItem(kind) && isItem(next) ? 3 : 8
+    }
+
+    private static func isItem(_ kind: MarkdownBlock.Kind) -> Bool {
+        if case .item = kind { true } else { false }
+    }
+
+    private static func isTable(_ kind: MarkdownBlock.Kind) -> Bool {
+        if case .table = kind { true } else { false }
     }
 
     private static func linked(_ block: MarkdownBlock, with links: StoreLinks) -> MarkdownBlock {
@@ -27,10 +87,15 @@ enum ChatText {
     }
 
     private static func draw(
-        _ block: MarkdownBlock, font: UIFont, color: UIColor
+        _ block: MarkdownBlock, font: UIFont, color: UIColor, spacing: CGFloat
     )
         -> NSAttributedString
     {
+        func paragraph(
+            _ text: NSAttributedString, first: CGFloat = 0, rest: CGFloat = 0, next: CGFloat? = nil
+        ) -> NSAttributedString {
+            ChatText.paragraph(text, first: first, rest: rest, next: next, spacing: spacing)
+        }
         let space = " ".size(withAttributes: [.font: font]).width
         switch block.kind {
         case .paragraph:
@@ -61,8 +126,8 @@ enum ChatText {
             }
             line.insert(bar, at: 0)
             return paragraph(line, first: 0, rest: 2 * space, next: 0)
-        case let .table(rows, header):
-            return paragraph(table(rows, header: header, font: font, color: color))
+        case .table:
+            preconditionFailure("a table is drawn apart, as a grid (segments)")
         case .rule:
             return paragraph(
                 NSAttributedString(
@@ -78,42 +143,6 @@ enum ChatText {
         out.addAttribute(
             .backgroundColor, value: UIColor(Palette.sheet),
             range: NSRange(location: 0, length: out.length))
-        return out
-    }
-
-    /// Columns padded to their widest cell, the header bold and ruled off under it.
-    private static func table(
-        _ rows: [[AttributedString]], header: Bool, font: UIFont, color: UIColor
-    ) -> NSAttributedString {
-        let cells = rows.map { $0.map { String($0.characters) } }
-        let columns = cells.map(\.count).max() ?? 0
-        let widths = (0..<columns).map { column in
-            cells.map { $0.indices.contains(column) ? $0[column].count : 0 }.max() ?? 0
-        }
-        let bold = bolder(font)
-        let out = NSMutableAttributedString()
-        for index in cells.indices {
-            if index > 0 { out.append(NSAttributedString(string: "\n")) }
-            let isHeader = header && index == 0
-            for column in 0..<columns {
-                let cell =
-                    rows[index].indices.contains(column) ? rows[index][column] : AttributedString()
-                out.append(inline(cell, font: isHeader ? bold : font, color: color))
-                let padding =
-                    widths[column] - cell.characters.count + (column < columns - 1 ? 2 : 0)
-                out.append(
-                    NSAttributedString(
-                        string: String(repeating: " ", count: padding),
-                        attributes: [.font: font, .foregroundColor: color]))
-            }
-            if isHeader {
-                let rule = widths.map { String(repeating: "─", count: $0) }.joined(separator: "  ")
-                out.append(
-                    NSAttributedString(
-                        string: "\n" + rule,
-                        attributes: [.font: font, .foregroundColor: UIColor(Palette.dim)]))
-            }
-        }
         return out
     }
 
@@ -153,9 +182,10 @@ enum ChatText {
     }
 
     /// A block's paragraphs, one per line of it: the first line indented `first`, each later one
-    /// `next` (`rest` when nil), a wrapped line `rest`, and a little space under the last only.
+    /// `next` (`rest` when nil), a wrapped line `rest`, and `spacing` under the last only.
     private static func paragraph(
-        _ text: NSAttributedString, first: CGFloat = 0, rest: CGFloat = 0, next: CGFloat? = nil
+        _ text: NSAttributedString, first: CGFloat, rest: CGFloat, next: CGFloat?,
+        spacing: CGFloat
     ) -> NSAttributedString {
         let out = NSMutableAttributedString(attributedString: text)
         let string = out.string as NSString
@@ -166,7 +196,7 @@ enum ChatText {
             let style = NSMutableParagraphStyle()
             style.firstLineHeadIndent = range.location == 0 ? first : next ?? rest
             style.headIndent = rest
-            style.paragraphSpacing = NSMaxRange(enclosing) >= string.length ? 4 : 0
+            style.paragraphSpacing = NSMaxRange(enclosing) >= string.length ? spacing : 0
             out.addAttribute(.paragraphStyle, value: style, range: enclosing)
         }
         return out

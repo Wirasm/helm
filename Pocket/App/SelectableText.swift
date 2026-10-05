@@ -12,15 +12,17 @@ import UIKit
 struct SelectableText: UIViewRepresentable {
     @Environment(\.openURL) private var openURL
     let text: String
-    /// Drawn as markdown, blocks and all (`ChatText.markdown`), rather than as written.
-    var markdown = false
+    /// Drawn this way rather than as `text` is written (a reply's markdown, `ChatText`); known
+    /// by identity, so it must be kept, not drawn again on every update.
+    var styled: NSAttributedString?
     let font: UIFont
     let color: Color
     /// At most this many lines, cut at the end (0 for all); a selection still copies all of it.
     var lines = 0
     /// What "Copy message" copies, when not the text as drawn: the message as the agent wrote it.
     var copy: String?
-    var links = StoreLinks()
+    /// Wraps at this width even when offered more, or nothing (a table's cell).
+    var maxWidth: CGFloat?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -56,7 +58,8 @@ struct SelectableText: UIViewRepresentable {
     )
         -> CGSize?
     {
-        context.coordinator.size(of: self, width: proposal.width ?? .greatestFiniteMagnitude)
+        let offered = proposal.width ?? .greatestFiniteMagnitude
+        return context.coordinator.size(of: self, width: min(offered, maxWidth ?? offered))
     }
 
     /// A read-only text view with no inset, no padding and no scrolling, `lines` deep.
@@ -77,7 +80,7 @@ struct SelectableText: UIViewRepresentable {
     @MainActor private static let measure = textView(lines: 0)
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
-        private var shown: (text: String, links: StoreLinks, styled: NSAttributedString)?
+        private var shown: (text: String, styled: NSAttributedString)?
         /// The size at each width offered, for what is shown.
         private var sizes: [CGFloat: CGSize] = [:]
         /// What the view on screen was last given.
@@ -88,14 +91,17 @@ struct SelectableText: UIViewRepresentable {
 
         /// The text styled, styled again only when it changed.
         func styled(_ view: SelectableText) -> NSAttributedString {
-            if let shown, shown.text == view.text, shown.links == view.links { return shown.styled }
-            let color = UIColor(view.color)
-            let styled =
-                view.markdown
-                ? ChatText.markdown(view.text, font: view.font, color: color, links: view.links)
-                : NSAttributedString(
-                    string: view.text, attributes: [.font: view.font, .foregroundColor: color])
-            shown = (view.text, view.links, styled)
+            if let given = view.styled {
+                if shown?.styled === given { return given }
+                shown = (view.text, given)
+                sizes = [:]
+                return given
+            }
+            if let shown, shown.text == view.text { return shown.styled }
+            let styled = NSAttributedString(
+                string: view.text,
+                attributes: [.font: view.font, .foregroundColor: UIColor(view.color)])
+            shown = (view.text, styled)
             sizes = [:]
             return styled
         }

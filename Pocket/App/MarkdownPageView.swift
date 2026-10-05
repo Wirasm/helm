@@ -12,8 +12,7 @@ struct MarkdownPageView: View {
     var body: some View {
         ScrollView {
             if let text {
-                SelectableText(text: text, markdown: true, font: Mono.bodyUI, color: Palette.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                MarkdownView(text: text)
             } else if let failed {
                 Text(failed).font(Mono.small).foregroundStyle(Palette.asking)
             } else {
