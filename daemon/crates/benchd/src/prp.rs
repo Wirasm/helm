@@ -342,9 +342,9 @@ pub fn stores(args: &Value) -> Result<Value, String> {
 }
 
 /// `prp/artifacts`: a store's renderable files at every depth, newest first. Dotfiles and the
-/// store's own `project.json` are skipped, and only real directories are entered, so a symlink
-/// cycle cannot spin the walk. `store` must name a store under the prp home, so this lists
-/// stores and nothing else.
+/// store's own `project.json` are skipped, only real directories are entered, so a symlink
+/// cycle cannot spin the walk, and source is not entered (`walk`). `store` must name a
+/// store under the prp home, so this lists stores and nothing else.
 pub fn artifacts(args: &Value) -> Result<Value, String> {
     let args: PrpArtifactsArgs =
         serde_json::from_value(args.clone()).map_err(|e| format!("prp/artifacts args: {e}"))?;
@@ -363,13 +363,23 @@ pub fn artifacts(args: &Value) -> Result<Value, String> {
     Ok(json!(PrpArtifacts { files }))
 }
 
+/// The walk enters no source: a git checkout or worktree (a folder holding `.git`, itself a
+/// folder or a file) and installed packages (`node_modules`). Agents write documents into a
+/// store, but one that runs a benchmark or a fixture there leaves whole checkouts behind, and
+/// their READMEs are not anyone's artifacts. Archon's store held 1.2 million such files under
+/// `bench/`, which made every listing take seconds and fill with package READMEs. The store
+/// itself is never source: a store kept under git is still listed.
 fn walk(dir: &Path, store: &Path, files: &mut Vec<PrpArtifact>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.filter_map(Result::ok) {
+    let entries: Vec<fs::DirEntry> = entries.filter_map(Result::ok).collect();
+    if dir != store && entries.iter().any(|e| e.file_name() == ".git") {
+        return;
+    }
+    for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        if name.starts_with('.') || name == "node_modules" {
             continue;
         }
         let path = entry.path();

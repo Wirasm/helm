@@ -9,6 +9,12 @@ import SwiftUI
 /// see. Anchored to the strip's artifact button; ⌘O opens this. The listing refreshes on
 /// every open. Everything in it is benchd's answer (`PrpStores`): the stores live on the
 /// agents' machine (M5c, #459).
+///
+/// **benchd is asked off the main thread, and the popover's size is fixed.** A store's walk
+/// can take seconds, and SwiftUI builds this view again on every redraw of the strip while it
+/// is open, so a listing asked for in `init` blocked helm once per redraw. A popover also
+/// sizes its window once, from its content at presentation (#50): sized from a fixed frame, it
+/// cannot be sized from a placeholder and then squeeze the real listing into a sliver.
 struct ArtifactBrowser: View {
     /// What to do with a chosen file — a closure rather than the workbench, so the
     /// browser stays a view over the stores and never learns what a bench is.
@@ -22,15 +28,10 @@ struct ArtifactBrowser: View {
     /// benchd, asked about its stores and about a typed path.
     private let prp: PrpStores
 
-    /// Stores, selection and files together, resolved by `ArtifactListing`.
-    ///
-    /// **Seeded in `init`, not in `onAppear`.** A popover sizes its window once, from
-    /// whatever its content is at presentation, and `onAppear` runs after that — so
-    /// discovering there sized this popover from the empty placeholder below and left the
-    /// real listing to render into an 8pt sliver (#50). Anything that moves this work back
-    /// to `onAppear` brings that back. `ArtifactBrowserTests` pins it by constructing a
-    /// browser and reading this without ever laying one out.
-    @State private(set) var listing: ArtifactListing
+    /// Stores, selection and files together, resolved by `ArtifactListing` on a detached task.
+    @State private var listing = ArtifactListing.none
+    /// Whether benchd is still being asked: for the stores on open, or for a picked store's files.
+    @State private var pending = true
 
     init(
         workspaceRoot: String?,
@@ -42,14 +43,13 @@ struct ArtifactBrowser: View {
         self.workspaceRoot = workspaceRoot
         self.prp = prp
         self.onDismiss = onDismiss
-        _listing = State(
-            initialValue: .load(prp, workspace: workspaceRoot, remembered: Self.rememberedKey)
-        )
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let failure = listing.failure, listing.stores.isEmpty {
+            if pending, listing.stores.isEmpty {
+                message("Listing the artifact stores…")
+            } else if let failure = listing.failure, listing.stores.isEmpty {
                 message("Could not list the artifact stores: \(failure)")
             } else if listing.stores.isEmpty {
                 emptyState
@@ -65,11 +65,18 @@ struct ArtifactBrowser: View {
                 Divider()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
+                    // Lazy: a store can hold thousands of artifacts, and only the rows on
+                    // screen are built.
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(listing.files, id: \.path) { file in
                             fileRow(file)
                         }
-                        if let failure = listing.failure {
+                        if pending {
+                            Text("Listing…")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.textMuted)
+                                .padding(8)
+                        } else if let failure = listing.failure {
                             message("Could not list this project: \(failure)")
                         } else if listing.files.isEmpty {
                             Text("No artifacts in this project yet.")
@@ -80,7 +87,7 @@ struct ArtifactBrowser: View {
                     }
                     .padding(8)
                 }
-                .frame(maxHeight: 420)
+                .frame(maxHeight: .infinity)
             }
 
             Divider()
@@ -92,28 +99,44 @@ struct ArtifactBrowser: View {
             }
             .padding(10)
         }
-        .frame(width: 380)
-        .onAppear(perform: refresh)
+        .frame(width: 380, height: 520, alignment: .top)
+        .task { await refresh() }
     }
 
     /// The picker's binding. Picking a store re-lists and remembers it in one move —
-    /// there is no separate `onChange` to fall out of step with the write.
+    /// there is no separate `onChange` to fall out of step with the write. A listing that
+    /// arrives after another store was picked is dropped.
     private var selection: Binding<String> {
         Binding(
             get: { listing.selectedKey },
             set: { key in
-                listing = listing.selecting(key, from: prp)
                 Self.rememberedKey = key
+                let picked = listing.picking(key)
+                listing = picked
+                pending = true
+                let prp = prp
+                Task {
+                    let next = await Task.detached { picked.selecting(key, from: prp) }.value
+                    guard listing.selectedKey == key else { return }
+                    listing = next
+                    pending = false
+                }
             }
         )
     }
 
-    /// Re-read on every open, so a store an agent wrote to while the popover was shut is
-    /// listed the next time it is opened. The initialiser has already done this once for
-    /// the sizing pass; this is what keeps a reopened popover current.
-    private func refresh() {
-        listing = .load(prp, workspace: workspaceRoot, remembered: Self.rememberedKey)
-        Self.rememberedKey = listing.selectedKey
+    /// Read on every open, so a store an agent wrote to while the popover was shut is
+    /// listed the next time it is opened.
+    private func refresh() async {
+        let prp = prp
+        let workspace = workspaceRoot
+        let remembered = Self.rememberedKey
+        let found = await Task.detached {
+            ArtifactListing.load(prp, workspace: workspace, remembered: remembered)
+        }.value
+        listing = found
+        pending = false
+        Self.rememberedKey = found.selectedKey
     }
 
     /// Last-picked store key — the fallback when no workspace is open, or when the open

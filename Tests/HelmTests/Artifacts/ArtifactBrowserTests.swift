@@ -8,18 +8,13 @@ import XCTest
 /// benchd's answers (M5c) and the daemon gate's to test; the selection rule is
 /// `ArtifactListingTests`'.
 final class ArtifactBrowserTests: XCTestCase {
-    /// #50's actual defect, as an assertion: a browser that has only been *constructed*
-    /// already knows its stores and its files.
-    ///
-    /// This is not pedantry about initialisers. A popover sizes its window once, from its
-    /// content as it stands at presentation, and `.onAppear` runs after that pass — so a
-    /// browser that discovered its stores there was sized from its own "no stores found"
-    /// placeholder and never grew, and the 26 artifacts it then found rendered into an 8pt
-    /// sliver. Nothing about that is visible from a listing assertion; the only thing that
-    /// distinguishes the broken build from the fixed one, without a window, is *when* the
-    /// listing exists. So that is what is pinned here.
+    /// SwiftUI builds the browser again on every redraw of the tab strip while the popover is
+    /// open, on the main thread. It used to ask benchd for its listing right there, and a walk
+    /// of Archon's store took seconds, so helm stopped answering for that long once per
+    /// redraw. Building the browser asks benchd nothing; it asks when it appears, off the main
+    /// thread.
     @MainActor
-    func testANewlyConstructedBrowserAlreadyHasItsListing() throws {
+    func testBuildingABrowserAsksBenchdNothing() throws {
         let prp = try FakePrp()
         defer { prp.remove() }
         let server = try FakeBenchd(
@@ -28,20 +23,16 @@ final class ArtifactBrowserTests: XCTestCase {
         server.answer = server.answeringPrp(prp) { raw in
             ["id": raw["id"] ?? "", "status": "refused", "reason": "not a prp verb"]
         }
-        let store = try prp.store("proj", path: "/Users/x/proj", name: "Proj")
-        let file = store.appendingPathComponent("issues/issue-50.md")
-        try FileManager.default.createDirectory(
-            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "content".write(to: file, atomically: true, encoding: .utf8)
+        try prp.store("proj", path: "/Users/x/proj", name: "Proj")
 
-        let browser = ArtifactBrowser(
+        _ = ArtifactBrowser(
             workspaceRoot: "/Users/x/proj",
             prp: PrpStores(client: BenchClient(endpoint: server.endpoint)),
             onOpen: { _ in },
             onDismiss: {}
         )
 
-        XCTAssertEqual(browser.listing.selectedKey, "proj")
-        XCTAssertEqual(browser.listing.files.map(\.relative), ["issues/issue-50.md"])
+        let asked = server.requests.compactMap { $0["verb"] as? String }
+        XCTAssertEqual(asked.filter { $0.hasPrefix("prp/") }, [])
     }
 }
