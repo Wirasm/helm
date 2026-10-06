@@ -12892,6 +12892,61 @@ fn prp_stores_and_artifacts_list_benchds_home() {
     }
 }
 
+/// A store an agent ran a benchmark in, as Archon's was on 2026-10-06: `bench/` held git
+/// worktrees of the project with their `node_modules`, 1.2 million files that the walk read
+/// on every ⌘O and answered as 13,359 "artifacts" headed by package READMEs. A checkout and an
+/// install are source, so the listing leaves them out; what the run wrote beside them is still
+/// listed, and a store kept under git is still a store.
+#[test]
+fn prp_artifacts_leave_out_checkouts_and_installed_packages() {
+    let home = TestHome::claim("prp-artifacts-source");
+    let (_daemon, port) = tcp_daemon(&home.dir);
+    let store = home.dir.join(".prp/archon-1");
+    let put = |rel: &str| {
+        let path = store.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "x").unwrap();
+    };
+    put("project.json");
+    fs::create_dir_all(store.join(".git")).unwrap();
+    put("plans/feature.plan.md");
+    put("spikes/fixture/node_modules/pkg/README.md");
+    let bundle = "bench/sdlc-bundle";
+    // A clone: `.git` is a folder.
+    put(&format!("{bundle}/b2/wt/candidate/.git/description.md"));
+    put(&format!("{bundle}/b2/wt/candidate/README.md"));
+    put(&format!("{bundle}/b2/wt/candidate/packages/web/index.html"));
+    put(&format!(
+        "{bundle}/b2/wt/candidate/node_modules/zod/README.md"
+    ));
+    // A worktree: `.git` is a file.
+    put(&format!("{bundle}/b5/wt/.git"));
+    put(&format!("{bundle}/b5/wt/AGENTS.md"));
+    put(&format!("{bundle}/b3/judge/doc-01-triage.md"));
+
+    let listed = ok(&tcp_verb(
+        port,
+        "prp/artifacts",
+        serde_json::json!({ "store": "archon-1" }),
+    ))
+    .clone();
+    let mut relative: Vec<_> = listed["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["relative"].as_str().unwrap().to_string())
+        .collect();
+    relative.sort();
+    assert_eq!(
+        relative,
+        [
+            "bench/sdlc-bundle/b3/judge/doc-01-triage.md",
+            "plans/feature.plan.md"
+        ],
+        "{listed}"
+    );
+}
+
 /// ⇧⌘O's typed path: `~` is benchd's home, not the client's, and nothing there is a refusal.
 #[test]
 fn path_resolve_expands_against_benchds_home() {
