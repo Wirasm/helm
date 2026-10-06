@@ -89,9 +89,8 @@ enum TerminalStorePath {
 
 extension WorkbenchModel {
     /// Open the first of `candidates` that is a file in a prp store as a canvas pane, where
-    /// benchd's placement rules put it. Sent as helm's, like `openLink`, so benchd moves no focus:
-    /// the pane appears beside the terminal and the keyboard stays there. The pane, or nil when
-    /// none of them is one.
+    /// benchd's placement rules put it. The operator's own `pane/open`, as a ⌘-clicked `file://`
+    /// link is: the click was the operator's gesture. The pane, or nil when none of them is one.
     ///
     /// The questions go off the main actor, as `newNote`'s do: they are blocking round trips. A
     /// workspace switched meanwhile opens nothing, as a note does not: benchd would put the pane
@@ -102,6 +101,6 @@ extension WorkbenchModel {
         let prp = PrpStores(client: client)
         let found = await Task.detached { TerminalStorePath.storeFile(candidates, prp: prp) }.value
         guard let found, workspacePath == clickedIn else { return nil }
-        return send(.paneOpen(surface: .canvas(path: found)), by: .helm)
+        return send(.paneOpen(surface: .canvas(path: found)), by: .operatorGesture)
     }
 }

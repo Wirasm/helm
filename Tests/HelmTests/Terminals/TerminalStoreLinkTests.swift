@@ -71,7 +71,7 @@ final class TerminalStoreLinkTests: XCTestCase {
         return opened == nil
     }
 
-    func testAStorePathOpensAsACanvasPaneBesideTheTerminal() throws {
+    func testAStorePathIsTheOperatorsOpenOfThatFile() throws {
         try mount()
         let report = try file("reports/launch-queue.md", in: store)
 
@@ -82,8 +82,8 @@ final class TerminalStoreLinkTests: XCTestCase {
         XCTAssertEqual(
             (surface?["source"] as? [String: Any])?["path"] as? String, report, "benchd's path")
         XCTAssertEqual(
-            (sent["by"] as? [String: Any])?["kind"] as? String, "helm",
-            "it appears beside the terminal; the keyboard stays in the terminal clicked in")
+            (sent["by"] as? [String: Any])?["kind"] as? String, "operator",
+            "the click is the operator's gesture, as it is for a file:// link")
         XCTAssertNil(sent["asked"])
     }
 
