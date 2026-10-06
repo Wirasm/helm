@@ -18,8 +18,9 @@ struct WorkspacePicker: View {
     let open: (String) -> Void
     let dismiss: () -> Void
 
-    /// Read once, in `init`, for the reason `ArtifactBrowser` reads its listing there: a sheet
-    /// sizes itself from its first layout.
+    /// Read once, in `init`: a sheet sizes itself from its first layout (#50). Blocking here is
+    /// cheap, since `prp/stores` without a workspace reads each store's `project.json` and walks
+    /// no files.
     @State private var roots: Result<[String], PrpStores.Failure>
     @State private var failure: String?
 
