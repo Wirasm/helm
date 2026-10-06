@@ -113,4 +113,41 @@ final class TerminalStoreLinkTests: XCTestCase {
         }
         XCTAssertEqual(path.value, report)
     }
+
+    /// The operator switches workspace while benchd is still answering: the pane would land on the
+    /// bench now showing, not beside the terminal clicked, so nothing opens.
+    func testAWorkspaceSwitchedMeanwhileOpensNothing() async throws {
+        let first = "/tmp/helm-toy-a"
+        let second = "/tmp/helm-toy-b"
+        rig = try toyRig(
+            document: BenchDocument(
+                workspaces: [
+                    .init(path: first, bench: ToyBench.bench([ToyBench.terminal()])),
+                    .init(path: second, bench: ToyBench.bench([ToyBench.terminal()])),
+                ], active: first))
+        let held = DispatchSemaphore(value: 0)
+        let toy = rig.server.answeringPrp(prp, else: rig.server.answer)
+        rig.server.answer = { raw in
+            if raw["verb"] as? String == "prp/stores" { held.wait() }
+            return toy(raw)
+        }
+        let report = try file("reports/plan.md", in: store)
+
+        let opening = Task { await rig.model.openStoreFile([report]) }
+        let deadline = Date().addingTimeInterval(5)
+        while !asked("prp/stores") {
+            guard Date() < deadline else {
+                held.signal()
+                return XCTFail("control: helm never asked benchd for its stores")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        rig.model.send(.workspaceActivate(path: second), by: .operatorGesture)
+        held.signal()
+
+        let opened = await opening.value
+        XCTAssertEqual(rig.model.workspacePath?.value, second, "control: the switch happened")
+        XCTAssertNil(opened)
+        XCTAssertNil(self.opened, "no pane/open was sent")
+    }
 }

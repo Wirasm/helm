@@ -93,12 +93,15 @@ extension WorkbenchModel {
     /// the pane appears beside the terminal and the keyboard stays there. The pane, or nil when
     /// none of them is one.
     ///
-    /// The questions go off the main actor, as `newNote`'s do: they are blocking round trips.
+    /// The questions go off the main actor, as `newNote`'s do: they are blocking round trips. A
+    /// workspace switched meanwhile opens nothing, as a note does not: benchd would put the pane
+    /// on the bench now showing, not beside the terminal that was clicked.
     @discardableResult
     func openStoreFile(_ candidates: [String]) async -> Pane.ID? {
+        let clickedIn = workspacePath
         let prp = PrpStores(client: client)
         let found = await Task.detached { TerminalStorePath.storeFile(candidates, prp: prp) }.value
-        guard let found else { return nil }
+        guard let found, workspacePath == clickedIn else { return nil }
         return send(.paneOpen(surface: .canvas(path: found)), by: .helm)
     }
 }
