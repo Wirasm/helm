@@ -28,9 +28,9 @@ the badge asks for.
 
 **`just release-resume <session-id> [cwd]` swaps everything for an operator who is away (#404).**
 It builds (`make release`, `cargo install` of `bench` and `benchd`, so the two always ship
-together, then `scripts/sign-bench.sh`, which `just benchd-install` runs too: an Apple
+together, then `scripts/sign-bench.sh`, which `just benchd-install` runs too unless `--no-build`: an Apple
 Development signature with a fixed identifier, so a privacy grant given to benchd survives the next
-build instead of prompting again; without that identity they stay ad hoc), quits helm by pid, restarts benchd (`launchctl kickstart -k` when the login agent from
+build instead of prompting again; without that identity, or if signing fails, they stay ad hoc and the run goes on), quits helm by pid, restarts benchd (`launchctl kickstart -k` when the login agent from
 `just benchd-install` is loaded), swaps the bundle with `BundleSwap.script`, waits for the old
 session to be gone, resumes it with `bench spawn --resume --remote-control` in a pane of the new
 helm, then runs `bench restore --all` for the other panes. The session must be one the run ends:

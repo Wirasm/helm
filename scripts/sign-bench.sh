@@ -8,6 +8,7 @@
 #
 # Usage: sign-bench.sh <bin-dir>. With no Apple Development identity in the keychain (a contributor,
 # CI) it says so and leaves the ad hoc signature: the binaries still run, the prompts just come back.
+# Callers treat a failure as a warning for the same reason.
 set -u
 bin="${1:?usage: sign-bench.sh <bin-dir>}"
 identity="$(security find-identity -v -p codesigning 2>/dev/null |
@@ -18,6 +19,6 @@ if [ -z "$identity" ]; then
 fi
 for name in bench benchd; do
   timeout 60 codesign --force --sign "$identity" --identifier "com.wirasm.$name" --timestamp=none \
-    "$bin/$name" 2>/dev/null || { echo "sign-bench: signing $bin/$name failed" >&2; exit 1; }
+    "$bin/$name" || { echo "sign-bench: signing $bin/$name failed; it keeps cargo's ad hoc signature" >&2; exit 1; }
 done
 echo "sign-bench: bench and benchd signed by $identity"
