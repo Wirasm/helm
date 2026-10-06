@@ -97,6 +97,8 @@ struct ChatPane: View {
     /// The keyboard: the field takes it, and the messages give it back (a tap, or a scroll that
     /// drags it down).
     @FocusState private var typing: Bool
+    /// Where this chat's tables are: a swipe that starts on one scrolls the table, not the chat.
+    @State private var tables = TableRegions()
 
     private struct LinkRequest: Equatable {
         let workspace: String
@@ -125,6 +127,7 @@ struct ChatPane: View {
             }
             MessagesView(log: $log, chat: chat, links: links, busy: busy)
                 .scrollDismissesKeyboard(.interactively)
+                .environment(\.tableRegions, tables)
                 .simultaneousGesture(swiping)
             if let prompt, let target = row?.screen {
                 ChoicesBar(shown: $prompt, prompt: prompt, target: target)
@@ -157,12 +160,13 @@ struct ChatPane: View {
     }
 
     /// Left for the next chat of this workspace, right for the previous. Not from the left edge,
-    /// which is the back swipe to the list.
+    /// which is the back swipe to the list, and not on a table, which scrolls sideways.
     private var swiping: some Gesture {
         DragGesture(minimumDistance: 40).onEnded { drag in
             let dx = drag.translation.width
             guard drag.startLocation.x > 40, abs(dx) > 90,
-                abs(dx) > 2 * abs(drag.translation.height)
+                abs(dx) > 2 * abs(drag.translation.height),
+                !tables.contains(drag.startLocation)
             else { return }
             swipe(dx < 0 ? 1 : -1)
         }
@@ -335,7 +339,9 @@ struct MessagesView: View {
         }
     }
 
-    private static let space = "messages"
+    /// The messages' own coordinate space: the scroll view's visible frame, which is also this
+    /// view's, so a table's frame in it and a drag on this view agree (`TableRegions`).
+    static let space = "messages"
     /// How close to the content's end still counts as the bottom.
     private static let bottomSlack: CGFloat = 12
 
@@ -397,9 +403,7 @@ struct MessageRow: View {
             }
         case .agent:
             VStack(alignment: .leading, spacing: 2) {
-                SelectableText(
-                    text: entry.text, markdown: true, font: Mono.bodyUI, color: Palette.text,
-                    links: links)
+                MarkdownView(text: entry.text, links: links)
                 stamp
             }
             .frame(maxWidth: .infinity, alignment: .leading)

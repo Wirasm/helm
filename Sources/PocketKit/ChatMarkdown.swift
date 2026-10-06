@@ -8,7 +8,8 @@ package struct MarkdownBlock: Equatable, Sendable {
         case paragraph
         case heading(level: Int)
         /// A list item `depth` lists deep (1 the outermost), marked "•" or its number ("2."). A
-        /// later paragraph of the same item has blanks as wide as the marker, to sit under the text.
+        /// list's markers are as wide as its widest, blanks first (" 9." beside "10."), so its
+        /// items' text starts in one column; a later paragraph of an item has blanks that wide.
         case item(depth: Int, marker: String)
         /// A fenced or indented code block, without its last newline.
         case code
@@ -50,7 +51,9 @@ package enum ChatMarkdown {
     /// table's cells gather by row and column until a run outside it.
     private struct Reader {
         var blocks: [MarkdownBlock] = []
-        var open: (identity: Int, block: MarkdownBlock)?
+        var open: (identity: Int, block: MarkdownBlock, list: Int?)?
+        /// The list each block of `blocks` is an item of, if any.
+        var lists: [Int?] = []
         /// Each list item already marked, by identity, and its marker: a later paragraph of it,
         /// even after a nested list, is not marked again.
         var marked: [Int: String] = [:]
@@ -76,33 +79,51 @@ package enum ChatMarkdown {
             }
             closeBlock()
             var kind = Self.kind(intents)
+            var list: Int?
             if case let .item(depth, marker) = kind,
-                let identity = intents.first(where: {
+                let at = intents.firstIndex(where: {
                     if case .listItem = $0.kind { true } else { false }
-                })?.identity
+                })
             {
-                if let first = marked[identity] {
+                let item = intents[at].identity
+                list = intents.indices.contains(at + 1) ? intents[at + 1].identity : nil
+                if let first = marked[item] {
                     kind = .item(depth: depth, marker: String(repeating: " ", count: first.count))
                 } else {
-                    marked[identity] = marker
+                    marked[item] = marker
                 }
             }
-            open = (identity, MarkdownBlock(kind, piece))
+            open = (identity, MarkdownBlock(kind, piece), list)
         }
 
         mutating func finish() -> [MarkdownBlock] {
             closeBlock()
             closeTable()
+            // Each list's markers as wide as its widest, the blanks before the number.
+            var widths: [Int: Int] = [:]
+            for (block, list) in zip(blocks, lists) {
+                guard let list, case let .item(_, marker) = block.kind else { continue }
+                widths[list] = max(widths[list] ?? 0, marker.count)
+            }
+            for index in blocks.indices {
+                guard let list = lists[index], let width = widths[list],
+                    case let .item(depth, marker) = blocks[index].kind
+                else { continue }
+                let pad = String(repeating: " ", count: width - marker.count)
+                blocks[index].kind = .item(depth: depth, marker: pad + marker)
+            }
             return blocks
         }
 
         private mutating func closeBlock() {
             guard var block = open?.block else { return }
+            let list = open?.list
             open = nil
             if block.kind == .code, block.text.characters.last == "\n" {
                 block.text.characters.removeLast()
             }
             blocks.append(block)
+            lists.append(list)
         }
 
         private mutating func closeTable() {
@@ -114,6 +135,7 @@ package enum ChatMarkdown {
                 return (0..<width).map { cells[$0] ?? AttributedString() }
             }
             blocks.append(MarkdownBlock(.table(rows: rows, header: table.header)))
+            lists.append(nil)
         }
 
         /// A table cell's table, row (0 the header) and column.
