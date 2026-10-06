@@ -326,6 +326,7 @@ detached_run() {
       --target-dir "$repo/daemon/target" ${cargo_root:+--root "$cargo_root"} >>"$build_log" 2>&1 ||
       { tail -30 "$build_log"; fail "cargo install $crate"; }
   done
+  bash "$repo/scripts/sign-bench.sh" "$bin" >>"$build_log" 2>&1 || { tail -5 "$build_log"; fail "signing bench"; }
 
   # 2. Quit helm, by pid. Re-checked here because minutes have passed since the foreground check.
   [ "$(resolve_helm_pid "$bundle" "$pid")" = "$pid" ] || fail "pid $pid no longer runs $bundle"

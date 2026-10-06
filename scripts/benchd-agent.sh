@@ -197,6 +197,7 @@ agent_install() {
       timeout 1200 cargo install --locked --force --quiet --path "$agent_repo/daemon/crates/$crate" \
         --target-dir "$agent_repo/daemon/target" || { echo "benchd-agent: cargo install $crate failed" >&2; return 4; }
     done
+    bash "$agent_repo/scripts/sign-bench.sh" "$bin" || return 4
   fi
   [ -x "$bin/benchd" ] && [ -x "$bin/bench" ] ||
     { echo "benchd-agent: no bench/benchd in $bin — run without --no-build" >&2; return 4; }
