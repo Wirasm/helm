@@ -112,6 +112,12 @@
             }
         }
 
+        /// The rows around the word under the mouse (`TerminalSurface.rowsAroundMouse`).
+        /// Not from inside a delegate callback: ghostty holds its renderer lock there.
+        public func rowsAroundMouse(reach: Int) -> TerminalHoveredRows? {
+            surface?.rowsAroundMouse(reach: reach)
+        }
+
         // Upstream's rule: Copy is offered whenever ghostty has a selection.
         // A cached drag rect went stale on scroll and select_all, and the
         // quicklook-word test misses whitespace inside a selection.

@@ -651,8 +651,9 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     }
 
     /// ⌘-click on a link in the grid. The allowlist (TerminalURLPolicy) is
-    /// the whole security story: terminal content is untrusted, so anything
-    /// but http/https/file/mailto is dropped silently.
+    /// the security story: terminal content is untrusted, so anything
+    /// but http/https/file/mailto is dropped silently, bar a path benchd
+    /// says is a file in a prp store (`TerminalStorePath`).
     ///
     /// **That sentence is only true because the action callback reports this action as
     /// handled**, which the wrapper did not do before its 1.5.2.
@@ -691,14 +692,21 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     ///
     /// Two things open in helm this way: a `.md`/`.html` file, as a canvas, and an http
     /// address — an agent's `http://localhost:3000` — as a new tab of the shared browser,
-    /// in the browser pane (#376). Neither takes the keyboard from the terminal clicked in.
+    /// in the browser pane (#376). The canvas is the operator's own `pane/open`, so benchd may
+    /// bring it forward; the browser tab is helm's, and badges its drawer without taking focus.
     ///
     /// Everything else the allowlist admits — a PDF, an image, `mailto:` — keeps its
     /// old route to the system, which still owns the apps that handle them.
     /// `TerminalLinkRoute` makes that three-way choice; this method only sends it, as the
     /// operator's own `pane/open`.
+    ///
+    /// A path with no scheme fails the allowlist and may still name a file in a prp store; that
+    /// is `TerminalStorePath`'s question, and anything it does not open stays dropped.
     func terminalDidRequestOpenURL(_ url: String, kind _: TerminalOpenURLKind) {
-        guard let validated = TerminalURLPolicy.validated(url) else { return }
+        guard let validated = TerminalURLPolicy.validated(url) else {
+            openStorePath(url)
+            return
+        }
         switch TerminalLinkRoute.route(validated) {
         case .canvasFile:
             manager?.bench?.send(
@@ -707,6 +715,18 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
             manager?.bench?.openLink(validated)
         case .system:
             NSWorkspace.shared.open(validated)
+        }
+    }
+
+    /// On the next turn, not here: ghostty performs `open_url` holding its renderer lock, and
+    /// reading the rows around the click takes it again.
+    private func openStorePath(_ clicked: String) {
+        Task { @MainActor [weak self] in
+            guard let self, let bench = manager?.bench else { return }
+            let rows = hostView.rowsAroundMouse(reach: TerminalStorePath.reach)
+            let candidates = TerminalStorePath.candidates(clicked, around: rows)
+            guard !candidates.isEmpty else { return }
+            await bench.openStoreFile(candidates)
         }
     }
 
