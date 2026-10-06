@@ -692,7 +692,8 @@ extension TerminalSession: TerminalSurfaceLifecycleDelegate,
     ///
     /// Two things open in helm this way: a `.md`/`.html` file, as a canvas, and an http
     /// address — an agent's `http://localhost:3000` — as a new tab of the shared browser,
-    /// in the browser pane (#376). Neither takes the keyboard from the terminal clicked in.
+    /// in the browser pane (#376). The canvas is the operator's own `pane/open`, so benchd may
+    /// bring it forward; the browser tab is helm's, and badges its drawer without taking focus.
     ///
     /// Everything else the allowlist admits — a PDF, an image, `mailto:` — keeps its
     /// old route to the system, which still owns the apps that handle them.
