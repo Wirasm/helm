@@ -17,8 +17,13 @@ if [ -z "$identity" ]; then
   echo "sign-bench: no Apple Development identity; bench and benchd stay ad hoc signed" >&2
   exit 0
 fi
+# Each is signed as a copy and moved into place, so a codesign killed by its timeout leaves the
+# installed binary whole.
 for name in bench benchd; do
-  timeout 60 codesign --force --sign "$identity" --identifier "com.wirasm.$name" --timestamp=none \
-    "$bin/$name" || { echo "sign-bench: signing $bin/$name failed; it keeps cargo's ad hoc signature" >&2; exit 1; }
+  tmp="$bin/.$name.signing"
+  cp "$bin/$name" "$tmp" &&
+    timeout 60 codesign --force --sign "$identity" --identifier "com.wirasm.$name" --timestamp=none "$tmp" &&
+    mv -f "$tmp" "$bin/$name" ||
+    { rm -f "$tmp"; echo "sign-bench: signing $bin/$name failed; it keeps cargo's ad hoc signature" >&2; exit 1; }
 done
 echo "sign-bench: bench and benchd signed by $identity"
