@@ -400,6 +400,43 @@ public final class TerminalSurface {
             return contains
         }
 
+    // MARK: - Rows Around The Mouse (helm)
+
+    /// The viewport rows from `reach` above the word under the mouse to `reach` below it, as
+    /// text, and which of them holds the word. nil without a surface or a word.
+    ///
+    /// For a link a program wrapped by itself: a TUI lays out its own lines, so a long path
+    /// is two rows with no soft-wrap between them and ghostty's link regex sees only the half
+    /// that was clicked. The row is the word's first cell's (`quicklookWord`'s offset).
+    ///
+    /// **Never call this from inside an action callback.** ghostty performs `open_url` with
+    /// the renderer mutex held, and both reads here take it again.
+    func rowsAroundMouse(reach: Int) -> TerminalHoveredRows? {
+        guard let s = surface, let grid = size(), grid.columns > 0,
+              let word = quicklookWord()
+        else { return nil }
+        let hovered = Int(word.offsetStart) / Int(grid.columns)
+        let range = max(0, hovered - reach) ... min(Int(grid.rows) - 1, hovered + reach)
+        guard range.contains(hovered) else { return nil }
+        let rows = range.map { row -> String in
+            func point(_ x: Int) -> ghostty_point_s {
+                ghostty_point_s(
+                    tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_EXACT,
+                    x: UInt32(x), y: UInt32(row))
+            }
+            let selection = ghostty_selection_s(
+                top_left: point(0), bottom_right: point(Int(grid.columns) - 1), rectangle: false)
+            var out = ghostty_text_s()
+            guard ghostty_surface_read_text(s, selection, &out) else { return "" }
+            defer { ghostty_surface_free_text(s, &out) }
+            guard let text = out.text, out.text_len > 0 else { return "" }
+            let bytes = UnsafeBufferPointer(start: text, count: Int(out.text_len))
+                .map { UInt8(bitPattern: $0) }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+        return TerminalHoveredRows(rows: rows, hovered: hovered - range.lowerBound)
+    }
+
     // MARK: - Process
 
     /// PID of the pty's foreground process group (`tcgetpgrp(pty)`). When the
