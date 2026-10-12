@@ -352,9 +352,10 @@ struct Core {
     >,
     /// The one codex app-server every codex agent is a thread on (#466), started on first use.
     codex: Arc<codex::Host>,
-    /// Who spawned each benchd session, by session id (`attention::spawner`): what a conversation
-    /// its spawn did not record (a Claude `/clear` starts a new one in the same session) is given
-    /// when its hook first names it. Pruned to the sessions `sessions` still holds at each insert.
+    /// Who spawned each benchd session, by session id, when benchd knows (`attention::spawner`):
+    /// what a conversation its spawn did not record (a Claude `/clear` starts a new one in the
+    /// same session) is given when its hook first names it. Pruned to the sessions `sessions`
+    /// still holds at each insert.
     spawners: HashMap<String, bench_wire::Spawner>,
 }
 

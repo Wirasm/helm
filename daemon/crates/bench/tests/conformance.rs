@@ -13244,7 +13244,7 @@ fn done_goes_to_the_agent_that_spawned_it_and_survives_a_restart() {
         "{:?}",
         spawned_event.1
     );
-    // The operator's own spawn is his.
+    // A spawn nobody declared is addressed to the operator: someone has to see it finish.
     let (mine, mine_pid) = terminal_process(h, "mine");
     let conv2 = "3e1f4a5b-6c7d-4e8f-9a0b-2c3d4e5f6a7b";
     for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
@@ -13522,7 +13522,48 @@ fn a_pane_agent_s_spawn_is_addressed_to_the_mailbox_in_that_pane() {
     );
 }
 
-/// A conversation spawned again (`--resume`) by another agent is that agent's from then on.
+/// A caller that declares no handle, no pane and no `--asked` (a script launchd started, such as
+/// an Archon trigger) is nobody benchd knows: its spawn records no spawner, so it never reads as
+/// one the operator started. The same caller saying he asked is his.
+#[test]
+fn an_undeclared_spawn_has_no_spawner_unless_the_operator_asked() {
+    let home = TestHome::claim("m1-anonspawn");
+    let h = &home.dir;
+    let _daemon = DaemonGuard::start(h, None);
+    let spawn = |name: &str, asked: bool| {
+        let mut args = vec![
+            "spawn",
+            "--agent",
+            "test-echo",
+            "--cwd",
+            "/tmp",
+            "--name",
+            name,
+        ];
+        if asked {
+            args.push("--asked");
+        }
+        let run = bench(h, &args);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        json_of(&run)["session"].as_str().unwrap().to_string()
+    };
+    let (trigger, asked) = (spawn("trigger", false), spawn("asked", true));
+    let spawner_of = |session: &str| {
+        event_kinds(h)
+            .into_iter()
+            .find(|(k, d)| k == "session/spawned" && d["session"] == session)
+            .map(|(_, d)| d["spawner"].clone())
+            .unwrap_or_else(|| panic!("no session/spawned for {session}"))
+    };
+    assert_eq!(spawner_of(&trigger), serde_json::Value::Null);
+    assert_eq!(
+        spawner_of(&asked),
+        serde_json::json!({ "kind": "operator" })
+    );
+}
+
+/// A conversation spawned again (`--resume`) by another agent is that agent's from then on; by a
+/// caller that declares nobody, it is nobody's.
 #[test]
 fn a_resume_by_another_agent_readdresses_its_done() {
     let home = TestHome::claim("m1-respawn");
@@ -13546,35 +13587,42 @@ fn a_resume_by_another_agent_readdresses_its_done() {
         }
         live_entry(h, spawned["session"].as_str().unwrap())["done"]["to"].clone()
     };
-    let first = spawn_as("orch-a", &["--name", "first"]);
-    let conv = first["runtime_session"].as_str().unwrap().to_string();
-    assert_eq!(settle(&first, &conv), "orch-a");
-    // A closed pi says so on its way out.
-    hook_verb(
-        &daemon.socket,
-        serde_json::json!({ "harness": "pi", "event": "session_shutdown", "session": conv,
-            "cwd": ws, "pid": first["pid"], "bench_session": first["session"] }),
-    );
-    let closed = bench(h, &["close", first["session"].as_str().unwrap()]);
-    assert_eq!(closed.code, 0, "{}", closed.stderr);
-    wait_until("the first session is gone", Duration::from_secs(10), || {
-        let list = json_of(&bench(h, &["sessions"]));
-        !list["sessions"]
+    let close = |spawned: &serde_json::Value, conv: &str| {
+        // A closed pi says so on its way out.
+        hook_verb(
+            &daemon.socket,
+            serde_json::json!({ "harness": "pi", "event": "session_shutdown", "session": conv,
+                "cwd": ws, "pid": spawned["pid"], "bench_session": spawned["session"] }),
+        );
+        let closed = bench(h, &["close", spawned["session"].as_str().unwrap()]);
+        assert_eq!(closed.code, 0, "{}", closed.stderr);
+        wait_until("the session is gone", Duration::from_secs(10), || {
+            let list = json_of(&bench(h, &["sessions"]));
+            !list["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["session"] == spawned["session"] && s["live"] == true)
+        });
+    };
+    let row_of = |conv: &str| {
+        let all = json_of(&bench(h, &["sessions", "--all", "--workspace", &ws]));
+        let row = all["rows"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|s| s["session"] == first["session"] && s["live"] == true)
-    });
+            .find(|r| r["id"] == conv)
+            .cloned();
+        row.unwrap_or_else(|| panic!("no row: {all}"))
+    };
+    let first = spawn_as("orch-a", &["--name", "first"]);
+    let conv = first["runtime_session"].as_str().unwrap().to_string();
+    assert_eq!(settle(&first, &conv), "orch-a");
+    close(&first, &conv);
     let again = spawn_as("orch-b", &["--name", "again", "--resume", &conv]);
     assert_eq!(settle(&again, &conv), "orch-b");
     // The drawer's row names its spawner too, beside its own handle.
-    let all = json_of(&bench(h, &["sessions", "--all", "--workspace", &ws]));
-    let row = all["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["id"] == conv.as_str());
-    let row = row.unwrap_or_else(|| panic!("no row: {all}"));
+    let row = row_of(&conv);
     assert_eq!(
         (row["spawner"].clone(), row["mail"]["handle"].clone()),
         (
@@ -13588,6 +13636,19 @@ fn a_resume_by_another_agent_readdresses_its_done() {
             .iter()
             .any(|(k, d)| k == "sessions/spawner" && d["spawner"]["handle"] == "orch-b"),
         "the readdress is logged"
+    );
+
+    // Resumed by a caller that declares nobody: the last asker is unknown, so it is no longer
+    // orch-b's, and its finished turns go to the operator.
+    close(&again, &conv);
+    let anon = spawn_as("", &["--name", "anon", "--resume", &conv]);
+    assert_eq!(settle(&anon, &conv), "operator");
+    assert_eq!(row_of(&conv)["spawner"], serde_json::Value::Null);
+    assert!(
+        event_kinds(h)
+            .iter()
+            .any(|(k, d)| k == "sessions/spawner" && d["spawner"].is_null()),
+        "the unknown readdress is logged"
     );
 }
 

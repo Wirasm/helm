@@ -28,24 +28,31 @@ use std::sync::{Arc, Mutex};
 
 /// Who a spawn is for, from who asked. An agent benchd spawned names its own handle
 /// (`BENCH_HANDLE`); one the operator started in a pane names only the pane, and is whoever holds
-/// that pane's mailbox ([`hook::who`]). Anything else is the operator: his gesture, helm acting
-/// for him, or him typing `bench spawn` in a shell. Asked outside the core lock: `who` probes
-/// processes.
-pub fn spawner(core: &Arc<Mutex<Core>>, by: &Actor) -> Spawner {
-    let agent = match by {
+/// that pane's mailbox ([`hook::who`]). The operator is his gesture, helm acting for him, his shell
+/// in a helm pane, or a caller that says he asked (`--asked`, `BENCH_ASKED` on his just run). A
+/// caller that declares none of these, such as a script launchd started, is nobody benchd knows:
+/// `None`, never the operator. Asked outside the core lock: `who` probes processes.
+pub fn spawner(core: &Arc<Mutex<Core>>, by: &Actor, asked: bool) -> Option<Spawner> {
+    match by {
+        Actor::Operator | Actor::Helm => Some(Spawner::Operator),
         Actor::Agent {
             handle: Some(handle),
             ..
-        } => Some(handle.clone()),
+        } => Some(Spawner::Agent {
+            handle: handle.clone(),
+        }),
         Actor::Agent {
             pane: Some(pane), ..
-        } => PaneId::parse(pane.trim())
-            .ok()
-            .and_then(|pane| hook::who(core, pane))
-            .map(|who| who.handle),
-        _ => None,
-    };
-    agent.map_or(Spawner::Operator, |handle| Spawner::Agent { handle })
+        } => Some(
+            PaneId::parse(pane.trim())
+                .ok()
+                .and_then(|pane| hook::who(core, pane))
+                .map_or(Spawner::Operator, |who| Spawner::Agent {
+                    handle: who.handle,
+                }),
+        ),
+        Actor::Agent { .. } => asked.then_some(Spawner::Operator),
+    }
 }
 
 /// A hook event's effect on the record of the agent `key`: a turn end stamps when (and, in the

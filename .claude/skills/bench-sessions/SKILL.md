@@ -50,7 +50,9 @@ for r in json.load(sys.stdin)["rows"]:
   --harness <h> --asked` marks it seen for him, only when he asked you to; it closes nothing.
   `null` otherwise.
 - **`spawner`** is who spawned the row's session: `{"kind": "operator"}` or `{"kind": "agent",
-  "handle": "<h>"}`, `null` when benchd never recorded it. The row's own handle is `mail.handle`.
+  "handle": "<h>"}`, `null` when benchd does not know: a session from before it recorded one, or a
+  spawn that declared no `BENCH_HANDLE`, no `HELM_PANE` and no `--asked` (a script or trigger). The
+  row's own handle is `mail.handle`.
 - **`operator_mail`** is mail the row's mailbox sent the operator that he has not read:
   `{"unread", "since_ms", "subject"}` for the oldest. `null` when there is none.
 

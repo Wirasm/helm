@@ -91,7 +91,8 @@ package struct BenchSessionRow: Decodable, Equatable, Sendable, Identifiable {
     package var done: BenchDone?
     /// Unread mail this session sent the operator (M1, #357).
     package var operatorMail: BenchOperatorMail?
-    /// Who spawned it; nil when benchd never recorded it.
+    /// Who spawned it; nil when benchd does not know: an entry from before it recorded one, or a
+    /// spawn whose caller declared nobody (a script or trigger).
     package var spawner: BenchSpawner?
 
     package enum State: Equatable, Sendable {
