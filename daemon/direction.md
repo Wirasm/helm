@@ -412,7 +412,10 @@ else its `Stop`; pi's `agent_settled`; never the last message read as prose) and
 operator mail he has not read. `done.to` is whose it is: the agent that spawned it (benchd resolves
 the spawner from who asked: `BENCH_HANDLE`, else the mailbox in the asking pane; a `--resume` by
 another agent makes it that agent's), or `operator`; each `sessions/all` row also names its
-`spawner`, tagged `operator` or `agent`, `null` when unrecorded. Waiting is always his. `done.seen`
+`spawner`, tagged `operator` or `agent`, `null` when unrecorded. Only a caller that is the operator
+is recorded as him: his gesture, helm for him, his shell in a helm pane, or `asked`. A `bench
+spawn` that declares no handle, no pane and no `asked` (a script launchd started, an Archon
+trigger) records `null`, and its finished turns still go to him. Waiting is always his. `done.seen`
 turns true when focus arrives at its pane, when the turn ends in the focused pane, or on
 `sessions/seen` (his, or an agent's he asked); nothing else clears it, and nothing closes: a mark
 never closes a pane, ends a session or removes a worktree. The only state is three fields on the

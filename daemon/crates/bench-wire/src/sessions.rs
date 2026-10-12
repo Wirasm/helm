@@ -78,8 +78,8 @@ pub struct SessionRow {
     /// mail waiting for it. `null` when there is none, and always sent.
     pub operator_mail: Option<crate::OperatorMail>,
     /// Who spawned it (M1, #357): the operator, or an agent and its handle. `null` when benchd
-    /// never recorded it (an entry from before it did, a session it only saw in a pane); always
-    /// sent. The row's own handle is `mail.handle`.
+    /// does not know: an entry from before it recorded one, a session it only saw in a pane, or a
+    /// spawn whose caller declared nobody (a script or trigger); always sent. The row's own handle is `mail.handle`.
     pub spawner: Option<Spawner>,
 }
 
@@ -87,8 +87,9 @@ pub struct SessionRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Spawner {
-    /// The operator: his gesture in helm, helm acting for him, `bench spawn` from his shell, or an
-    /// agent he started himself in a pane.
+    /// The operator: his gesture in helm, helm acting for him, `bench spawn` from his shell in a
+    /// helm pane or saying he asked (`--asked`), or an agent he started himself in a pane. A
+    /// caller that declares none of these is not recorded as him.
     Operator,
     /// An agent, by its mailbox handle.
     Agent { handle: String },
@@ -361,7 +362,8 @@ pub struct HostedSession {
 /// benchd already knows. Every field is absent in entries recorded before it existed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionRecord {
-    /// Who spawned it: whose its finished turns are. Absent when benchd did not record it.
+    /// Who spawned it: whose its finished turns are. Absent when benchd does not know, and then
+    /// they are the operator's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawner: Option<Spawner>,
     /// When its last turn ended, in epoch ms; cleared when it starts another. Kept on disk so a

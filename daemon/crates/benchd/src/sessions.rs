@@ -211,9 +211,13 @@ pub enum Refusal {
 /// daemon restarts before anyone asks for the list. Only a session whose id is known at spawn
 /// can be recorded: every one benchd starts, codex's included, whose thread benchd creates.
 /// `spawner` is who asked for it: a conversation spawned again (`--resume`) is the new asker's
-/// from then on, logged as `sessions/spawner`. Its Claude login is the one it ran on this time
-/// ([`record_account`]).
-pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Result<(), String> {
+/// from then on (`None`, unknown, when that asker declared nobody), logged as
+/// `sessions/spawner`. Its Claude login is the one it ran on this time ([`record_account`]).
+pub fn record_spawn(
+    core: &mut Core,
+    session: &Session,
+    spawner: Option<&Spawner>,
+) -> Result<(), String> {
     let spec = &session.spec;
     let (Some(harness), Some(id)) = (Harness::parse(spec.agent.name()), spec.conversation.id())
     else {
@@ -223,7 +227,7 @@ pub fn record_spawn(core: &mut Core, session: &Session, spawner: &Spawner) -> Re
         harness,
         id: id.to_string(),
     };
-    let spawner = Some(spawner.clone());
+    let spawner = spawner.cloned();
     if let Some(i) = core.session_records.hosted.iter().position(|h| h.is(&key)) {
         record_account(core, spec)?;
         if core.session_records.hosted[i].attention.spawner == spawner {

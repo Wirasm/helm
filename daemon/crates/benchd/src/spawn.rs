@@ -68,7 +68,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
     let plan = judge(core, req).map_err(|why| (Status::Refused, why))?;
     let by = req.by.clone().unwrap_or_else(Actor::agent);
     let focus = Actor::focus(&by, req.asked);
-    let spawner = attention::spawner(core, &by);
+    let spawner = attention::spawner(core, &by, req.asked);
     let (id, handle) = reserve(core, &plan, focus)?;
     let session = start(core, &plan, &id, &handle)?;
 
@@ -93,7 +93,7 @@ fn spawn(core: &Arc<Mutex<Core>>, req: &Request) -> Outcome<(Status, Option<Stri
             return Err((Status::Refused, refusal.to_string()));
         }
     };
-    register(&mut c, &plan, &session, pane, &spawner)?;
+    register(&mut c, &plan, &session, pane, spawner.as_ref())?;
     let data = |report: &bench_wire::LayoutReport| {
         let mut data = json!({
             "session": session.id,
@@ -326,20 +326,22 @@ pub fn agent_env(root: &std::path::Path, id: &str, handle: &str) -> bench_sessio
 }
 
 /// The session joins the registry and the record, logged before the pane that shows it.
-/// `spawner` is who asked for it (`attention::spawner`).
+/// `spawner` is who asked for it (`attention::spawner`), `None` when benchd does not know.
 fn register(
     core: &mut Core,
     plan: &Plan,
     session: &Arc<Session>,
     pane: PaneId,
-    spawner: &Spawner,
+    spawner: Option<&Spawner>,
 ) -> Outcome<()> {
     let spec = &session.spec;
     core.sessions
         .insert(session.id.clone(), Arc::clone(session));
     let live = &core.sessions;
     core.spawners.retain(|id, _| live.contains_key(id));
-    core.spawners.insert(session.id.clone(), spawner.clone());
+    if let Some(spawner) = spawner {
+        core.spawners.insert(session.id.clone(), spawner.clone());
+    }
     core.append(
         "session/spawned",
         json!({
