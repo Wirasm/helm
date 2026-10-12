@@ -79,7 +79,8 @@ pub struct SessionRow {
     pub operator_mail: Option<crate::OperatorMail>,
     /// Who spawned it (M1, #357): the operator, or an agent and its handle. `null` when benchd
     /// does not know: an entry from before it recorded one, a session it only saw in a pane, or a
-    /// spawn whose caller declared nobody (a script or trigger); always sent. The row's own handle is `mail.handle`.
+    /// spawn whose caller declared nobody (a script or trigger); always sent. The row's own
+    /// handle is `mail.handle`.
     pub spawner: Option<Spawner>,
 }
 
