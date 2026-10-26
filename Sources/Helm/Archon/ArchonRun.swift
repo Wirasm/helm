@@ -77,9 +77,6 @@ struct ArchonRun: Codable, Equatable, Sendable {
 
     struct Metadata: Codable, Equatable, Sendable {
         let error: String?
-        /// The gate a paused run is waiting at. Written by `pauseWorkflowRun` and carried
-        /// whole into `workflow runs --json`, so it costs no extra call — see `ArchonGate`.
-        let approval: ArchonGate?
         /// Every top-level node of the workflow, in order, which Archon's executor writes before
         /// the first one runs (`terminal_graph`). What a run's stage dots are drawn from; absent
         /// on runs from before Archon recorded it.
@@ -93,26 +90,22 @@ struct ArchonRun: Codable, Equatable, Sendable {
             }
         }
 
-        init(error: String?, approval: ArchonGate?, terminalGraph: TerminalGraph? = nil) {
+        init(error: String?, terminalGraph: TerminalGraph? = nil) {
             self.error = error
-            self.approval = approval
             self.terminalGraph = terminalGraph
         }
 
-        /// **A gate helm cannot read costs the gate, never the run.** `ArchonGate` already
-        /// tolerates missing keys; this handles the other shape — `approval` present but not
-        /// an object at all, which a stale run can carry and which would otherwise throw
-        /// through the whole `runs` decode and blank the rail.
+        /// **A stage list helm cannot read costs the dots, never the run**: a stale run can
+        /// carry an older shape, and a throw here would blank the whole `runs` decode.
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             error = try container.decodeIfPresent(String.self, forKey: .error)
-            approval = try? container.decodeIfPresent(ArchonGate.self, forKey: .approval)
             terminalGraph = try? container.decodeIfPresent(
                 TerminalGraph.self, forKey: .terminalGraph)
         }
 
         private enum CodingKeys: String, CodingKey {
-            case error, approval
+            case error
             case terminalGraph = "terminal_graph"
         }
     }
@@ -129,38 +122,24 @@ struct ArchonRun: Codable, Equatable, Sendable {
     /// none at all.
     var shortID: String { Self.shortID(of: id) }
 
-    /// The same rule, for a surface holding a run id without the run — the armed-reply line
-    /// in the rail carries only `ArchonGateReply.runID`. One definition, so the label the two
+    /// The same rule, for a surface holding a run id without the run — the armed composer
+    /// carries only `ArchonAnswer.runID`. One definition, so the label the two
     /// draw cannot drift.
     static func shortID(of id: String) -> String { String(id.prefix(8)) }
 
     /// The one status that gets a live line of its own.
     var isRunning: Bool { status == ArchonRunStatus.running }
 
-    /// Stopped, waiting for a person. The status that gets the drawer's top line.
+    /// Stopped. Whether it waits on a person is the attention queue's answer, not this one's.
     var isPaused: Bool { status == ArchonRunStatus.paused }
 
     /// The two statuses that put a run in the inbox.
     ///
     /// **`cancelled` is deliberately absent**: the operator ended it themselves, so it is not
-    /// news, and it produced nothing to be handed. `paused` is not finished either — it has its
-    /// own list, above the running one, because it is the one state blocked on the operator.
+    /// news, and it produced nothing to be handed. `paused` is not finished either.
     var isFinished: Bool {
         status == ArchonRunStatus.completed || status == ArchonRunStatus.failed
     }
-
-    /// The gate holding this run, when there is one.
-    ///
-    /// **Only meaningful while `paused`.** Archon never clears the approval context on resume —
-    /// it is deliberately kept for the executor's resume-time reads — so a completed run still
-    /// carries the last gate it passed, and reading it on any other status would put a stale
-    /// question under a finished row.
-    var gate: ArchonGate? { isPaused ? metadata?.approval : nil }
-
-    /// Whether this run is waiting on **the operator**, as opposed to merely being paused.
-    /// A paused run with no gate at all, a gate already answered, or a gate belonging to a
-    /// sub-run are all paused and none of them is yours — see `ArchonGate.isAwaitingDecision`.
-    var isAwaitingDecision: Bool { gate?.isAwaitingDecision ?? false }
 
     /// The node the subline animates: the one Archon says is running, else the last one it
     /// reported. **Last rather than first** — `nodes` arrives in DAG order, and a fan-out
@@ -310,13 +289,17 @@ struct ArchonWorkflowListResponse: Codable, Equatable, Sendable {
     let errors: [ArchonWorkflowLoadError]
 }
 
+/// `workflow run --detach --json`. Captured in `Fixtures/workflow-run-detach.json`: a CLI
+/// launch has no conversation, so `conversationId` is null, and requiring it failed every
+/// launch's decode after the run had started.
 struct ArchonLaunchAcknowledgement: Codable, Equatable, Sendable {
     let ok: Bool
     let action: String
     let detached: Bool
+    let runId: String?
     let workflow: String
     let branch: String?
-    let conversationId: String
+    let conversationId: String?
     let logPath: String?
 }
 

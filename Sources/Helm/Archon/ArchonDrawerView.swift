@@ -3,10 +3,9 @@ import SwiftUI
 /// The Archon drawer (#382): what Archon is doing in the active workspace's project, on
 /// Archon's own ground, driven from the keyboard.
 ///
-/// Top to bottom: the title and the keys, the runs waiting on the operator, the running ones,
-/// the finished ones he has not cleared, and the one input. ↑↓ pick a run; every other key is
-/// `ArchonKeys`'s table, and the hint line under the list only names the keys that apply to the
-/// run picked. While a workflow is being picked, its searchable list is drawn over the runs.
+/// Top to bottom: the title, Archon's attention queue, the running runs, the finished ones he
+/// has not cleared, and the one input. ↑↓ pick a row; every other key is `ArchonKeys`'s table,
+/// and the hint line under the list only names the keys that apply to the row picked. While a workflow is being picked, its searchable list is drawn over the runs.
 struct ArchonDrawerView: View {
     let drawer: ArchonDrawer
     @ObservedObject var model: ArchonModel
@@ -26,9 +25,13 @@ struct ArchonDrawerView: View {
     }
 
     private var workspace: WorkspacePath? { drawer.workspace() }
-    private var runs: [ArchonRun] { model.gated + model.running + model.finished }
-    private var selectedRun: ArchonRun? {
-        runs.first { $0.id == selected } ?? runs.first
+    private var rows: [ArchonDrawerRow] {
+        model.queue.map(ArchonDrawerRow.item)
+            + (model.running + model.finished).map(
+                ArchonDrawerRow.run)
+    }
+    private var selectedRow: ArchonDrawerRow? {
+        rows.first { $0.id == selected } ?? rows.first
     }
 
     var body: some View {
@@ -48,7 +51,7 @@ struct ArchonDrawerView: View {
                 }
             }
             Color.archonBorder.frame(height: 1)
-            ArchonKeyHints(run: selectedRun, notice: notice)
+            ArchonKeyHints(row: selectedRow, notice: notice)
             Color.archonBorder.frame(height: 1)
             ArchonComposer(
                 model: model, workspacePath: workspace, focus: $composerFocused,
@@ -82,7 +85,7 @@ struct ArchonDrawerView: View {
         ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    section("WAITING ON YOU", model.gated)
+                    queue
                     section("RUNNING", model.running)
                     section("FINISHED", model.finished)
                     // A failure to list sits under the rows it may have made stale, and replaces
@@ -93,7 +96,7 @@ struct ArchonDrawerView: View {
                             .foregroundStyle(Color.danger)
                             .textSelection(.enabled)
                             .padding(12)
-                    } else if runs.isEmpty {
+                    } else if rows.isEmpty {
                         Text(
                             workspace == nil ? ArchonModel.noWorkspace : "No Archon runs here yet."
                         )
@@ -117,19 +120,43 @@ struct ArchonDrawerView: View {
     }
 
     @ViewBuilder
-    private func section(_ title: String, _ rows: [ArchonRun]) -> some View {
-        if !rows.isEmpty {
-            Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .tracking(1.2)
-                .foregroundStyle(Color.textFaint)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 2)
-            ForEach(rows, id: \.id) { run in
+    private var queue: some View {
+        if !model.queue.isEmpty {
+            sectionTitle("WAITING ON YOU")
+            ForEach(model.queue, id: \.runId) { item in
+                let row = ArchonDrawerRow.item(item)
+                ArchonAttentionRow(
+                    item: item, isSelected: row.id == selectedRow?.id,
+                    isExpanded: expanded.contains(row.id),
+                    isBusy: model.busyRuns.contains(item.runId),
+                    select: {
+                        selected = row.id
+                        listFocused = true
+                    }
+                )
+                .id(row.id)
+            }
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .tracking(1.2)
+            .foregroundStyle(Color.textFaint)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, _ runs: [ArchonRun]) -> some View {
+        if !runs.isEmpty {
+            sectionTitle(title)
+            ForEach(runs, id: \.id) { run in
                 ArchonRunRow(
                     run: run, stages: run.stages(nodes: model.liveNodes[run.id]),
-                    isSelected: run.id == selectedRun?.id, isExpanded: expanded.contains(run.id),
+                    isSelected: run.id == selectedRow?.id, isExpanded: expanded.contains(run.id),
                     isBusy: model.busyRuns.contains(run.id), isCancelArmed: armedCancel == run.id,
                     select: {
                         selected = run.id
@@ -142,9 +169,9 @@ struct ArchonDrawerView: View {
     }
 
     private func move(_ step: Int) -> KeyPress.Result {
-        guard !runs.isEmpty else { return .handled }
-        let index = runs.firstIndex { $0.id == selectedRun?.id } ?? 0
-        selected = runs[min(max(index + step, 0), runs.count - 1)].id
+        guard !rows.isEmpty else { return .handled }
+        let index = rows.firstIndex { $0.id == selectedRow?.id } ?? 0
+        selected = rows[min(max(index + step, 0), rows.count - 1)].id
         armedCancel = nil
         return .handled
     }
@@ -154,7 +181,7 @@ struct ArchonDrawerView: View {
             let key = press.key == .return
                 ? "\r" : press.key == .delete ? "\u{7F}" : press.characters.first
         else { return .ignored }
-        let action = ArchonKeys.action(for: key, on: selectedRun, armedCancel: armedCancel)
+        let action = ArchonKeys.action(for: key, on: selectedRow, armedCancel: armedCancel)
         if case .armCancel = action {} else { armedCancel = nil }
         return perform(action)
     }
@@ -171,25 +198,27 @@ struct ArchonDrawerView: View {
             // Armed at a gate the composer answers it and draws no label to open the list from.
             guard model.reply == nil else { return .ignored }
             Task { await model.openWorkflowPicker(in: workspace) }
-        case let .toggleExpanded(id):
+        case let .toggleExpanded(rowID: id):
             if expanded.remove(id) == nil { expanded.insert(id) }
         case let .open(run):
             model.open(run)
-        case let .decide(decision, run):
-            Task {
-                await model.choose(decision, on: run, in: workspace)
-                if model.reply != nil { composerFocused = true }
+        case let .choose(choice, item):
+            model.choose(choice, on: item)
+            if model.reply != nil {
+                listFocused = false
+                composerFocused = true
             }
-        case let .resume(run):
-            Task { await model.resume(run, in: workspace) }
+        case let .resume(runID):
+            Task { await model.resume(runID: runID, in: workspace) }
         case let .armCancel(id):
             armedCancel = id
         case let .cancel(run):
             armedCancel = nil
             Task { await model.cancel(run, in: workspace) }
-        case let .followLog(run):
+        case let .followLog(runID, workingPath):
             let drawer = self.drawer
-            Task { notice = await drawer.runInNewTerminal(ArchonKeys.followLogLine(for: run)) }
+            let line = ArchonKeys.followLogLine(runID: runID, workingPath: workingPath)
+            Task { notice = await drawer.runInNewTerminal(line) }
         case let .dismiss(run):
             model.dismiss(run, in: workspace)
         }
@@ -224,9 +253,9 @@ private struct ArchonDrawerTitle: View {
     }
 }
 
-/// The keys that do something for the picked run, and the last thing a key could not do.
+/// The keys that do something for the picked row, and the last thing a key could not do.
 private struct ArchonKeyHints: View {
-    let run: ArchonRun?
+    let row: ArchonDrawerRow?
     let notice: String?
 
     var body: some View {
@@ -249,19 +278,25 @@ private struct ArchonKeyHints: View {
     }
 
     private var hints: [String] {
-        var hints = ["↑↓ select", "/ start", "w workflow"]
-        guard let run else { return hints }
-        if run.isFinished {
-            hints += ["⏎ open", "⌫ clear"]
-        } else {
-            hints.append("⏎ stages")
+        let hints = ["↑↓ select", "/ start", "w workflow"]
+        switch row {
+        case nil: return hints
+        case let .item(item): return hints + Self.hints(for: item)
+        case let .run(run): return hints + Self.hints(for: run)
         }
-        if run.isAwaitingDecision {
-            hints += ["a approve", "x reject"]
-            if let count = run.gate?.decisions.count, count > 0 {
-                hints.append("1-\(min(count, 9)) decide")
-            }
-        }
+    }
+
+    private static func hints(for item: ArchonAttentionItem) -> [String] {
+        var hints = ["⏎ read"]
+        let count = item.choices.count
+        if count > 0 { hints.append(count == 1 ? "1 answer" : "1-\(min(count, 9)) answer") }
+        if item.isUnreadable { hints.append("r resume") }
+        hints.append("l log")
+        return hints
+    }
+
+    private static func hints(for run: ArchonRun) -> [String] {
+        var hints = run.isFinished ? ["⏎ open", "⌫ clear"] : ["⏎ stages"]
         if run.status == ArchonRunStatus.failed || run.isPaused { hints.append("r resume") }
         if run.isRunning { hints.append("c c cancel") }
         hints.append("l log")

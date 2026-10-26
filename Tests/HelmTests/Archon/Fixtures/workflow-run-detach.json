@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "action": "run",
+  "detached": true,
+  "runId": "e730bb7d50c71e10819944d67fd65e91",
+  "workflow": "probe-attention",
+  "branch": null,
+  "conversationId": null,
+  "transcriptPath": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/e730bb7d50c71e10819944d67fd65e91.jsonl",
+  "logPath": "/Users/rasmus/.archon/logs/detached-run-cli-1793004126821-224ca49d5f927de7abce1001c52da227.log"
+}
