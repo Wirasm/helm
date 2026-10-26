@@ -466,14 +466,48 @@ final class ArchonModelTests: XCTestCase {
         model.choose(rerun, on: model.queue[0])
         model.replyText = "review PR 5173"
         await model.sendReply(in: workspace)
+        await client.setQueue([try .select(occurrence: "occ-2")])
+        await model.refresh(in: workspace)
         model.choose(rerun, on: model.queue[0])
         await model.sendReply(in: workspace)
 
         let calls = await client.answerCalls()
         XCTAssertEqual(calls.map(\.text), ["review PR 5173", ""])
-        XCTAssertEqual(calls.map(\.answer.occurrence), ["occ-1", "occ-1"])
+        XCTAssertEqual(calls.map(\.answer.occurrence), ["occ-1", "occ-2"])
         XCTAssertNil(model.reply)
         XCTAssertNil(model.actionFailure)
+    }
+
+    /// An answered item stays gone while Archon still lists it: `respond --detach` acknowledges
+    /// before its child records the answer, so the refresh right after can return it unchanged.
+    /// When Archon moves the run to its next question, that one shows.
+    @MainActor
+    func testAnAnsweredItemDoesNotComeBackAnswerable() async throws {
+        let (model, client) = try await queuedModel("archon-queue-answered")
+
+        model.choose(rerun, on: model.queue[0])
+        await model.sendReply(in: workspace)
+        XCTAssertEqual(model.queue, [], "the fake still lists it, as Archon does for a moment")
+        await model.refresh(in: workspace)
+        XCTAssertEqual(model.queue, [])
+
+        await client.setQueue([try .select(occurrence: "occ-2")])
+        await model.refresh(in: workspace)
+        XCTAssertEqual(model.queue.map(\.occurrence), ["occ-2"])
+    }
+
+    /// A legacy gate's reject reason is its `on_reject` rework prompt, so it is not sent empty.
+    @MainActor
+    func testALegacyRejectNeedsItsReason() async throws {
+        let gate = try ArchonAttentionItem.captured()[4]
+        let (model, client) = try await queuedModel("archon-queue-reject", items: [gate])
+
+        model.choose(gate.choices[1], on: model.queue[0])
+        await model.sendReply(in: workspace)
+
+        let calls = await client.answerCalls()
+        XCTAssertEqual(calls.count, 0)
+        XCTAssertEqual(model.actionFailure, "Type the answer first.")
     }
 
     /// A `message` wait's answer is its text, so an empty one is an Enter pressed by accident

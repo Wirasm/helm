@@ -67,7 +67,9 @@ struct ArchonAttentionItem: Decodable, Equatable, Sendable {
         case .gate:
             return [
                 ArchonChoice(id: "approve", label: "approve"),
-                ArchonChoice(id: "reject", label: "reject"),
+                // A legacy reject's reason is the `on_reject` rework prompt; a rework told
+                // only that it failed redoes the same work.
+                ArchonChoice(id: "reject", label: "reject", needsText: true),
             ]
         case .usageLimit, .unreadable, .unknown:
             return []
@@ -147,7 +149,8 @@ struct ArchonAttentionItem: Decodable, Equatable, Sendable {
 struct ArchonChoice: Equatable, Sendable {
     let id: String
     let label: String
-    /// True for a `message` wait, whose answer is the text itself.
+    /// True when the answer is nothing without text: a `message` wait's answer is the text,
+    /// and a legacy gate's reject reason is its rework prompt.
     var needsText = false
 }
 

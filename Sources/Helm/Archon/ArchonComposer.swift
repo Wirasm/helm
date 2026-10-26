@@ -105,6 +105,9 @@ struct ArchonComposer: View {
         guard let choice = model.reply?.choice else {
             return "What should Archon do?  (⌥↑ ⌥↓ picks the workflow)"
         }
+        if choice.id == "reject" && choice.needsText {
+            return "What was wrong? This drives the rework."
+        }
         return choice.needsText
             ? "Your answer" : "Why? Archon records it with the answer (optional)"
     }
@@ -190,21 +193,24 @@ struct ArchonComposer: View {
             workspacePath == nil
             || (armed.map { model.busyRuns.contains($0.runID) } ?? model.isLaunching)
         Button(action: submit) {
-            Text(armed.map { $0.choice.needsText ? "ANSWER" : $0.choice.id.uppercased() } ?? "SEND")
-                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                .tracking(1.1)
-                .foregroundStyle(Color.surface)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 3.5)
-                .background {
-                    let shape = RoundedRectangle(cornerRadius: 4)
-                    if let armed {
-                        shape.fill(Self.tint(of: armed.choice))
-                    } else {
-                        shape.fill(.archonBrand)
-                    }
+            Text(
+                armed.map { ($0.choice.needsText ? $0.choice.label : $0.choice.id).uppercased() }
+                    ?? "SEND"
+            )
+            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            .tracking(1.1)
+            .foregroundStyle(Color.surface)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 3.5)
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 4)
+                if let armed {
+                    shape.fill(Self.tint(of: armed.choice))
+                } else {
+                    shape.fill(.archonBrand)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.chrome)
         .disabled(busy)

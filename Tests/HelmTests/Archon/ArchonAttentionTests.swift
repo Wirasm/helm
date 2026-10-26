@@ -46,6 +46,8 @@ final class ArchonAttentionTests: XCTestCase {
         XCTAssertTrue(
             items[3].message.contains("archon workflow answer"), "and it says where to go")
         XCTAssertEqual(items[4].choices.map(\.id), ["approve", "reject"])
+        XCTAssertEqual(
+            items[4].choices.map(\.needsText), [false, true], "a rework needs its reason")
     }
 
     /// A kind this helm does not know costs that item its controls, never the queue its decode.

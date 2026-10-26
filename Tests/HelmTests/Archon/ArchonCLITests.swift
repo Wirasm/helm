@@ -174,10 +174,11 @@ final class ArchonCLITests: XCTestCase {
             workflowName: "w")
 
         do {
-            _ = try await cli().answer(answer, text: nil, in: WorkspacePath(workspace))
+            _ = try await cli().answer(answer, text: "why not", in: WorkspacePath(workspace))
             XCTFail("expected a refusal")
         } catch let error as ArchonCLIError {
             XCTAssertEqual(error.reason, .actionRejected("It is now awaiting occurrence 253f."))
+            XCTAssertFalse(error.command.contains("why not"), "the operator's text is elided")
         }
     }
 

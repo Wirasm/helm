@@ -72,6 +72,11 @@ final class ArchonModel: ObservableObject {
     /// Why the runs could not be listed (#523), or nil. Without it a drawer that cannot reach
     /// Archon at all reads "No Archon runs here yet.", the same as one where Archon never ran.
     @Published private(set) var refreshFailure: String?
+    /// Occurrences helm answered that Archon may still list: `respond --detach` acknowledges
+    /// before its child records the answer, and the refresh after an answer is skipped while a
+    /// poll is in flight. Either way the answered row would come back answerable. Each is
+    /// dropped once Archon stops listing it.
+    private var answered: Set<String> = []
     /// Failed `runs` calls in a row, so one hiccup can be told from a failure that persists.
     private var failedPolls = 0
     @Published private(set) var isRefreshing = false
@@ -184,7 +189,8 @@ final class ArchonModel: ObservableObject {
         _ response: ArchonRunsResponse, queue items: [ArchonAttentionItem],
         in workspacePath: WorkspacePath
     ) {
-        queue = items
+        answered.formIntersection(items.compactMap(\.occurrence))
+        queue = items.filter { !answered.contains($0.occurrence ?? "") }
         let queued = Set(items.map(\.runId))
         running = response.runs.filter { $0.isRunning || ($0.isPaused && !queued.contains($0.id)) }
         finished =
@@ -266,7 +272,11 @@ final class ArchonModel: ObservableObject {
         await control(reply.runID, in: workspacePath) {
             let acknowledgement = try await client.answer(
                 reply, text: replyText, in: workspacePath)
-            if acknowledgement.ok { disarm() }
+            if acknowledgement.ok {
+                disarm()
+                answered.insert(reply.occurrence)
+                queue.removeAll { $0.occurrence == reply.occurrence }
+            }
             return acknowledgement
         }
     }

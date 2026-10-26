@@ -243,7 +243,13 @@ struct ArchonCLI: ArchonClient, Sendable {
         return result.stdout
     }
 
+    /// The invocation as an error names it. An answer's text is elided: the operator just
+    /// typed it, and a paragraph of it would bury the reason in the red line.
     private static func command(_ arguments: [String]) -> String {
-        (["archon"] + arguments).joined(separator: " ")
+        var shown = arguments
+        if let flag = shown.firstIndex(of: "--text"), shown.indices.contains(flag + 1) {
+            shown[flag + 1] = "…"
+        }
+        return (["archon"] + shown).joined(separator: " ")
     }
 }
