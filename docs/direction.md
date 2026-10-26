@@ -91,16 +91,18 @@ is always at the drawer's foot with the workflow it launches named beside it (`a
 another is picked, #528). Clicking that name or pressing `w` opens a list searched by typing;
 ⌥↑/⌥↓ step through it. Enter runs it detached.
 
-**What it shows**, for the active workspace's project: runs **waiting on you** (paused at a gate),
-**running** runs, and **finished** runs not yet cleared — each a row with **a dot per stage**,
+**What it shows**, for the active workspace's project: Archon's attention queue as **waiting on
+you** (each item's question, which expands to the whole markdown, and its numbered answers),
+**running** runs, and **finished** runs not yet cleared — each run a row with **a dot per stage**,
 filling in as the run advances, where it is or how it ended, and what it was asked to do. The
-selected row expands to its stage names and durations. It reads `workflow runs --json`, plus one
-`workflow status --json --verbose` while anything is live, every two seconds while the drawer is
-open, and nothing while it is hidden. A gate is therefore only seen with the drawer open, which the
-operator accepted for now (2026-09-27).
+selected row expands to its stage names and durations. It reads `workflow attention --json` and
+`workflow runs --json`, plus one `workflow status --json --verbose` while anything is live, every
+two seconds while the drawer is open, and nothing while it is hidden. An item is therefore only
+seen with the drawer open, which the operator accepted for now (2026-09-27).
 
-**What it does, from the keyboard**: answer a gate (`a`, `x`, or `1-9` for a decision the workflow
-declared), resume (`r`), cancel (`c c`), follow the run's log in a terminal pane (`l`), open a
+**What it does, from the keyboard**: answer a queue item (`1-9`, or `a`/`x` where it offers
+approve and reject; the composer then takes the reason, which Archon records with the answer, and
+Enter sends `workflow respond --occurrence … --detach`), resume (`r`), cancel (`c c`), follow the run's log in a terminal pane (`l`), open a
 finished run's pull request (Enter) or clear it (⌫). Depth beyond that — transcripts, the graph —
 is Archon's own web UI.
 

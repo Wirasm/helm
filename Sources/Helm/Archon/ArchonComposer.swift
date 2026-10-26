@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The Archon drawer's one input (#382), moved whole from the rail it used to sit in: launching
-/// work, or answering the gate it has been pointed at. The label under the field names the
+/// work, or answering the queue item it has been pointed at. The label under the field names the
 /// workflow a launch runs and opens the list it is searched from (#528); ⌥↑ and ⌥↓ step through
 /// it. The settings button holds how a launch isolates itself.
 struct ArchonComposer: View {
@@ -12,9 +12,9 @@ struct ArchonComposer: View {
 
     var body: some View { composer }
 
-    /// **One input, two jobs, and the second one says so.** Armed at a gate the field answers
-    /// that gate; otherwise it launches. The launch draft is not swapped out or cleared — the
-    /// binding simply points at the other string — so cancelling a gate hands back exactly the
+    /// **One input, two jobs, and the second one says so.** Armed at an item the field answers
+    /// it; otherwise it launches. The launch draft is not swapped out or cleared — the binding
+    /// simply points at the other string — so cancelling an answer hands back exactly the
     /// half-written instruction that was there.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -88,7 +88,7 @@ struct ArchonComposer: View {
     /// **It goes through `text` rather than naming `draft`, so there is one rule and not two.**
     /// Which string the field writes is `text`'s question and answering it a second time here
     /// would be a handler that could put the operator's newline into the string they are not
-    /// looking at — the launch draft while they are answering a gate, or the reverse.
+    /// looking at — the launch draft while they are answering an item, or the reverse.
     ///
     /// **And it is computed here rather than handed to the modifier, which is not a style
     /// choice.** A `Binding` passed into `.onKeyPress` is captured, and the capture is a
@@ -102,35 +102,37 @@ struct ArchonComposer: View {
 
     private var prompt: String {
         guard workspacePath != nil else { return ArchonModel.noWorkspace }
-        switch model.reply?.decision {
-        case .approve: return "Anything to add? (optional)"
-        case .reject: return "What was wrong? This drives the rework."
-        case .declared: return "Anything to add? (optional)"
-        case nil: return "What should Archon do?  (⌥↑ ⌥↓ picks the workflow)"
+        guard let choice = model.reply?.choice else {
+            return "What should Archon do?  (⌥↑ ⌥↓ picks the workflow)"
         }
+        return choice.needsText
+            ? "Your answer" : "Why? Archon records it with the answer (optional)"
     }
 
     /// Whose colour the focus ring and the send button carry: the brand when launching, the
-    /// decision's own tint when answering — so the field visibly belongs to the gate above it
+    /// answer's own tint when answering — so the field visibly belongs to the item above it
     /// rather than looking like a launch that will go somewhere unexpected.
     private var borderTint: Color {
-        model.reply.map { Self.tint(of: $0.decision) } ?? Color.archonMagenta
+        model.reply.map { Self.tint(of: $0.choice) } ?? Color.archonMagenta
     }
 
-    private static func tint(of decision: ArchonGateDecision) -> Color {
-        switch decision {
-        case .approve, .declared: .accent
-        case .reject: .attention
-        }
+    private static func tint(of choice: ArchonChoice) -> Color {
+        choice.id == "reject" ? .attention : .accent
     }
 
     /// The one line that says the field has been repointed, and at what.
-    private func armed(_ reply: ArchonGateReply) -> some View {
+    private func armed(_ reply: ArchonAnswer) -> some View {
         HStack(spacing: 6) {
-            Text(reply.decision.verb.uppercased())
+            Text(reply.choice.id.uppercased())
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .tracking(1)
-                .foregroundStyle(Self.tint(of: reply.decision))
+                .foregroundStyle(Self.tint(of: reply.choice))
+            if reply.choice.label != reply.choice.id {
+                Text(reply.choice.label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+            }
             Text(reply.workflowName)
                 .font(.system(size: 10))
                 .foregroundStyle(Color.textMuted)
@@ -182,13 +184,13 @@ struct ArchonComposer: View {
     private var send: some View {
         let armed = model.reply
         // **Which "busy" this button watches depends on which job it is doing.** Launching is
-        // `isLaunching`; answering is that gate's own entry in `busyRuns`, because a second
-        // press during a decision is the double-approve Archon throws on.
+        // `isLaunching`; answering is that run's own entry in `busyRuns`, because a second
+        // press during an answer is the double answer Archon refuses.
         let busy =
             workspacePath == nil
             || (armed.map { model.busyRuns.contains($0.runID) } ?? model.isLaunching)
         Button(action: submit) {
-            Text(armed?.decision.verb.uppercased() ?? "SEND")
+            Text(armed.map { $0.choice.needsText ? "ANSWER" : $0.choice.id.uppercased() } ?? "SEND")
                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                 .tracking(1.1)
                 .foregroundStyle(Color.surface)
@@ -197,7 +199,7 @@ struct ArchonComposer: View {
                 .background {
                     let shape = RoundedRectangle(cornerRadius: 4)
                     if let armed {
-                        shape.fill(Self.tint(of: armed.decision))
+                        shape.fill(Self.tint(of: armed.choice))
                     } else {
                         shape.fill(.archonBrand)
                     }

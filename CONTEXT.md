@@ -134,11 +134,12 @@ _Avoid_: agent list, sidebar, session browser
 
 **Archon drawer**:
 The drawer along the bottom (⌘⇧R) showing what Archon is doing in the active workspace's project
-(#382): runs **waiting on you** (paused at a gate), **running** runs, and **finished** runs not
-cleared, each as a row of **stage** dots that fill in as it advances. Read from Archon's own CLI
-on benchd's machine (`workflow runs --json`, and `workflow status --json --verbose` while a run is
-live; M5c: benchd runs it); helm keeps no
-record of a run. Keyboard first: a gate is answered with `a`/`x`/`1-9`, a run resumed with `r`,
+(#382): Archon's attention queue as **waiting on you**, **running** runs, and **finished** runs
+not cleared, each run as a row of **stage** dots that fill in as it advances. Read from Archon's
+own CLI on benchd's machine (`workflow attention --json`, `workflow runs --json`, and `workflow
+status --json --verbose` while a run is live; M5c: benchd runs it); helm keeps no
+record of a run. Keyboard first: a queue item is answered with `1-9` (or `a`/`x`) and the reason
+typed in the composer, a run resumed with `r`,
 cancelled with `c c`, its log followed in a terminal with `l`; `/` starts work, and `w` picks the
 workflow it launches from a searchable list (#528). It polls only while
 open. Painted on Archon's own console surfaces. Agents do not use it: Archon's CLI is theirs.
@@ -189,8 +190,9 @@ through `archon complete` in its own Archon home, never forced. It replaced the 
 _Avoid_: rail, worktree pane, worktree sidebar, file tree, disk dashboard
 
 **running run**:
-A run with status `running`, listed in the Archon drawer between the runs waiting on you
-(`paused`) and the finished ones. A live run is either of the first two.
+A run with status `running`, or `paused` on something that is not the operator's (a sub-run, a
+timer, an answer being continued), listed in the Archon drawer between the attention queue and
+the finished runs.
 _Avoid_: active run, open run
 
 **stage**:

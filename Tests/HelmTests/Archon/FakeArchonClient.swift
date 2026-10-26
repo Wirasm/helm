@@ -1,4 +1,5 @@
 import Foundation
+import XCTest
 
 @testable import Helm
 
@@ -7,7 +8,9 @@ actor FakeArchonClient: ArchonClient {
     var workflowList: ArchonWorkflowListResponse
     /// What `workflow status --verbose` answers: the live runs with their nodes.
     var statusRuns: [ArchonRun] = []
-    var cancellation: ArchonActionAcknowledgement = .fixture(action: "cancel", resumable: nil)
+    var cancellation: ArchonActionAcknowledgement = .fixture(action: "cancel")
+    /// What `workflow attention` answers.
+    var queue: [ArchonAttentionItem] = []
     /// Per-id detail, for the rail's stage fan-out. Falls back to `detail`.
     var acknowledgement: ArchonLaunchAcknowledgement
     var failure: ArchonCLIError?
@@ -15,10 +18,9 @@ actor FakeArchonClient: ArchonClient {
     /// subline.
     var detailFailure: ArchonCLIError?
     var delay: Duration?
-    var decision: ArchonActionAcknowledgement = .fixture()
-    var decisionFailure: ArchonCLIError?
-    var resumeAcknowledgement: ArchonLaunchAcknowledgement = .fixture()
-    var resumeFailure: ArchonCLIError?
+    var answerAcknowledgement: ArchonActionAcknowledgement = .fixture()
+    var answerFailure: ArchonCLIError?
+    var resumeAcknowledgement: ArchonActionAcknowledgement = .fixture(action: "resume")
 
     private(set) var listCalls = 0
     private(set) var currentListCalls = 0
@@ -27,11 +29,7 @@ actor FakeArchonClient: ArchonClient {
     private(set) var cancelRequests: [String] = []
     private(set) var workspacePaths: [WorkspacePath] = []
     private(set) var launchRequests: [ArchonLaunchRequest] = []
-    private(set) var decisions:
-        [(
-            decision: ArchonGateDecision, text: String?, runID: String,
-            workspacePath: WorkspacePath
-        )] = []
+    private(set) var answers: [(answer: ArchonAnswer, text: String?)] = []
     private(set) var resumeRequests: [String] = []
 
     init(
@@ -49,6 +47,7 @@ actor FakeArchonClient: ArchonClient {
     func setDelay(_ delay: Duration?) { self.delay = delay }
     func setRuns(_ response: ArchonRunsResponse) { runsResponse = response }
     func setStatusRuns(_ runs: [ArchonRun]) { statusRuns = runs }
+    func setQueue(_ items: [ArchonAttentionItem]) { queue = items }
     func setCancellation(_ acknowledgement: ArchonActionAcknowledgement) {
         cancellation = acknowledgement
     }
@@ -110,89 +109,58 @@ actor FakeArchonClient: ArchonClient {
         return acknowledgement
     }
 
-    func decide(
-        _ decision: ArchonGateDecision, text: String?, on runID: String,
-        in workspacePath: WorkspacePath
-    ) async throws -> ArchonActionAcknowledgement {
-        decisions.append((decision, text, runID, workspacePath))
-        if let decisionFailure { throw decisionFailure }
-        return self.decision
+    func attention(in workspacePath: WorkspacePath) async throws -> ArchonAttentionResponse {
+        if let failure { throw failure }
+        return ArchonAttentionResponse(ok: true, items: queue, error: nil)
     }
 
-    func resume(_ run: ArchonRun) async throws -> ArchonLaunchAcknowledgement {
-        resumeRequests.append(run.id)
-        if let resumeFailure { throw resumeFailure }
+    func answer(
+        _ answer: ArchonAnswer, text: String?, in workspacePath: WorkspacePath
+    ) async throws -> ArchonActionAcknowledgement {
+        answers.append((answer, text))
+        if let delay { try? await Task.sleep(for: delay) }
+        if let answerFailure { throw answerFailure }
+        return answerAcknowledgement
+    }
+
+    func resume(
+        runID: String, in workspacePath: WorkspacePath
+    ) async throws -> ArchonActionAcknowledgement {
+        resumeRequests.append(runID)
         return resumeAcknowledgement
     }
 
-    func setDecision(_ acknowledgement: ArchonActionAcknowledgement) {
-        decision = acknowledgement
+    func setAnswer(_ acknowledgement: ArchonActionAcknowledgement) {
+        answerAcknowledgement = acknowledgement
     }
-    func setDecisionFailure(_ failure: ArchonCLIError?) { decisionFailure = failure }
-    func setResume(_ acknowledgement: ArchonLaunchAcknowledgement) {
-        resumeAcknowledgement = acknowledgement
-    }
-    func setResumeFailure(_ failure: ArchonCLIError?) { resumeFailure = failure }
-    func gateCalls() -> (
-        decisions: [(
-            decision: ArchonGateDecision, text: String?, runID: String,
-            workspacePath: WorkspacePath
-        )], resumes: [String]
-    ) {
-        (decisions, resumeRequests)
-    }
+    func setAnswerFailure(_ failure: ArchonCLIError?) { answerFailure = failure }
+    func answerCalls() -> [(answer: ArchonAnswer, text: String?)] { answers }
+    func resumes() -> [String] { resumeRequests }
 }
 
 extension ArchonRun {
     static func fixture(
         id: String = "run-1", workflowName: String = "implement", status: String = "running",
         workingPath: String? = "/tmp/project", userMessage: String? = "do the thing",
-        completedAt: Date? = nil, nodes: [ArchonNode]? = [], gate: ArchonGate? = nil,
-        graph: [String]? = nil, active: [String]? = nil
+        completedAt: Date? = nil, nodes: [ArchonNode]? = [], graph: [String]? = nil,
+        active: [String]? = nil
     ) -> ArchonRun {
         let metadata: Metadata? =
-            gate == nil && graph == nil
-            ? nil
-            : Metadata(
-                error: nil, approval: gate,
-                terminalGraph: graph.map { Metadata.TerminalGraph(nodeIds: $0) })
+            graph.map { Metadata(error: nil, terminalGraph: Metadata.TerminalGraph(nodeIds: $0)) }
         return ArchonRun(
             id: id, workflowName: workflowName, status: status, workingPath: workingPath,
             userMessage: userMessage, startedAt: nil, completedAt: completedAt,
             metadata: metadata, nodes: nodes, activeNodes: active)
     }
-
-    /// A run stopped at a gate that is waiting for the operator.
-    static func paused(
-        id: String = "run-1", workflowName: String = "implement", gate: ArchonGate = .fixture()
-    ) -> ArchonRun {
-        .fixture(id: id, workflowName: workflowName, status: "paused", gate: gate)
-    }
-}
-
-extension ArchonGate {
-    static func fixture(
-        nodeId: String = "review", message: String = "Ship the migration?",
-        type: Kind = .approval, childRunId: String? = nil, captureResponse: Bool = false,
-        resolved: String? = nil, decisions: [Declared] = []
-    ) -> ArchonGate {
-        ArchonGate(
-            nodeId: nodeId, message: message, type: type, childRunId: childRunId,
-            captureResponse: captureResponse, resolved: resolved, decisions: decisions)
-    }
 }
 
 extension ArchonActionAcknowledgement {
-    /// The field set `workflow approve --json` prints, read off its own `writeJsonLine` call in
-    /// `packages/cli/src/commands/workflow.ts` — including `resumable: true`, which is the
-    /// whole reason `resume` exists.
+    /// The fields `workflow respond --detach --json` prints, captured from Archon 0.12.
     static func fixture(
-        ok: Bool = true, action: String = "approve", resumable: Bool? = true,
-        cancelled: Bool? = nil, error: String? = nil
+        ok: Bool = true, action: String = "respond", error: String? = nil
     ) -> ArchonActionAcknowledgement {
         ArchonActionAcknowledgement(
-            ok: ok, runId: "run-1", action: action, workflowName: "implement",
-            cancelled: cancelled, maxAttemptsReached: nil, resumable: resumable, error: error)
+            ok: ok, runId: "run-1", action: action, continues: ok ? true : nil, error: error)
     }
 }
 
@@ -217,12 +185,12 @@ extension ArchonNode {
 }
 
 extension ArchonLaunchAcknowledgement {
-    /// The exact field set `archon workflow run --detach --json` prints — read off its own
-    /// `writeJsonLine` call in `packages/cli/src/commands/workflow.ts`, not imagined.
+    /// The field set `archon workflow run --detach --json` prints, as captured in
+    /// `Fixtures/workflow-run-detach.json`.
     static func fixture(ok: Bool = true, detached: Bool = true) -> ArchonLaunchAcknowledgement {
         ArchonLaunchAcknowledgement(
-            ok: ok, action: "run", detached: detached, workflow: "implement",
-            branch: "issue-40", conversationId: "cli-1", logPath: "/tmp/run.log")
+            ok: ok, action: "run", detached: detached, runId: "run-9", workflow: "implement",
+            branch: nil, conversationId: nil, logPath: "/tmp/run.log")
     }
 }
 
@@ -239,5 +207,34 @@ extension ArchonModel {
     /// A model whose finished rows open nothing: a test that clicks one passes its own opener.
     convenience init(client: any ArchonClient, defaults: UserDefaults) {
         self.init(client: client, defaults: defaults, opener: ArchonRunOpener { _ in })
+    }
+}
+
+extension ArchonAttentionItem {
+    /// Items from the captured `Fixtures/workflow-attention.json`: a select, a message, an
+    /// approval, a multi-select and a legacy gate, in that order.
+    static func captured() throws -> [ArchonAttentionItem] {
+        let url = try XCTUnwrap(
+            Bundle.module.url(
+                forResource: "workflow-attention", withExtension: "json",
+                subdirectory: "Fixtures"))
+        return try JSONDecoder.archon().decode(
+            ArchonAttentionResponse.self, from: Data(contentsOf: url)
+        ).items
+    }
+
+    /// The captured select item, re-addressed to `runId` so it can stand for a fixture run.
+    static func select(
+        runId: String = "run-1", occurrence: String = "occ-1"
+    ) throws
+        -> ArchonAttentionItem
+    {
+        let json = """
+            {"kind":"attention","runId":"\(runId)","workflow":"archon-review","pausedAt":null,
+             "context":{"workingPath":"/tmp/project","branch":null},"node":"attend__ask",
+             "occurrence":"\(occurrence)","message":"**archon-review: decide**\\n\\nMore.",
+             "form":"select","options":[{"id":"rerun","label":"Review again"},{"id":"finish"}]}
+            """
+        return try JSONDecoder.archon().decode(ArchonAttentionItem.self, from: Data(json.utf8))
     }
 }

@@ -44,7 +44,6 @@ struct ArchonRunRow: View {
                         .foregroundStyle(Color.textFaint)
                 }
             }
-            if let gate = run.gate { gateLine(gate) }
             if isExpanded, let stages { ArchonStageList(stages: stages) }
         }
         .padding(.horizontal, 12)
@@ -79,24 +78,6 @@ struct ArchonRunRow: View {
         case ArchonRunStatus.running: return .archonRunning
         default: return .textMuted
         }
-    }
-
-    private func gateLine(_ gate: ArchonGate) -> some View {
-        HStack(spacing: 8) {
-            Text(gate.blockedReason ?? (gate.message.isEmpty ? gate.nodeId : gate.message))
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color.textPrimary)
-                .lineLimit(isExpanded ? 6 : 1)
-            if gate.isAwaitingDecision {
-                ForEach(Array(gate.decisions.prefix(9).enumerated()), id: \.offset) {
-                    index, decision in
-                    Text("\(index + 1) \(decision.label ?? decision.id)")
-                        .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(Color.attention)
-                }
-            }
-        }
-        .padding(.leading, 180)
     }
 
     static func age(since date: Date, now: Date = Date()) -> String {

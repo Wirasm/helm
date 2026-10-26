@@ -4,15 +4,16 @@ import XCTest
 
 /// What the Archon drawer added to its model (#382): what a refresh costs, where a live run's
 /// dots come from, and the run verbs the rail never had. The rest of the model — the three lists,
-/// the inbox, launching and gates — is `ArchonModelTests`.
+/// the inbox, launching and the queue — is `ArchonModelTests`.
 final class ArchonDrawerModelTests: XCTestCase {
     private let workspace = WorkspacePath("/tmp/project")
 
-    /// **One `workflow status` for every live run, and none when nothing is live.** The rail
+    /// **One `workflow status` for every live run, and none when nothing is live.** (`runs`
+    /// and `attention` are asked on every refresh either way.) The rail
     /// this replaced asked `workflow get` once per running run on every tick; the drawer's cost
     /// no longer grows with the number of runs.
     @MainActor
-    func testARefreshIsOneCallIdleAndTwoWhateverIsLive() async throws {
+    func testARefreshAsksStatusOnceWhateverIsLive() async throws {
         let client = FakeArchonClient(
             runsResponse: .fixture(runs: [.fixture(id: "done", status: "completed")]))
         let model = ArchonModel(
@@ -20,12 +21,12 @@ final class ArchonDrawerModelTests: XCTestCase {
 
         await model.refresh(in: workspace)
         var metrics = await client.metrics()
-        XCTAssertEqual(metrics.statusCalls, 0, "nothing is live, so nothing but `runs` is asked")
+        XCTAssertEqual(metrics.statusCalls, 0, "nothing is live, so no `status` is asked")
 
         await client.setRuns(
             .fixture(runs: [
                 .fixture(id: "a", status: "running"), .fixture(id: "b", status: "running"),
-                .paused(id: "c"),
+                .fixture(id: "c", status: "paused"),
             ]))
         await model.refresh(in: workspace)
         metrics = await client.metrics()
@@ -96,23 +97,24 @@ final class ArchonDrawerModelTests: XCTestCase {
 
         await client.setCancellation(.fixture(ok: false, action: "cancel", error: "not running"))
         await model.cancel(running, in: workspace)
-        XCTAssertEqual(model.actionFailure, "Archon refused to cancel this run: not running")
+        XCTAssertEqual(model.actionFailure, "Archon refused: not running")
 
         await model.cancel(.fixture(id: "d", status: "completed"), in: workspace)
         cancels = await client.cancels()
         XCTAssertEqual(cancels, ["a", "a"], "a finished run is never sent to cancel")
     }
 
+    /// Which runs offer `r` is the key table's (`ArchonKeysTests`); the model sends what it is
+    /// given and reports a refusal.
     @MainActor
-    func testResumeRestartsAFailedRunAndNothingElse() async throws {
-        let failed = ArchonRun.fixture(id: "f", status: "failed")
-        let client = FakeArchonClient(runsResponse: .fixture(runs: [failed]))
+    func testResumeSendsTheRunAndReportsARefusal() async throws {
+        let client = FakeArchonClient(
+            runsResponse: .fixture(runs: [.fixture(id: "f", status: "failed")]))
         let model = ArchonModel(client: client, defaults: try isolatedDefaults("archon-resume"))
 
-        await model.resume(failed, in: workspace)
-        await model.resume(.fixture(id: "r", status: "running"), in: workspace)
+        await model.resume(runID: "f", in: workspace)
 
-        let resumes = await client.gateCalls().resumes
+        let resumes = await client.resumes()
         XCTAssertEqual(resumes, ["f"])
         XCTAssertNil(model.actionFailure)
     }

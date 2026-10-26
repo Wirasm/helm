@@ -1,0 +1,168 @@
+{
+  "ok": true,
+  "action": "attention",
+  "scope": {
+    "kind": "project",
+    "project": {
+      "key": "_local/attention-probe",
+      "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+      "name": "attention-probe"
+    }
+  },
+  "items": [
+    {
+      "kind": "attention",
+      "runId": "e730bb7d50c71e10819944d67fd65e91",
+      "workflow": "probe-attention",
+      "project": {
+        "key": "_local/attention-probe",
+        "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+        "name": "attention-probe"
+      },
+      "parentRunId": null,
+      "fanOut": null,
+      "revision": 1,
+      "labels": {
+        "stage": "probe"
+      },
+      "pausedAt": "2026-10-26T08:42:07.729Z",
+      "context": {
+        "artifactsDir": "/Users/rasmus/.archon/workspaces/_local/attention-probe/artifacts/runs/e730bb7d50c71e10819944d67fd65e91",
+        "transcript": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/e730bb7d50c71e10819944d67fd65e91.jsonl",
+        "workingPath": "/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/e1dd3a3e-e968-473b-9f53-d4bddb34375a/scratchpad/attention-probe",
+        "branch": null
+      },
+      "node": "pick",
+      "occurrence": "253f0983-399f-48f9-bff7-7b9d69fd0337",
+      "message": "**probe: pick one**\n\n**What it is.** A fixture.\n\n- `rerun`: again\n- `finish`: stop",
+      "form": "select",
+      "options": [
+        {
+          "id": "rerun",
+          "label": "Run it again"
+        },
+        {
+          "id": "finish",
+          "label": "Finish this run"
+        }
+      ]
+    },
+    {
+      "kind": "attention",
+      "runId": "e730bb7d50c71e10819944d67fd65e91",
+      "workflow": "probe-attention",
+      "project": {
+        "key": "_local/attention-probe",
+        "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+        "name": "attention-probe"
+      },
+      "parentRunId": null,
+      "fanOut": null,
+      "revision": 1,
+      "labels": {},
+      "pausedAt": "2026-10-26T08:42:31.523Z",
+      "context": {
+        "artifactsDir": "/Users/rasmus/.archon/workspaces/_local/attention-probe/artifacts/runs/e730bb7d50c71e10819944d67fd65e91",
+        "transcript": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/e730bb7d50c71e10819944d67fd65e91.jsonl",
+        "workingPath": "/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/e1dd3a3e-e968-473b-9f53-d4bddb34375a/scratchpad/attention-probe",
+        "branch": null
+      },
+      "node": "say",
+      "occurrence": "30f92e82-8320-4955-95a5-4d0178555314",
+      "message": "Say something about rerun",
+      "form": "message",
+      "options": []
+    },
+    {
+      "kind": "attention",
+      "runId": "e730bb7d50c71e10819944d67fd65e91",
+      "workflow": "probe-attention",
+      "project": {
+        "key": "_local/attention-probe",
+        "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+        "name": "attention-probe"
+      },
+      "parentRunId": null,
+      "fanOut": null,
+      "revision": 1,
+      "labels": {},
+      "pausedAt": "2026-10-26T08:42:47.537Z",
+      "context": {
+        "artifactsDir": "/Users/rasmus/.archon/workspaces/_local/attention-probe/artifacts/runs/e730bb7d50c71e10819944d67fd65e91",
+        "transcript": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/e730bb7d50c71e10819944d67fd65e91.jsonl",
+        "workingPath": "/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/e1dd3a3e-e968-473b-9f53-d4bddb34375a/scratchpad/attention-probe",
+        "branch": null
+      },
+      "node": "ok",
+      "occurrence": "56a15126-e5f4-464c-9871-a5886410f559",
+      "message": "Approve? You said:",
+      "form": "approval",
+      "options": [
+        {
+          "id": "approve"
+        },
+        {
+          "id": "reject"
+        }
+      ]
+    },
+    {
+      "kind": "attention",
+      "runId": "e730bb7d50c71e10819944d67fd65e91",
+      "workflow": "probe-attention",
+      "project": {
+        "key": "_local/attention-probe",
+        "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+        "name": "attention-probe"
+      },
+      "parentRunId": null,
+      "fanOut": null,
+      "revision": 1,
+      "labels": {},
+      "pausedAt": "2026-10-26T08:43:07.967Z",
+      "context": {
+        "artifactsDir": "/Users/rasmus/.archon/workspaces/_local/attention-probe/artifacts/runs/e730bb7d50c71e10819944d67fd65e91",
+        "transcript": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/e730bb7d50c71e10819944d67fd65e91.jsonl",
+        "workingPath": "/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/e1dd3a3e-e968-473b-9f53-d4bddb34375a/scratchpad/attention-probe",
+        "branch": null
+      },
+      "node": "many",
+      "occurrence": "319895d7-9883-4b8a-a29b-9f481b59ae63",
+      "message": "Pick several",
+      "form": "multi_select",
+      "options": [
+        {
+          "id": "a"
+        },
+        {
+          "id": "b",
+          "label": "Bee"
+        }
+      ]
+    },
+    {
+      "kind": "awaiting_response",
+      "runId": "fae0e405efed4e272ff57f108bb66cc1",
+      "workflow": "probe-gate",
+      "project": {
+        "key": "_local/attention-probe",
+        "codebaseId": "d19975a0a62c318c57e6f9d2c5341ff5",
+        "name": "attention-probe"
+      },
+      "parentRunId": null,
+      "fanOut": null,
+      "revision": 1,
+      "labels": {},
+      "pausedAt": null,
+      "context": {
+        "artifactsDir": "/Users/rasmus/.archon/workspaces/_local/attention-probe/artifacts/runs/fae0e405efed4e272ff57f108bb66cc1",
+        "transcript": "/Users/rasmus/.archon/workspaces/_local/attention-probe/logs/fae0e405efed4e272ff57f108bb66cc1.jsonl",
+        "workingPath": "/private/tmp/claude-501/-Users-rasmus-Projects-mine-sild-helm/e1dd3a3e-e968-473b-9f53-d4bddb34375a/scratchpad/attention-probe",
+        "branch": null
+      },
+      "node": "gate",
+      "occurrence": "0516fdba-66d4-4d2b-816c-c410c3ffa7e1",
+      "message": "Legacy gate: approve?"
+    }
+  ]
+}

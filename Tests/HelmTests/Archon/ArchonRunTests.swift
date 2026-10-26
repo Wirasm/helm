@@ -43,45 +43,26 @@ final class ArchonRunTests: XCTestCase {
             "the row list is capped; the counts are over everything")
     }
 
-    /// **Gates, against four real rows rather than four imagined ones.** Captured with
-    /// `archon workflow runs --json --all` and filtered to one row per gate shape that exists in
-    /// the wild: a live `writeback` gate awaiting a person, an `interactive_loop` gate already
-    /// resolved but still `paused`, and two whose runs have since terminated.
-    ///
-    /// **Two of these would have been got wrong from the schema alone.** `ApprovalContext`
-    /// documents `resolved` as an explicit null written on every fresh pause — the live row here
-    /// omits the key entirely, because the engine-level writeback gate does not go through
-    /// `pauseWorkflowRun`. And the real metadata carries `isolation`, `isolation_env_id` and
-    /// `pending_writeback` alongside `approval`, so a strict decode of that object would have
-    /// thrown on the commonest gate there is.
-    func testDecodesTheGateMetadataArchonActuallyPrints() throws {
+    /// Runs carrying legacy gate metadata, captured from `archon workflow runs --json --all`.
+    /// The drawer no longer reads `metadata.approval` (the attention queue says who waits on
+    /// the operator), so what is left to hold is that the rows still decode whole.
+    func testRunsCarryingGateMetadataStillDecode() throws {
         let response = try decoder().decode(
             ArchonRunsResponse.self, from: try fixture("workflow-runs-gated"))
         let byID = Dictionary(uniqueKeysWithValues: response.runs.map { ($0.shortID, $0) })
+        XCTAssertTrue(try XCTUnwrap(byID["082676c1"]).isPaused)
+        XCTAssertEqual(response.runs.count, 4)
+    }
 
-        let live = try XCTUnwrap(byID["082676c1"])
-        XCTAssertTrue(live.isPaused)
-        XCTAssertEqual(live.gate?.type, .writeback)
-        XCTAssertNil(live.gate?.resolved, "the key is absent on this path, not null")
-        XCTAssertTrue(live.isAwaitingDecision)
-        XCTAssertTrue(
-            live.gate?.message.contains("Approve to APPLY") == true,
-            "the subline is Archon's own question, and it is markdown with newlines in it")
-
-        let parked = try XCTUnwrap(byID["8b6229fa"])
-        XCTAssertTrue(parked.isPaused, "still paused — status alone cannot tell these apart")
-        XCTAssertEqual(parked.gate?.type, .interactiveLoop)
-        XCTAssertFalse(
-            parked.isAwaitingDecision,
-            "already approved and awaiting resume; approving again throws")
-        XCTAssertEqual(parked.gate?.blockedReason, "Approved — waiting for Archon to resume it.")
-
-        for terminal in ["2f4c6b12", "e40b6bb9"] {
-            XCTAssertNil(
-                byID[terminal]?.gate,
-                "Archon never clears the approval context, so a finished run still carries the "
-                    + "last gate it passed — reading it would put a stale question on the row")
-        }
+    /// The launch acknowledgement Archon 0.12 prints for a CLI launch, which has no
+    /// conversation. A required `conversationId` failed this decode after the run had started,
+    /// so every launch from the drawer read as malformed output.
+    func testDecodesTheLaunchAcknowledgementArchonActuallyPrints() throws {
+        let acknowledgement = try decoder().decode(
+            ArchonLaunchAcknowledgement.self, from: try fixture("workflow-run-detach"))
+        XCTAssertTrue(acknowledgement.ok && acknowledgement.detached)
+        XCTAssertNil(acknowledgement.conversationId)
+        XCTAssertEqual(acknowledgement.runId, "e730bb7d50c71e10819944d67fd65e91")
     }
 
     func testDecodesTheVerboseRunPayloadArchonActuallyPrints() throws {
